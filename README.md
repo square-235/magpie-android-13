@@ -21,7 +21,7 @@ Termux 那套路径），外面套一层很小的安卓壳子：一个前台服�
 | --- | --- |
 | `upstream/` | magpie 上游源码（main 分支，2026-11-09，`f37de8c` 时抓取），完全没有改动 |
 | `android/` | 安卓工程，壳子代码在 `app/src/main/java/com/magpie/android/` |
-| `scripts/` | 构建脚本：`build-magpie-android.ps1` 编译网关，`build-apk.ps1` 打 APK |
+| `scripts/` | 构建脚本：`build-magpie-android.*` 编译网关，`build-apk.*` 打 APK；`.ps1` 给 Windows，`.sh` 给 Linux/macOS |
 
 ## 需要什么
 
@@ -63,6 +63,22 @@ magpie 二进制加起来 98 MB，随包带的 Bun（两个架构各一份）又
 
 如果 PowerShell 说“禁止运行脚本”，就是上面 `-ExecutionPolicy Bypass` 的作用。
 `JAVA_HOME` 没指向 JDK 21 的话先设一下：`$env:JAVA_HOME='C:\path\to\jdk-21'`。
+
+Linux / macOS 用同一套逻辑的 shell 脚本（依赖还是上面那四样）：
+
+```bash
+scripts/build-apk.sh                     # debug APK
+scripts/build-apk.sh --release           # release（仍是 debug 签名）
+scripts/build-apk.sh --skip-gateway      # 复用上次编好的网关
+scripts/build-apk.sh --abis "arm64-v8a"  # 只给手机编
+scripts/build-apk.sh --no-bun            # 不带插件运行时
+scripts/build-magpie-android.sh          # 只编网关
+```
+
+脚本会自己找 `ANDROID_HOME` / `local.properties` 里的 SDK、`ANDROID_NDK_HOME` 或 SDK 的
+`ndk/` 下的 NDK，并按 `minSdk = 33` 选 API 33 的 clang；Bun 仍从 GitHub（或
+`--bun-mirror`）下载并按上游的 SHA-256 校验。找不到依赖时会在第一步报出缺什么。SDK/NDK
+不在常见位置时，用 `--sdk` / `--ndk` 指过去。
 
 ## 安装和使用
 
@@ -132,6 +148,9 @@ app-server 的 pi 包。它在 Bun 1.4.2 的安卓版上解包依赖时会以
   个包里没有插件运行时。
 - `-Abis` 也管这一步：只编 arm64-v8a，就只为它拉 Bun。
 
+`.sh` 版本用同名长选项：`--no-bun`、`--bun-mirror`、`--abis`、`--skip-gateway`、
+`--release`；另有 `--sdk`、`--ndk`、`--api-level`、`--version`、`--no-verify`。
+
 ## 端口
 
 | 端口 | 用途 | 默认 |
@@ -168,7 +187,7 @@ magpie 优先用它，所以不需要改上游代码。
 （Android 13）。壳子用了 API 33 的 `OnBackInvokedDispatcher` 和
 `enableOnBackInvokedCallback`，33 是当前的下限；再往下要改返回键处理，并重新考虑前台服务
 类型。`compileSdk`/`targetSdk` 仍是 36，要退回旧版本就一起改；网关侧同步改
-`scripts/build-magpie-android.ps1` 的 `-ApiLevel`。
+`scripts/build-magpie-android.ps1` 的 `-ApiLevel` / `.sh` 的 `--api-level`。
 
 **想只编一个架构、或者加 32 位** — `-Abis` 支持 `arm64-v8a`、`armeabi-v7a`、`x86_64`、
 `x86`，改完记得同步 `app/build.gradle.kts` 里的 `abiFilters`。
