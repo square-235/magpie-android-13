@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/ghtoken"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -30,7 +31,7 @@ func TestGitPluginCheckCarriesGitHubToken(t *testing.T) {
 
 	var mu sync.Mutex
 	var auth []string
-	var answer func(w http.ResponseWriter) bool
+	var answer func(w http.ResponseWriter, r *http.Request) bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		auth = append(auth, r.Header.Get("Authorization"))
@@ -40,7 +41,7 @@ func TestGitPluginCheckCarriesGitHubToken(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if a != nil && a(w) {
+		if a != nil && a(w, r) {
 			return
 		}
 		fmt.Fprint(w, `[{"sha":"abc1234def5678abc1234def5678abc1234def56"}]`)
@@ -109,7 +110,7 @@ func TestGitPluginCheckCarriesGitHubToken(t *testing.T) {
 	// the rate limit used up: said, with when it lifts, the token never
 	reset := time.Date(2030, 1, 2, 3, 4, 0, 0, time.UTC)
 	mu.Lock()
-	answer = func(w http.ResponseWriter) bool {
+	answer = func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("X-RateLimit-Remaining", "0")
 		w.Header().Set("X-RateLimit-Reset", fmt.Sprint(reset.Unix()))
 		w.WriteHeader(403)
@@ -132,7 +133,7 @@ func TestGitPluginCheckCarriesGitHubToken(t *testing.T) {
 	}
 	// a secondary limit: 429 with Retry-After
 	mu.Lock()
-	answer = func(w http.ResponseWriter) bool {
+	answer = func(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Retry-After", "60")
 		w.WriteHeader(429)
 		return true
@@ -142,18 +143,56 @@ func TestGitPluginCheckCarriesGitHubToken(t *testing.T) {
 		t.Errorf("secondary limit: %+v %+v", c, c.Limited)
 	}
 
-	// a token GitHub refuses: which one, not the token
-	t.Setenv("GH_TOKEN", "bad-token")
+	// a token GitHub refuses (401): the check goes on without it rather
+	// than failing whole, and the anonymous answer is the one taken. The
+	// Settings says which token to replace (#3926).
 	mu.Lock()
-	answer = func(w http.ResponseWriter) bool {
+	answer = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("Authorization") == "" {
+			return false
+		}
 		w.WriteHeader(401)
 		fmt.Fprint(w, `{"message":"Bad credentials"}`)
 		return true
 	}
+	before := len(auth)
 	mu.Unlock()
-	if c = check(); c.Limited != nil || !strings.Contains(c.Error, "GitHub refused GH_TOKEN") || strings.Contains(c.Error, "bad-token") {
-		t.Errorf("refused: %+v", c)
+	setToken("ghp_settings_refused")
+	if c = check(); c.Limited != nil || c.Error != "" || c.Status != "current" {
+		t.Errorf("Settings' token refused: %+v", c)
 	}
+	mu.Lock()
+	if a := auth[before:]; len(a) != 2 || a[0] != "Bearer ghp_settings_refused" || a[1] != "" {
+		t.Errorf("Settings' token refused: GitHub was asked with %q, want the token then none", a)
+	}
+	mu.Unlock()
+	if _, ok := ghtoken.SettingsRefused(); !ok {
+		t.Error("ghtoken.SettingsRefused() says no token of Settings was refused")
+	}
+	setToken("")
+	// one from the environment (till on Discord: a stale GITHUB_TOKEN) is
+	// dropped, and the check asked again without it
+	t.Setenv("GH_TOKEN", "bad-token")
+	mu.Lock()
+	n := len(auth)
+	mu.Unlock()
+	if c = check(); c.Status != "current" || c.Error != "" {
+		t.Errorf("GH_TOKEN refused: %+v", c)
+	}
+	mu.Lock()
+	if a := auth[n:]; len(a) != 2 || a[0] != "Bearer bad-token" || a[1] != "" {
+		t.Errorf("GH_TOKEN refused: GitHub was asked with %q, want the token then none", a)
+	}
+	n = len(auth)
+	mu.Unlock()
+	if c = check(); c.Status != "current" {
+		t.Errorf("GH_TOKEN refused, checked again: %+v", c)
+	}
+	mu.Lock()
+	if a := auth[n:]; len(a) != 1 || a[0] != "" {
+		t.Errorf("GH_TOKEN refused, checked again: GitHub was asked with %q, want none", a)
+	}
+	mu.Unlock()
 
 	// another host (raw files) never gets the token
 	var rawAuth string

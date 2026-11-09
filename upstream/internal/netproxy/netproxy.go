@@ -20,17 +20,53 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/probelog"
 	"github.com/yetone/magpie/internal/settings"
 )
 
 // Install routes http.DefaultTransport (and so http.DefaultClient) through
 // Func, and http.DefaultClient's requests made on a provider's behalf
-// (With) through a transport of that provider's proxy (Dispatch).
+// (With) through a transport of that provider's proxy (Dispatch). Its
+// HTTP/2 connections are checked by Go's own pings (HTTP2Health), and
+// the requests magpie sends on its own are written down (probelog).
 func Install() {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		t.Proxy = Func
-		http.DefaultClient.Transport = Dispatch(t)
+		if t.HTTP2 == nil {
+			t.HTTP2 = HTTP2Health()
+		}
+		// a request magpie sends a provider on its own (a Test, a model
+		// list) is written into the request log as it goes (probelog)
+		http.DefaultClient.Transport = probelog.Transport(Dispatch(t))
 	}
+}
+
+// PingAfter and PingWait: an HTTP/2 connection that has had no frame for
+// PingAfter is pinged, and dropped when no answer comes within PingWait.
+// The health check is the only probe of a connection whose path has died
+// silently, so a turn in flight on it waits for the next one: PingAfter is
+// how long a vendor's silence before a turn's first byte can cost (#4936,
+// a first try read EOF 20.5s in on a connection whose tunnel a NAT or a
+// relay had dropped). The budget PingAfter+PingWait is also the margin a
+// body under uploadBytes needs on a slow uplink, a ping queued behind it
+// answered only after the last byte (#3909): 20s covers 64KB at about
+// 3KB/s.
+var PingAfter, PingWait = 10 * time.Second, 10 * time.Second
+
+// HTTP2Health is the HTTP/2 setting of a transport to the vendors. Every
+// request to one host shares one HTTP/2 connection, and one gone silent
+// without closing (a proxy's way out died, a NAT forgot the flow) was
+// given every new request, each waiting for its transport's
+// ResponseHeaderTimeout while the kernel took the writes, until a restart
+// (#2843). A ping finds it, and the requests on it fail, so a group moves
+// on and the next request dials anew. A live vendor answers a ping
+// whatever its streams are doing, so a long wait for a first byte is
+// never cut by it. But a ping's answer restarts the clock, so a wait of
+// minutes is pinged every PingAfter, which Google's front end ends the
+// connection for: the gateway's transports ping by CalmHTTP2 instead, and
+// this is for http.DefaultTransport's short requests.
+func HTTP2Health() *http.HTTP2Config {
+	return &http.HTTP2Config{SendPingTimeout: PingAfter, PingTimeout: PingWait}
 }
 
 // Func is an http.Transport Proxy function: the proxy the request's
@@ -86,14 +122,17 @@ func Held(ctx context.Context) error {
 // "direct", #1522) goes through its own provider's proxy, never the one
 // it was made under. A provider's leave not to check its certificate
 // (WithUncheckedTLS) goes the same way: it is the outer provider's, and
-// dropped here.
+// dropped here, and so is its ask for HTTP/1.1 (WithHTTP1).
 func With(ctx context.Context, choice string) context.Context {
-	if choice = strings.TrimSpace(choice); choice == "" && choiceOf(ctx) == "" && uncheckedOf(ctx) == nil {
+	if choice = strings.TrimSpace(choice); choice == "" && choiceOf(ctx) == "" && uncheckedOf(ctx) == nil && http1Of(ctx) == nil {
 		return ctx
 	}
 	ctx = context.WithValue(ctx, choiceKey{}, choice)
 	if uncheckedOf(ctx) != nil {
 		ctx = context.WithValue(ctx, uncheckedKey{}, map[string]bool(nil))
+	}
+	if http1Of(ctx) != nil {
+		ctx = context.WithValue(ctx, http1Key{}, map[string]bool(nil))
 	}
 	return ctx
 }
@@ -129,20 +168,30 @@ var HTTP1 func(u *url.URL) bool
 // base kept for that proxy alone. Connections are so reused among the
 // requests going through one proxy and never carried to another — HTTP/2
 // ones, which a transport shares by host whatever proxy they were dialled
-// through, among them. A request HTTP1 names goes through a clone kept
-// for HTTP/1.1 (http1Only), and one to a host whose certificate the
-// provider's user said not to check (WithUncheckedTLS) through a clone
-// kept for that host alone (uncheckTLS). A host whose IPv6 is taken but
-// goes nowhere is dialed over IPv4 (v4Fallback).
+// through, among them. A move of the global proxy (the settings) drops
+// the idle connections the old one dialled, which a transport, pooling
+// by target host alone, would have carried over the switch (#4523). A
+// request HTTP1 names, one to a host its provider asked HTTP/1.1 of
+// (WithHTTP1), every request under OverHTTP1 (a download trying again
+// after its HTTP/2 transfer broke off), and one to a host whose HTTP/2
+// connection carried a TLS record that didn't decrypt (recordError, for h2Broken after) go
+// through a clone kept for HTTP/1.1 (http1Only), and one to a host whose certificate the provider's user
+// said not to check (WithUncheckedTLS) through a clone kept for that
+// host alone (uncheckTLS). A host whose IPv6 is taken but goes nowhere
+// is dialed over IPv4 (v4Fallback).
 func Dispatch(base *http.Transport) http.RoundTripper {
 	v4Fallback(base)
-	return &dispatch{base: base, own: map[route]*http.Transport{}}
+	return &dispatch{base: base, own: map[route]*http.Transport{}, moved: Watch()}
 }
 
 type dispatch struct {
 	base *http.Transport
 	mu   sync.Mutex
 	own  map[route]*http.Transport
+	// moved is whether the global proxy moved since the dispatch's last
+	// request: a move drops the idle connections, which would carry the
+	// requests after a switch through the old proxy (#4523).
+	moved func() bool
 }
 
 // route is what a request needs of its transport other than base: a
@@ -155,11 +204,55 @@ type route struct {
 }
 
 func (d *dispatch) RoundTrip(req *http.Request) (*http.Response, error) {
-	r := route{choice: choiceOf(req.Context()), h1: HTTP1 != nil && HTTP1(req.URL), unchecked: uncheckedHost(req)}
-	if r == (route{}) {
-		return v4Retry(d.base, req)
+	if d.moved() {
+		d.CloseIdleConnections()
 	}
-	return v4Retry(d.transport(r), req)
+	r := route{choice: choiceOf(req.Context()), h1: HTTP1 != nil && HTTP1(req.URL) || http1Asked(req) || overHTTP1(req.Context()) || h2BrokenFor(req), unchecked: uncheckedHost(req)}
+	t := d.base
+	if r != (route{}) {
+		t = d.transport(r)
+	}
+	res, err := v4Retry(t, req)
+	if r.h1 {
+		return res, err
+	}
+	if err != nil {
+		if recordError(err) {
+			markH2Broken(req)
+		}
+		return res, err
+	}
+	if res.ProtoMajor == 2 && res.Body != nil && res.Body != http.NoBody {
+		res.Body = h2Watch{ReadCloser: res.Body, req: req}
+	}
+	return res, err
+}
+
+// Watch is a check a transport of its own makes before each request: it
+// says the global proxy in magpie's settings moved since the check's last
+// call, and the caller closes its transport's idle connections, which
+// would carry the request after a switch through the old proxy. The
+// setting is read at dial time (Func), but a transport pools by target
+// host, and its HTTP/2 connections by the authority alone, so a
+// connection dialled through the old proxy carries the requests after a
+// switch too, until it is dropped. Dropping the idle connections sends
+// the request after it through the proxy in force; one a request is
+// still reading is left to finish. Each check keeps its own last value,
+// so each transport sees, and answers, a move on the first request it
+// sends after it (#4523, #4824). The first call sees no move.
+func Watch() func() bool {
+	var mu sync.Mutex
+	var proxy string
+	var seen bool
+	return func() bool {
+		// Shared, not Load: this runs on every request
+		now := strings.TrimSpace(settings.Shared().Proxy)
+		mu.Lock()
+		defer mu.Unlock()
+		moved := seen && proxy != now
+		proxy, seen = now, true
+		return moved
+	}
 }
 
 func (d *dispatch) transport(r route) *http.Transport {
@@ -191,6 +284,14 @@ func (d *dispatch) transport(r route) *http.Transport {
 	}
 	if r.unchecked != "" {
 		uncheckTLS(t)
+	}
+	if isCalm(d.base) {
+		// a clone shares base's HTTP/2 connections, dialled through
+		// base's proxy, until it is given its own
+		t.TLSNextProto = nil
+		if !r.h1 {
+			CalmHTTP2(t)
+		}
 	}
 	d.own[r] = t
 	return t
@@ -432,33 +533,78 @@ type Proxy struct {
 
 var sysCache struct {
 	sync.Mutex
-	at time.Time
-	p  Proxy
+	at     time.Time // when the last read ended; zero: nothing read yet
+	p      Proxy
+	failed bool // the last read failed, so p is from one before it
+	// reading is closed when the read under way, begun at since, ends;
+	// nil while none is
+	reading chan struct{}
+	since   time.Time
 }
 
 // How long a system proxy read stands: a proxy that is set, 15 seconds;
 // none, 2. magpie started at login comes up before the proxy app does
 // (#1518), and its requests went direct for up to 15 seconds after the
-// proxy app had set the system's proxy.
+// proxy app had set the system's proxy. A request waits for a read until
+// readWait after the read began, then takes what was read before: a
+// scutil that never answered held every request that asked for the
+// system's proxy for as long as it hung (#3421).
 var (
 	systemKeep = 15 * time.Second
 	noneKeep   = 2 * time.Second
+	readWait   = 2 * time.Second
 	readSystem = system
 )
 
 // System reads the system proxy, at most every 15 seconds while one is
-// set and every 2 while none is.
+// set and every 2 while none is. One read runs at a time, outside the
+// lock. A read that fails keeps what was read before, and the one after
+// it holds nobody.
 func System() Proxy {
 	sysCache.Lock()
-	defer sysCache.Unlock()
 	keep := systemKeep
 	if sysCache.p.URL == "" {
 		keep = noneKeep
 	}
-	if sysCache.at.IsZero() || time.Since(sysCache.at) > keep {
-		sysCache.p, sysCache.at = readSystem(), time.Now()
+	if !sysCache.at.IsZero() && time.Since(sysCache.at) <= keep {
+		p := sysCache.p
+		sysCache.Unlock()
+		return p
 	}
+	if sysCache.reading == nil {
+		sysCache.reading, sysCache.since = make(chan struct{}), time.Now()
+		go refreshSystem(sysCache.reading)
+	}
+	var wait time.Duration
+	if sysCache.at.IsZero() || !sysCache.failed {
+		wait = time.Until(sysCache.since.Add(readWait))
+	}
+	done := sysCache.reading
+	sysCache.Unlock()
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-done:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	sysCache.Lock()
+	defer sysCache.Unlock()
 	return sysCache.p
+}
+
+// refreshSystem reads the system proxy into sysCache, then closes done.
+// A read that fails keeps what was read before, if anything was.
+func refreshSystem(done chan struct{}) {
+	p, ok := readSystem()
+	sysCache.Lock()
+	if ok || sysCache.at.IsZero() {
+		sysCache.p = p
+	}
+	sysCache.at, sysCache.failed, sysCache.reading = time.Now(), !ok, nil
+	sysCache.Unlock()
+	close(done)
 }
 
 func loopback(host string) bool {

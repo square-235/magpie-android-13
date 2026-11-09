@@ -8,7 +8,10 @@ android {
 
     defaultConfig {
         applicationId = "com.magpie.android"
-        minSdk = 36
+        // Android 13 (API 33). The gateway is linked against API 33 as well
+        // (see scripts/build-magpie-android.ps1), so nothing in the APK asks
+        // for a symbol an Android 13 device doesn't have.
+        minSdk = 33
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

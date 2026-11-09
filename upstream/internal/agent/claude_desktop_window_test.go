@@ -52,9 +52,8 @@ func desktopWindowSandbox(t *testing.T) (home, path string) {
 // least held a 1M model to 256K (#2025, 6.1sol), so while Desktop is on
 // magpie it is the largest window of Desktop's and Claude Code's models,
 // and each model below it runs at its own through
-// modelSettings.<id>.autoCompactWindow. A model Claude Code knows, and one
-// listed by its 1M id, are left out of the largest; the user's own value
-// is theirs.
+// modelSettings.<id>.autoCompactWindow. A model Claude Code knows is left
+// out of the largest; the user's own value is theirs.
 func TestClaudeDesktopContextWindow(t *testing.T) {
 	home, path := desktopWindowSandbox(t)
 	a := claude(home)
@@ -326,9 +325,12 @@ func TestClaudeDesktopExploreKeepsUserValue(t *testing.T) {
 }
 
 // TestClaudeDesktopContextWindow1M: a model Desktop lists by its 1M id
-// (settings.DesktopLongest) runs at 1M whatever the value says, so it adds
-// nothing to it; listed plain too, it runs at the value, its own 1M when it
-// is the only one.
+// (settings.DesktopLongest) is told by its 1M too, as one listed plain is,
+// so it runs to its own should Claude Code stop taking the id for 1M (the
+// 1M beta turned away once, CLAUDE_CODE_DISABLE_1M_CONTEXT), and a smaller
+// model beside it is held to its own. dumplings (Discord, v0.1.1295, Full
+// window): Desktop's 1M model beside a 272K GPT showed 272K, the value
+// magpie told, as the 1M id didn't count toward it.
 func TestClaudeDesktopContextWindow1M(t *testing.T) {
 	home, path := desktopWindowSandbox(t)
 	// Desktop is shown glm alone (the Agents page's model list)
@@ -348,11 +350,29 @@ func TestClaudeDesktopContextWindow1M(t *testing.T) {
 	}
 	s := settings.Load()
 	s.DesktopLongest = true
+	s.FullContext = true
 	if err := settings.Save(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Sync(); err != nil || window() != "" {
+	if err := a.Sync(); err != nil || window() != "1000000" {
 		t.Fatalf("glm listed by its 1M id alone: %q %v", window(), err)
+	}
+	// GPT 272K shown beside it: glm's 1M is still the one told, GPT held
+	// to its own
+	if err := provider.SetHiddenModels("claude-desktop", []string{"v/grok", "v/plain", "v/claude-opus-4-6"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, e := range provider.Catalog() {
+		ids[e.ID] = gateway.DesktopID(e)
+	}
+	gpt, _ := edit.GetJSON(path, budgetPath(ids["v/gpt"]))
+	glm, _ := edit.GetJSON(path, budgetPath(ids["v/glm"]))
+	if window() != "1000000" || gpt != "272000" || glm != "" {
+		t.Fatalf("glm by its 1M id beside GPT: window %q, gpt %q, glm %q: %s", window(), gpt, glm, readFile(path))
 	}
 }
 
@@ -411,5 +431,60 @@ func TestClaudeDesktopAloneContextWindow(t *testing.T) {
 	}
 	if get("theme") != "dark" || get("autoCompactWindow") != "300000" {
 		t.Fatalf("the user's settings changed: %s", readFile(path))
+	}
+}
+
+// TestClaudeDesktopWSLContextWindow (young02036 on Discord): Claude
+// Desktop on Windows runs a Code tab session whose environment host is
+// WSL on the distro's Claude Code, which reads ~/.claude/settings.json
+// there (Desktop 4.29.0 probes ${CLAUDE_CONFIG_DIR:-$HOME/.claude} in the
+// distro) and is handed the mythos-magpie id with no window. Only
+// Windows' own settings.json was told Desktop's window, so a 500K group
+// read "/ 200k" in WSL. The distro's Claude Code, not on magpie itself,
+// is told the same window and capabilities while Desktop is on magpie,
+// the user's own settings there kept, and Desktop off takes them out.
+func TestClaudeDesktopWSLContextWindow(t *testing.T) {
+	home, own := desktopWindowSandbox(t)
+	root := t.TempDir()
+	distroSettings := filepath.Join(root, "home", "me", ".claude", "settings.json")
+	writeFile(t, distroSettings, `{"theme":"light","model":"opus"}`)
+	d := distro{Name: "Ubuntu", Root: root, Home: "/home/me", Has: map[string]bool{"dir:.claude": true},
+		Gateway: "172.20.0.1", Running: true}
+	a := wslAgent(wslKindOf("claude"), d)
+	if a.ID != "claude@wsl:Ubuntu" || a.Sync == nil {
+		t.Fatalf("%+v", a)
+	}
+	get := func(key string) string { v, _ := edit.GetJSON(distroSettings, key); return v }
+	window := func() string { return get("env." + claudeContextEnv) }
+
+	if err := a.Sync(); err != nil || window() != "" {
+		t.Fatalf("Desktop not on magpie: window %q %v", window(), err)
+	}
+	if err := claudeDesktop(home).Field("provider").Set("magpie"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if window() != "1000000" {
+		t.Fatalf("Desktop on magpie: the distro's window %q, want glm's 1000000\n%s", window(), readFile(distroSettings))
+	}
+	if caps := get("env." + claudeCapsEnv); !strings.Contains(caps, "mythos-magpie-") {
+		t.Fatalf("the distro's capabilities %q name none of Desktop's ids", caps)
+	}
+	if get("env.ANTHROPIC_BASE_URL") != "" || get("model") != "opus" || get("theme") != "light" {
+		t.Fatalf("the distro's own Claude Code setup changed: %s", readFile(distroSettings))
+	}
+	if w, _ := edit.GetJSON(own, "env."+claudeContextEnv); w != "1000000" {
+		t.Fatalf("Windows' own window %q", w)
+	}
+	if err := claudeDesktop(home).Field("provider").Set(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if window() != "" || get("env."+claudeCapsEnv) != "" || get("modelSettings") != "" || get("theme") != "light" {
+		t.Fatalf("Desktop off: %s", readFile(distroSettings))
 	}
 }

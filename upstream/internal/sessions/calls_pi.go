@@ -1,13 +1,9 @@
 package sessions
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"math"
-	"os"
 	"strings"
 	"time"
 )
@@ -36,7 +32,14 @@ import (
 // A call made through magpie's own entry (provider "magpie", which
 // internal/agent's pi.go and omp.go write, "dial" before the rename) is the
 // gateway's to count: it logged the call itself, with the provider and
-// account that answered.
+// account that answered. Cindy's Pi names it otherwise: Cindy gives a
+// custom provider it imports the link's id and eight hex digits of a new
+// UUID (its import parser: `${id.slice(0,24)}-${randomUUID().slice(0,8)}`),
+// so magpie's link, id "magpie" (internal/agent's cindy.go), is
+// "magpie-beedee1a" there, and a call through it was counted twice: by the
+// gateway, and again here as Cindy's own (jealousy03888 on Discord, ZCode's
+// GLM-5.3 in Cindy listed once as a gateway request and once as a local
+// session).
 //
 // A fork (pi --fork, /fork) starts with a copy of its parent's entries, ids
 // and times kept: they are the parent's calls, left out of the fork as
@@ -45,12 +48,36 @@ import (
 
 // piCallFiles are Pi's and omp's session files, here and in WSL.
 func piCallFiles() []file {
-	out := append(piFiles(), ompFiles()...)
-	return append(out, wslFiles("pi", "omp")...)
+	out := append(piFiles(), raftFiles()...)
+	out = append(out, cindyFiles()...)
+	out = append(out, ompFiles()...)
+	return append(out, wslFiles("pi", "raft", "omp")...)
 }
 
-// piGateway is whether a provider is magpie's own entry.
-func piGateway(provider string) bool { return provider == "magpie" || provider == "dial" }
+// piGateway is whether a provider is magpie's own entry, in agent's files.
+func piGateway(agent, provider string) bool {
+	if provider == "magpie" || provider == "dial" {
+		return true
+	}
+	return agent == "cindy" && cindyGatewayProvider(provider)
+}
+
+// cindyGatewayProvider is whether a provider id is the one Cindy gives
+// magpie's import link: "magpie-" and eight lowercase hex digits. A
+// provider the user adds in Cindy by hand under the name Magpie is
+// "magpie", or "magpie-2" beside another (its slug), never this shape.
+func cindyGatewayProvider(id string) bool {
+	rest, ok := strings.CutPrefix(id, "magpie-")
+	if !ok || len(rest) != 8 {
+		return false
+	}
+	for _, r := range rest {
+		if !('0' <= r && r <= '9' || 'a' <= r && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 type piCallLine struct {
 	Type      string   `json:"type"`
@@ -73,59 +100,65 @@ type piCallLine struct {
 	} `json:"message"`
 }
 
-// readPiCalls reads one Pi or omp session file whole.
-func readPiCalls(f file) (*callFile, bool) {
-	r, err := os.Open(f.path)
-	if err != nil {
-		return &callFile{Path: f.path, Agent: f.agent}, false
+// piCarry is what a Pi or omp session file's lines have said so far that a
+// later line's call is read with: the header's cwd and, for a fork, when it
+// began (what was written before is its parent's), and the provider and
+// model in use. Pi and omp only append to the file, a line an entry, so a
+// file that grew is read on from where the last read left off with it
+// (lineCallReaders).
+type piCarry struct {
+	Header          bool
+	Cwd             string
+	Since           time.Time
+	Provider, Model string
+}
+
+// piCallsBegin starts a session file read from its start.
+func piCallsBegin(st *callFile, f file) {
+	st.Session = strings.TrimPrefix(f.key, f.agent+":")
+	st.Pi = &piCarry{}
+}
+
+// piCallsKept is whether st holds what reading on needs: a disk shard
+// written before the carry was kept there does not, and its file is read
+// whole again once it changes.
+func piCallsKept(st *callFile) bool { return st.Pi != nil }
+
+// readPiCallLine reads one line of a Pi or omp session file.
+func readPiCallLine(st *callFile, b []byte) {
+	if len(b) == 0 || len(b) > maxLine || !(bytes.Contains(b, piUsed) || bytes.Contains(b, piHeader) || bytes.Contains(b, piModel)) {
+		return
 	}
-	defer r.Close()
-	st := &callFile{Agent: f.agent, Path: f.path, Session: strings.TrimPrefix(f.key, f.agent+":")}
-	var cwd, provider, model string
-	var header bool
-	var since time.Time // a fork's: what was written before it is its parent's
-	br := bufio.NewReaderSize(r, 1<<20)
-	for {
-		b, err := br.ReadBytes('\n')
-		if err != nil && (!errors.Is(err, io.EOF) || len(bytes.TrimSpace(b)) == 0) {
-			break
-		}
-		b = bytes.TrimSpace(b)
-		if len(b) > 0 && len(b) <= maxLine && (bytes.Contains(b, piUsed) || bytes.Contains(b, piHeader) || bytes.Contains(b, piModel)) {
-			var l piCallLine
-			if json.Unmarshal(b, &l) == nil {
-				switch l.Type {
-				case "session":
-					if !header {
-						header, cwd = true, l.Cwd
-						if l.Parent != "" {
-							since, _ = time.Parse(time.RFC3339Nano, l.Timestamp)
-						}
-					}
-				case "model_change":
-					p, id := l.Provider, l.ModelID
-					if id == "" {
-						p, id, _ = strings.Cut(l.Model, "/")
-					}
-					if id != "" {
-						provider, model = p, id
-					}
-				case "message":
-					if m := l.Message; m != nil && m.Role == "assistant" && m.Model != "" {
-						provider, model = m.Provider, m.Model
-					}
-				}
-				if c, ok := piCall(st, f.agent, l, provider, model); ok && !c.Time.Before(since) {
-					c.Cwd = st.str(cwd)
-					st.Calls = append(st.Calls, c)
-				}
+	var l piCallLine
+	if json.Unmarshal(b, &l) != nil {
+		return
+	}
+	p := st.Pi
+	switch l.Type {
+	case "session":
+		if !p.Header {
+			p.Header, p.Cwd = true, l.Cwd
+			if l.Parent != "" {
+				p.Since, _ = time.Parse(time.RFC3339Nano, l.Timestamp)
 			}
 		}
-		if err != nil {
-			break
+	case "model_change":
+		prov, id := l.Provider, l.ModelID
+		if id == "" {
+			prov, id, _ = strings.Cut(l.Model, "/")
+		}
+		if id != "" {
+			p.Provider, p.Model = prov, id
+		}
+	case "message":
+		if m := l.Message; m != nil && m.Role == "assistant" && m.Model != "" {
+			p.Provider, p.Model = m.Provider, m.Model
 		}
 	}
-	return st, true
+	if c, ok := piCall(st, st.Agent, l, p.Provider, p.Model); ok && !c.Time.Before(p.Since) {
+		c.Cwd = st.str(p.Cwd)
+		st.Calls = append(st.Calls, c)
+	}
 }
 
 // piCall is an entry as a call, on the provider and model in use for the
@@ -152,7 +185,7 @@ func piCall(st *callFile, agent string, l piCallLine, provider, model string) (C
 	default:
 		return Call{}, false
 	}
-	if u == nil || model == "" || piGateway(provider) {
+	if u == nil || model == "" || piGateway(agent, provider) {
 		return Call{}, false
 	}
 	if u.Input < 0 || u.Output < 0 || u.CacheRead < 0 || u.CacheWrite < 0 {

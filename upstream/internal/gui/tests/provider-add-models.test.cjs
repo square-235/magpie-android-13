@@ -52,6 +52,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await browser.close();
       });
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [], posts = [];
       let refusing = true;
       page.on("pageerror", (e) => errors.push(e.message));
@@ -117,7 +118,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // a chip ticked is in the field; typing ticks a chip
       await still(chips.nth(0), "a chip");
       assert.equal(await field.inputValue(), "gpt-5.5");
-      assert.equal(await chips.nth(0).getAttribute("class"), "mchip on");
+      assert.equal(await chips.nth(0).getAttribute("class"), "mchip pick on");
       await field.fill("gpt-5.5, deepseek-v4, own-model");
       assert.equal(await ed.locator('.add-models-list .mchip.on').count(), 2);
       assert.equal(await ed.locator(".add-models-list .detect-acts .hint").textContent(), L.picked(2, 30));

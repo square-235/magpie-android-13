@@ -91,7 +91,7 @@ func agentLabel(id string) string {
 // goes only when models.dev knows it, else as "other"; a subscription's
 // or plugin's ids are its vendor's.
 func modelLabel(ref string) string {
-	if strings.HasPrefix(ref, provider.GroupPrefix) {
+	if provider.IsGroupRef(ref) {
 		return "group"
 	}
 	p, m, ok := provider.Resolve(ref)
@@ -102,7 +102,7 @@ func modelLabel(ref string) string {
 	if l == "custom" || l == "plugin" {
 		return l
 	}
-	if p.Account == nil && !p.IsPlugin() && !catalog.Knows(m) {
+	if p.Account == nil && !p.IsPlugin() && !catalog.KnowsAsWritten(m) {
 		return l + "/other"
 	}
 	return l + "/" + m

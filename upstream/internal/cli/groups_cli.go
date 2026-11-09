@@ -34,6 +34,9 @@ const groupUsage = `usage:
                                           it is in follow; an agent set to the old id needs setting again),
                                           effort=auto (the classifier picks each turn's reasoning; needs classifier=),
                                           effort=agent (the agent's again), classifier=<provider/model>|group/<id>,
+                                          intent-sure=<0…1> (how sure the classifier must be of an intent for it
+                                          to count; 0 takes its likeliest however unsure, "none of these" never
+                                          counting; empty is the 0.4 groups have always asked),
                                           pick=<model> (routing=manual, every request to that one of its models),
                                           fast=<m1>[,m2…] (the models sent in their vendor's fast mode; empty for none),
                                           weight=<m1>=<n>[,m2=<n>…] (each model's share under routing=weight,
@@ -57,6 +60,8 @@ const groupUsage = `usage:
                                           listed or served — yours, and found ones you changed, stay — and an
                                           agent set to one is moved to its model from one provider; on brings
                                           them back
+  magpie group auto skip <provider>…      keep providers out of the groups magpie finds (groups you made or
+                                          changed keep them); skip none lets every one back in
   magpie group rule add|rm|mv <id> …      rules: which model a turn goes to first, by its length, an image,
                                           the reasoning asked for or the agent (magpie group rule help)
 
@@ -72,12 +77,15 @@ const groupUsage = `usage:
            or max — sent whatever the agent asks or effort=auto picks, at the level the model has nearest;
            without one it reasons as the group's effort says. The same model at two efforts is two members
            (a rule can send to either). A model whose own id ends so (a :free, :7b or :0) stays as it is
+           provider/model:low+high gives it several levels for the agent to choose from, each sent at the
+           level the model has nearest, and the group offers agents those for it
            provider/model[:effort]:fast sends the member in its vendor's fast mode: priority processing on a
            ChatGPT account (Codex's Fast) or an OpenAI key, Cursor's -fast model, Claude's fast mode on an
            Anthropic key for Opus 4.8 and 5; a model without one is refused (codex/gpt-6.1-sol:high:fast)
            a pattern puts in every model it matches, as magpie models lists them now and later: a glob, where
            * is any run of characters, / too, over the provider/model id in any case (openrouter/*:free,
-           *-free, opencode-zen/*), or re:<regexp> matching the whole id (re:openrouter/.*:(free|beta)).
+           *-free, opencode-zen/*), or re:<regexp> matching the whole id, in any case too (re:openrouter/.*:(free|beta));
+           (?-i) in the regexp makes case matter (re:(?-i)openrouter/.*:FREE).
            Quote it for the shell. The group keeps the pattern, not its models: one the vendor adds joins,
            one it drops leaves. The models you name come first, in your order, then those the patterns
            match, in the order magpie models lists them; one both named and matched keeps its named place.
@@ -85,6 +93,8 @@ const groupUsage = `usage:
            how many models each matches now, and says when one matches nothing
   routing  smart   (default) of the subscriptions with quota to spare, the one renewing soonest first
            order   the first model until it can't answer, then the next
+           drain   one account or key until it is used up, then the next, and stays there: an
+                   earlier one that renews meanwhile doesn't take the requests back
            rotate  each conversation's next turn goes to the next member's account or key
            usage   the account or key with the most of its allowance left first
            pace    the account with the most of its week left per hour until it renews first, so less
@@ -106,7 +116,9 @@ const groupUsage = `usage:
                    asked in words — rates how hard it is, and the turn's requests
                    reason at low, medium, high or xhigh in place of the agent's level; only those
                    the agent asked to reason, never one it turned off (none). A route's effort
-                   is what the agent asked, each try's what its model was sent
+                   is what the agent asked, each try's what its model was sent. A group in the
+                   group, effort=auto of its own, is asked only when this one gave no pick:
+                   the outermost pick stands
 
   e.g. magpie group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=order
        magpie group set opus-anywhere stays=session models+=openrouter/anthropic/claude-opus-5.5
@@ -117,6 +129,10 @@ const groupUsage = `usage:
        magpie group set fast models+=gcloud/gemini-3.8-flash:medium
        magpie group add my-free-pool models='openrouter/*:free,opencode-zen/*-free' routing=order
        magpie group set opus-anywhere routing=weight weight=claude/claude-opus-5-5=3
+       magpie group set deepseek-anywhere routing=fast   # the provider that answered it fastest lately first
+       magpie group set deepseek-anywhere routing=cheap  # the provider it costs least on now first (DeepSeek's off-peak hours)
+       magpie group set free-pool routing=drain          # one account until it is used up, then the next, never back
+       magpie group set checkins routing=expiring        # free quota first, the soonest to expire first; paid only when none is left
        magpie group pick opus-anywhere copilot/claude-opus-5.5
        magpie claude group/opus-anywhere`
 
@@ -132,6 +148,11 @@ var routingNames = []struct {
 	{provider.LeastUsed, "usage", []string{"least-used"}},
 	{provider.Pace, "pace", []string{"weekly-pace"}},
 	{provider.Weighted, "weight", []string{"weighted", "by-weight", "weighted-round-robin", "wrr"}},
+	{provider.FreeFirst, "free", []string{"free-first", "freest", "no-cost"}},
+	{provider.Fastest, "fast", []string{"fastest", "speed", "speed-first"}},
+	{provider.Cheapest, "cheap", []string{"cheapest", "cheapest-first", "price", "cost"}},
+	{provider.Drain, "drain", []string{"until-used-up", "use-up", "sticky"}},
+	{provider.FreeExpiring, "expiring", []string{"free-expiring", "free-expiry", "free-soonest", "soonest-free"}},
 	{provider.Manual, "manual", []string{"pick", "picked", "pinned"}},
 }
 
@@ -260,7 +281,7 @@ func memberResolver(keep []string) func(string) (string, error) {
 		}
 		if model, effort := provider.MemberEffort(id); effort != "" {
 			// a model at an effort of its own: the model as any other is
-			if strings.HasPrefix(model, provider.GroupPrefix) {
+			if provider.IsGroupRef(model) {
 				return "", fmt.Errorf("%s is a group: its models reason as it says, so it takes no :%s", model, effort)
 			}
 			m, err := resolve(model)
@@ -269,8 +290,8 @@ func memberResolver(keep []string) func(string) (string, error) {
 			}
 			return provider.WithMemberEffort(m, effort), nil
 		}
-		if gid, ok := strings.CutPrefix(id, provider.GroupPrefix); ok {
-			// a group in the group: SaveGroup refuses one it would be in itself through
+		if gid, ok := strings.CutPrefix(provider.CanonicalRef(id), provider.GroupPrefix); ok {
+			// a group in the group: auto/<model> as group/auto-<slug>;: SaveGroup refuses one it would be in itself through
 			for _, g := range provider.Groups() {
 				if strings.EqualFold(g.ID, gid) && !g.Hidden {
 					return provider.GroupPrefix + g.ID, nil
@@ -506,6 +527,21 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 			}
 		case "classifier", "classify":
 			g.Classifier = strings.TrimPrefix(strings.TrimSpace(v), "magpie/")
+		case "intent-sure", "intentsure":
+			// how sure the classifier must be of an intent for it to count
+			// (#5101): 0 takes its likeliest however unsure, "none of
+			// these" never counting; empty is 0.4 as groups have always
+			// asked
+			if strings.TrimSpace(v) == "" {
+				g.IntentSure = nil
+				break
+			}
+			sure, perr := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if perr != nil || !(sure >= 0 && sure <= 1) { // NaN too
+				err = fmt.Errorf("intent-sure is from 0 to 1, as intent-sure=0.25 (empty is the 0.4 groups have always asked), not %q", v)
+				break
+			}
+			g.IntentSure = &sure
 		case "fast":
 			// the members sent in their vendor's fast mode, as they are in
 			// the group
@@ -549,7 +585,7 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 			g.Pick, err = pickMember(g.Members, v)
 			g.Routing = provider.Manual
 		default:
-			return fmt.Errorf("unknown field %q (fields: name, models, models+, models-, routing, pick, stays, context, levels, family, effort, classifier, fast, weight, listed; magpie group help)", k)
+			return fmt.Errorf("unknown field %q (fields: name, models, models+, models-, routing, pick, stays, context, levels, family, effort, classifier, intent-sure, fast, weight, listed; magpie group help)", k)
 		}
 		if err != nil {
 			return err
@@ -583,7 +619,7 @@ func pickMember(members []string, v string) (string, error) {
 // findGroup looks a group up by its id, its catalog id or its name.
 func findGroup(ref string) (provider.Group, error) {
 	all := provider.Groups()
-	ref = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(ref), "magpie/"), provider.GroupPrefix)
+	ref = strings.TrimPrefix(provider.CanonicalRef(strings.TrimPrefix(strings.TrimSpace(ref), "magpie/")), provider.GroupPrefix)
 	for _, match := range []func(provider.Group) bool{
 		func(g provider.Group) bool { return g.ID == ref },
 		func(g provider.Group) bool { return strings.EqualFold(g.ID, ref) },
@@ -647,7 +683,7 @@ func groupCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(green.Render("✓"), verb, bold.Render(g.Name), muted.Render("· agents pick it as "+provider.GroupPrefix+g.ID))
+		fmt.Println(green.Render("✓"), verb, bold.Render(g.Name), muted.Render("· agents pick it as "+g.Ref()))
 		return showGroup(g)
 	case "set", "edit":
 		if len(rest) < 2 {
@@ -660,7 +696,7 @@ func groupCmd(args []string) error {
 		fmt.Println(green.Render("✓"), "saved", bold.Render(g.Name))
 		if slices.ContainsFunc(rest[1:], func(kv string) bool { return strings.HasPrefix(strings.ToLower(kv), "name=") }) {
 			// a new name isn't a new id: say what agents still ask for
-			fmt.Println(muted.Render("  its id stays " + g.ID + ": agents ask for " + provider.GroupPrefix + g.ID + " (a client given the name may ask by the name too)"))
+			fmt.Println(muted.Render("  its id stays " + g.ID + ": agents ask for " + g.Ref() + " (a client given the name may ask by the name too)"))
 		}
 		return showGroup(g)
 	case "rm", "remove", "delete":
@@ -704,7 +740,7 @@ func groupCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(green.Render("✓"), "copied", bold.Render(src.Name), "to", bold.Render(g.Name), muted.Render("· agents pick it as "+provider.GroupPrefix+g.ID))
+		fmt.Println(green.Render("✓"), "copied", bold.Render(src.Name), "to", bold.Render(g.Name), muted.Render("· agents pick it as "+g.Ref()))
 		return showGroup(g)
 	case "template", "templates", "tpl":
 		return templateCmd(rest)
@@ -803,10 +839,13 @@ func setGroup(ref string, pairs []string) (provider.Group, error) {
 		return g, err
 	}
 	if to != from {
-		if err := provider.RenameGroup(from, to); err != nil {
+		moved, err := agent.RenameGroup(from, to)
+		if err != nil {
 			return g, err
 		}
-		fmt.Println(amber.Render("!"), "agents set to "+provider.GroupPrefix+from+" need "+provider.GroupPrefix+to+" now")
+		for _, a := range moved {
+			fmt.Println(green.Render("✓"), a+" is on "+provider.GroupPrefix+to+" now")
+		}
 	}
 	return findGroup(to)
 }
@@ -814,7 +853,7 @@ func setGroup(ref string, pairs []string) (provider.Group, error) {
 // removedOnly is a removed found group magpie doesn't find now (its model
 // is down to one provider): only its record is left, to keep it removed.
 func removedOnly(ref string) (string, bool) {
-	ref = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(ref), "magpie/"), provider.GroupPrefix)
+	ref = strings.TrimPrefix(provider.CanonicalRef(strings.TrimPrefix(strings.TrimSpace(ref), "magpie/")), provider.GroupPrefix)
 	for _, id := range provider.RemovedGroups() {
 		if strings.EqualFold(id, ref) {
 			return id, true
@@ -911,7 +950,9 @@ func memberLabel(id string, names map[string]provider.Entry) (string, bool) {
 		if n == "" {
 			n = e.Model
 		}
-		if effort != "" {
+		if _, levels := provider.MemberLevels(effort); len(levels) > 0 {
+			n += " · " + strings.Join(levels, "/") + " reasoning, as the agent picks"
+		} else if effort != "" {
 			n += " · " + effort + " reasoning, whatever the agent asks"
 		}
 		return e.Provider.Name + " · " + n, true
@@ -949,6 +990,9 @@ func autoGroupsCmd(args []string) error {
 		} else {
 			fmt.Println("found groups are", amber.Render("off"), muted.Render("· only the groups you made or changed; magpie group auto on brings the others back"))
 		}
+		if skip := provider.AutoGroupSkip(); len(skip) > 0 {
+			fmt.Println("left out:", strings.Join(skip, ", "), muted.Render("· magpie group auto skip none lets them back in"))
+		}
 		return nil
 	}
 	var on bool
@@ -956,8 +1000,10 @@ func autoGroupsCmd(args []string) error {
 	case "on", "true", "yes", "1":
 		on = true
 	case "off", "false", "no", "0":
+	case "skip":
+		return autoGroupSkipCmd(args[1:])
 	default:
-		return fmt.Errorf("magpie group auto [on|off]")
+		return fmt.Errorf("magpie group auto [on|off|skip <provider>…|skip none]")
 	}
 	if len(args) > 1 {
 		return fmt.Errorf("magpie group auto [on|off]")
@@ -971,6 +1017,47 @@ func autoGroupsCmd(args []string) error {
 		fmt.Println(green.Render("✓"), "found groups are on", muted.Render("· a model two or more providers serve is a group of them again"))
 	} else {
 		fmt.Println(green.Render("✓"), "found groups are off", muted.Render("· the groups you made or changed stay; a request for an auto- group goes to its model from one provider"))
+	}
+	return nil
+}
+
+// autoGroupSkipCmd keeps the providers named out of the groups magpie
+// finds, the others back in (provider.SetAutoGroupSkip; chenxiang0010 on
+// Discord); "none" lets every one back in, and no name says which are
+// out. A name magpie has no provider of is refused, never kept.
+func autoGroupSkipCmd(args []string) error {
+	if len(args) == 0 {
+		skip := provider.AutoGroupSkip()
+		if len(skip) == 0 {
+			fmt.Println("no provider is left out of found groups", muted.Render("· magpie group auto skip <provider>… leaves them out"))
+		} else {
+			fmt.Println("left out of found groups:", strings.Join(skip, ", "))
+		}
+		return nil
+	}
+	var ids []string
+	if !(len(args) == 1 && strings.EqualFold(args[0], "none")) {
+		have := map[string]bool{}
+		for _, p := range provider.All() {
+			have[p.ID] = true
+		}
+		for _, a := range args {
+			id := strings.ToLower(strings.TrimSpace(a))
+			if !have[id] {
+				return fmt.Errorf("no provider %q (magpie providers lists their ids)", a)
+			}
+			ids = append(ids, id)
+		}
+	}
+	moved, err := agent.Reseat(func() error { return provider.SetAutoGroupSkip(ids) })
+	if err != nil {
+		return err
+	}
+	defer printMoved(moved)
+	if len(ids) == 0 {
+		fmt.Println(green.Render("✓"), "no provider is left out of found groups")
+	} else {
+		fmt.Println(green.Render("✓"), "left out of found groups:", strings.Join(ids, ", "), muted.Render("· the groups you made or changed keep them"))
 	}
 	return nil
 }
@@ -1001,7 +1088,7 @@ func groups() error {
 	var rows []row
 	w := [3]int{}
 	for _, g := range shown {
-		r := row{name: bold.Render(g.Name), id: muted.Render(provider.GroupPrefix + g.ID)}
+		r := row{name: bold.Render(g.Name), id: muted.Render(g.Ref())}
 		if g.Auto {
 			r.name += " " + faint.Render("found")
 		}
@@ -1013,7 +1100,7 @@ func groups() error {
 			r.how += muted.Render(fmt.Sprintf(" · %d rule%s", n, map[bool]string{true: "", false: "s"}[n == 1]))
 		}
 		sep, ready := muted.Render(" · "), false
-		if g.Routing == provider.Ordered {
+		if g.Routing == provider.Ordered || g.Routing == provider.Drain {
 			sep = muted.Render(" → ")
 		}
 		var ms []string
@@ -1077,7 +1164,7 @@ func groups() error {
 
 func showGroup(g provider.Group) error {
 	kv := func(k, v string) { fmt.Printf("  %s %s\n", muted.Render(pad(k, 9)), v) }
-	head := bold.Render(g.Name) + muted.Render("  "+provider.GroupPrefix+g.ID)
+	head := bold.Render(g.Name) + muted.Render("  "+g.Ref())
 	if g.Auto {
 		head += faint.Render("  found by magpie — changing it makes it yours")
 	}
@@ -1162,6 +1249,9 @@ func showGroup(g provider.Group) error {
 		}
 		kv("classifier", g.Classifier+muted.Render(what))
 	}
+	if g.IntentSure != nil {
+		kv("intent-sure", fmt.Sprintf("%g", *g.IntentSure)+muted.Render("  how sure the classifier must be of an intent for it to count; 0 takes its likeliest"))
+	}
 	if u := groupUses()[g.ID]; len(u) > 0 {
 		kv("used by", green.Render(strings.Join(u, ", ")))
 	}
@@ -1173,7 +1263,7 @@ func showGroup(g provider.Group) error {
 // <id> +<model>` puts right (MOMO on Discord: opencode-go/deepseek-flash).
 func whyNotServed(member string) string {
 	pid, model, ok := strings.Cut(member, "/")
-	if !ok || strings.HasPrefix(member, provider.GroupPrefix) {
+	if !ok || provider.IsGroupRef(member) {
 		return "not served"
 	}
 	p, err := provider.Find(pid)
@@ -1218,6 +1308,6 @@ func templateCmd(rest []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(green.Render("✓"), "added", bold.Render(g.Name), muted.Render("· agents pick it as "+provider.GroupPrefix+g.ID))
+	fmt.Println(green.Render("✓"), "added", bold.Render(g.Name), muted.Render("· agents pick it as "+g.Ref()))
 	return showGroup(g)
 }

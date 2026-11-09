@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -81,6 +83,7 @@ func trashJSON(looks map[string]*agent.Agent) []trashedJSON {
 }
 
 func sessionManageRoutes(mux *http.ServeMux, w Windows) {
+	sessionReadsRoutes(mux)
 	mux.HandleFunc("POST /api/sessions/relocate-claude", func(rw http.ResponseWriter, r *http.Request) {
 		var in sessions.ClaudeRelocation
 		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 16384)).Decode(&in); err != nil {
@@ -115,70 +118,83 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 	// manage is the agents with sessions, and every session of ?agent=
 	// (the one with the most when none is named), and the trash.
 	mux.HandleFunc("GET /api/sessions/manage", func(rw http.ResponseWriter, r *http.Request) {
+		// the Codex app's list forgets the threads deleted before it
+		// was told of each delete, once a run
+		sessions.TidyCodexCatalog()
+		defer sessions.OneListing()()
 		looks := agentLooks()
 		out := struct {
-			Agents    []manageAgentJSON `json:"agents"`
-			Agent     string            `json:"agent"`
-			Sessions  []managedJSON     `json:"sessions"`
-			Terminal  bool              `json:"terminal"`
-			Trash     []trashedJSON     `json:"trash"`
-			TrashDir  string            `json:"trashDir"`
-			Recording bool              `json:"recording"`
+			Agents   []manageAgentJSON `json:"agents"`
+			Agent    string            `json:"agent"`
+			Sessions []managedJSON     `json:"sessions"`
+			Terminal bool              `json:"terminal"`
+			Trash    []trashedJSON     `json:"trash"`
+			TrashDir string            `json:"trashDir"`
+			// Home: the home folder, which a folder's row says as ~
+			Home      string `json:"home,omitempty"`
+			Recording bool   `json:"recording"`
 			// Recorded: some gateway conversation text is kept, to delete
 			Recorded bool `json:"recorded"`
-		}{Agents: []manageAgentJSON{}, Sessions: []managedJSON{}, Terminal: runtime.GOOS == "darwin" && !isWeb(w),
+			// Reads: which agents' own sessions magpie may read; the page
+			// asks first when nothing is decided (asked false)
+			Reads readsJSON `json:"reads"`
+		}{Reads: readsNow(), Agents: []manageAgentJSON{}, Sessions: []managedJSON{}, Terminal: runtime.GOOS == "darwin" && !isWeb(w),
 			Trash: trashJSON(looks), TrashDir: tilde(sessions.TrashDir()), Recording: settings.Load().GatewayConversations,
 			Recorded: sessions.HasGatewayConversations()}
+		out.Home, _ = os.UserHomeDir()
 		want := r.URL.Query().Get("agent")
-		counts := map[string]*manageAgentJSON{}
-		for _, a := range sessions.Agents() {
-			j := manageAgentJSON{AgentCount: a, Name: a.Agent, Icon: "generic"}
-			if l := looks[a.Agent]; l != nil {
-				j.Name, j.Icon = l.SharedName(), l.Icon
-			}
-			counts[a.Agent] = &j
-		}
 		gateway := listedGateway(usage.GatewaySessions(time.Time{}, nil))
-		nativeCounts := map[string]map[string]bool{}
-		for _, s := range sessions.List(sessions.All) {
-			if nativeCounts[s.Agent] == nil {
-				nativeCounts[s.Agent] = map[string]bool{}
-			}
-			nativeCounts[s.Agent][s.ID] = true
+		// a gateway session its agent keeps too is counted once; only the
+		// agents with gateway sessions, and the one shown, are read (#2776)
+		of := map[string]bool{}
+		for _, g := range gateway {
+			of[g.Agent] = true
 		}
-		for _, s := range gateway {
-			if nativeCounts[s.Agent][s.ID] {
-				continue
-			}
-			j := counts[s.Agent]
-			if j == nil {
-				j = &manageAgentJSON{AgentCount: sessions.AgentCount{Agent: s.Agent}, Name: s.Agent, Icon: "generic"}
-				if l := looks[s.Agent]; l != nil {
+		view := sessions.Manage(of, func(agents []sessions.AgentCount, native map[string]map[string]bool) string {
+			counts := map[string]*manageAgentJSON{}
+			for _, a := range agents {
+				j := manageAgentJSON{AgentCount: a, Name: a.Agent, Icon: "generic"}
+				if l := looks[a.Agent]; l != nil {
 					j.Name, j.Icon = l.SharedName(), l.Icon
 				}
-				counts[s.Agent] = j
+				counts[a.Agent] = &j
 			}
-			j.Count++
-			// what magpie keeps of it can be deleted, whatever the agent
-			j.Deletable = true
-		}
-		for _, j := range counts {
-			out.Agents = append(out.Agents, *j)
-		}
-		sort.Slice(out.Agents, func(i, j int) bool {
-			if out.Agents[i].Count != out.Agents[j].Count {
-				return out.Agents[i].Count > out.Agents[j].Count
+			for _, s := range gateway {
+				if native[s.Agent][s.ID] {
+					continue
+				}
+				j := counts[s.Agent]
+				if j == nil {
+					j = &manageAgentJSON{AgentCount: sessions.AgentCount{Agent: s.Agent}, Name: s.Agent, Icon: "generic"}
+					if l := looks[s.Agent]; l != nil {
+						j.Name, j.Icon = l.SharedName(), l.Icon
+					}
+					counts[s.Agent] = j
+				}
+				j.Count++
+				// what magpie keeps of it can be deleted, whatever the agent
+				j.Deletable = true
 			}
-			return out.Agents[i].Agent < out.Agents[j].Agent
+			for _, j := range counts {
+				out.Agents = append(out.Agents, *j)
+			}
+			sort.Slice(out.Agents, func(i, j int) bool {
+				if out.Agents[i].Count != out.Agents[j].Count {
+					return out.Agents[i].Count > out.Agents[j].Count
+				}
+				return out.Agents[i].Agent < out.Agents[j].Agent
+			})
+			if _, ok := counts[want]; ok {
+				return want
+			}
+			if len(out.Agents) > 0 {
+				return out.Agents[0].Agent
+			}
+			return ""
 		})
-		if _, ok := counts[want]; ok {
-			out.Agent = want
-		}
-		if out.Agent == "" && len(out.Agents) > 0 {
-			out.Agent = out.Agents[0].Agent
-		}
+		out.Agent = view.Agent
 		if out.Agent != "" {
-			list := sessions.ListAgent(out.Agent)
+			list := view.Sessions
 			var modelEffort map[string][]sessions.ModelEffort
 			if out.Agent == "codex" {
 				modelEffort = usage.CodexModelEffort(usage.All)
@@ -204,7 +220,7 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 			vias := usage.Vias(since.Add(-time.Minute))
 			for _, s := range list {
 				s.Path = tilde(s.Path)
-				out.Sessions = append(out.Sessions, managedJSON{Managed: s, Via: vias[s.Agent+"|"+s.ID]})
+				out.Sessions = append(out.Sessions, managedJSON{Managed: s, Via: viaOf(vias, s.Session)})
 			}
 			sizes := sessions.GatewaySizes()
 			for _, g := range gateway {
@@ -215,7 +231,7 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 				addCodexModelEffort(&s, modelEffort)
 				// its size is the conversation text magpie recorded of it
 				m := sessions.Managed{Session: s, Deletable: true, Size: sizes(s.Agent, s.ID)}
-				out.Sessions = append(out.Sessions, managedJSON{Managed: m, Via: vias[s.Agent+"|"+s.ID]})
+				out.Sessions = append(out.Sessions, managedJSON{Managed: m, Via: vias.Of(s.Agent + "|" + s.ID)})
 			}
 			sort.SliceStable(out.Sessions, func(i, j int) bool {
 				return out.Sessions[i].Last.After(out.Sessions[j].Last)
@@ -243,12 +259,7 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		// the gateway sessions as listed: those with no native session
-		native := map[string]bool{}
-		for _, s := range sessions.List(sessions.All) {
-			if s.Agent == in.Agent {
-				native[s.ID] = true
-			}
-		}
+		native := sessions.NativeIDs(map[string]bool{in.Agent: true})[in.Agent]
 		listed := map[string]usage.GatewaySession{}
 		for _, g := range listedGateway(usage.GatewaySessions(time.Time{}, nil)) {
 			if g.Agent == in.Agent && !native[g.ID] {
@@ -419,7 +430,13 @@ func searchSessions(ctx context.Context, agentID, query string, budget time.Dura
 	native := map[string]bool{}
 	if sessions.HasTranscript(agentID) {
 		for _, m := range sessions.ListAgent(agentID) {
-			native[m.ID] = true
+			// every id the gateway can know it by (a ZCode session's bare
+			// id, #5754), so its record is not searched again below
+			for _, k := range sessions.GatewayKeys(m.Session) {
+				if a, id, ok := strings.Cut(k, "|"); ok && a == agentID {
+					native[id] = true
+				}
+			}
 			jobs = append(jobs, job{m.Session, m.Last})
 		}
 	} else {

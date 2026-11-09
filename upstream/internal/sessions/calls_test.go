@@ -18,7 +18,7 @@ var callT0 = time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
 // callDirs are the folders a test's calls are read from.
 type callDirs struct{ claude, codex, desktop string }
 
-func setupCalls(t *testing.T) callDirs {
+func setupCalls(t testing.TB) callDirs {
 	t.Helper()
 	dir := t.TempDir()
 	d := callDirs{filepath.Join(dir, "claude"), filepath.Join(dir, "codex"), filepath.Join(dir, "desktop")}
@@ -786,6 +786,20 @@ func TestCallsCoworkMSIX(t *testing.T) {
 	Reset()
 	cs := Calls(time.Time{})
 	if len(cs) != 2 || cs[0].Agent != "claude-desktop" || cs[0].Tokens != (Tokens{5, 6, 7, 8, 0}) || cs[1].Agent != "claude" {
+		t.Fatalf("calls: %+v", cs)
+	}
+}
+
+// Desktop's Code tab in its third-party inference mode, the one a gateway
+// is set in, writes "claude-desktop-3p" (cybercaius: its calls were
+// counted as Claude Code's).
+func TestCallsDesktop3pCodeTab(t *testing.T) {
+	d := setupCalls(t)
+	writeLines(t, filepath.Join(d.claude, "projects", "-p", "s3p.jsonl"),
+		swap(swap(claudeMsg("m1", "claude-haiku-5-5", 1, 2, 3, 4, 1), `"entrypoint":"cli"`, `"entrypoint":"claude-desktop-3p"`), `"sessionId":"sess1"`, `"sessionId":"s3p"`))
+	writeLines(t, filepath.Join(d.claude, "projects", "-p", "sess1.jsonl"), claudeMsg("m2", "claude-opus-5-5", 1, 2, 3, 4, 2))
+	cs := Calls(time.Time{})
+	if len(cs) != 2 || cs[0].Agent != "claude" || cs[1].Agent != "claude-desktop" || cs[1].Session != "s3p" {
 		t.Fatalf("calls: %+v", cs)
 	}
 }

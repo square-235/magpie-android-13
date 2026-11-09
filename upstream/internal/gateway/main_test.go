@@ -29,6 +29,11 @@ func TestMain(m *testing.M) {
 	serveMiddleware()
 	searchOn = gwtool.Serve(gwtool.WebSearch)
 	limitsOn = gwbudget.Limit(budget.Limiter{})
+	// the test binary is no magpie: it runs no claude-tui-helper
+	claudeTUIRuns = false
+	// the tests serve their Remote magpie from this process, which is
+	// then this magpie itself (remote_self_test.go turns it on again)
+	provider.LeaveOutSelf = false
 	code, err := isolatedTests(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -82,6 +87,8 @@ func isolatedTests(m *testing.M) (int, error) {
 	// The fakes of ChatGPT's backend read turns plain; codex_zstd_test's
 	// send them zstd, as the real one is sent.
 	provider.CodexZstdForTests(false)
+	// and speak HTTP: codex_socket_test's fakes speak the WebSocket
+	codexSocketOff.Store(true)
 	// Finding an inert CLI also prevents discovery from falling back to
 	// one installed at an absolute system path. Tests can prepend their
 	// own fakes, as fakeClaude does, and still use ordinary shell tools.
@@ -116,7 +123,9 @@ func isolatedTests(m *testing.M) (int, error) {
 	// and no rest waits on a reading in the background: it would ask a
 	// test's fake upstream after the test ended (#2036, CodeAlex52)
 	awaitAllowance = func(context.Context, string, string) bool { return false }
-	return m.Run(), nil
+	// no route writes a request body in place while it is held
+	guardHeldBodies()
+	return heldWrittenAfter(m.Run()), nil
 }
 
 // The package's tests run as an isolated test binary: nothing the marker

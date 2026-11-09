@@ -36,8 +36,8 @@ const route = {
 };
 
 const words = {
-  en: { aside: "a/glm is paused by rule 1 (14:00–18:00 Mon–Fri), so it is left out until that ends.", title: "1. 14:00–18:00 Mon–Fri → pause A · glm", pause: "pause", send: "send to", edit: "Edit", add: "Add a rule", save: "Save", bare: "Rule 2: a pause needs hours, days, agents or folders", warn: "left out of the group then: not tried, not a fallback", length: "Conversation length", hours: "Hours and days", toPause: "Pause the model instead" },
-  zh: { aside: "a/glm 被规则 1（周一–周五 14:00–18:00）暂停，在此之前不会被调用。", title: "1. 周一–周五 14:00–18:00 → 暂停 A · glm", pause: "暂停", send: "先发给", edit: "编辑", add: "添加规则", save: "保存", bare: "第 2 条规则：暂停需要设时段、星期、Agent 或文件夹", warn: "这段时间移出分组：不会被调用，也不做备用", length: "对话长度", hours: "时段", toPause: "改为暂停该模型" },
+  en: { aside: "a/glm is paused by rule 1 (14:00–18:00 Mon–Fri), so it is left out until that ends.", title: "1. 14:00–18:00 Mon–Fri → pause A · glm", pause: "pause", send: "send to", edit: "Edit", add: "Add a rule", save: "Save", bare: "Rule 2: a pause needs hours, days, agents or folders. Add one with its +, or remove the rule from its ⋯ menu", warn: "left out of the group then: not tried, not a fallback", length: "Conversation length", hours: "Hours and days", toPause: "Pause the model instead" },
+  zh: { aside: "a/glm 被规则 1（周一–周五 14:00–18:00）暂停，在此之前不会被调用。", title: "1. 周一–周五 14:00–18:00 → 暂停 A · glm", pause: "暂停", send: "先发给", edit: "编辑", add: "添加规则", save: "保存", bare: "第 2 条规则：暂停需要设时段、星期、Agent 或文件夹。用它的 + 添加，或在它的 ⋯ 菜单里删除这条规则", warn: "这段时间移出分组：不会被调用，也不做备用", length: "对话长度", hours: "时段", toPause: "改为暂停该模型" },
   "zh-TW": { pause: "暫停", send: "先發給", edit: "編輯", add: "新增規則", save: "儲存" },
   ja: { pause: "一時停止", send: "送信先" },
   de: { pause: "pausieren", send: "senden an" },
@@ -78,25 +78,29 @@ const EDIT = { en: "Edit", zh: "编辑", "zh-TW": "編輯", ja: "編集", de: "B
 async function open(engine, lang, width, t) {
   const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
   t.after(() => browser.close());
-  const page = await (await browser.newContext({ viewport: { width, height: 1400 } })).newPage();
+  const page = await (await browser.newContext({ viewport: { width, height: 1400 }, timezoneId: "Asia/Tokyo" })).newPage();
   page.setDefaultTimeout(5000);
+  page.setDefaultNavigationTimeout(60000);
   const errors = [], posts = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("**/*", serve(lang, posts));
   await page.goto("http://magpie.test/?view=routing");
   const group = page.locator(".rt-group").first();
-  await group.waitFor();
+  await group.waitFor({ state: "attached" });
   return { page, group, errors, posts };
 }
 // a click as the reader's: wheeled into the middle of the view first (a
 // click never moves the page, so Playwright's own scroll is put back), then
 // the mouse on it once it holds still
 async function press(page, x) {
-  const d = await x.evaluate((e) => { const v = document.querySelector("#view-routing");
+  // a group opening into its editor moves its height and parts for ~700ms
+  // (91b0be836): where x will be is read once that has stopped
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)));
+  const d = await x.evaluate((e) => { const v = document.querySelector("#view-groups");
     return Math.round(e.getBoundingClientRect().top - v.getBoundingClientRect().top - v.clientHeight / 2); });
   if (Math.abs(d) > 100) {
     // over the view, not the sidebar beside it
-    const v = await page.locator("#view-routing").boundingBox();
+    const v = await page.locator("#view-groups").boundingBox();
     await page.mouse.move(v.x + 10, 300);
     await page.mouse.wheel(0, d);
     await page.waitForTimeout(400);
@@ -119,6 +123,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       // the trace: the model paused, by which rule and when
       await page.waitForFunction((s) => document.documentElement.innerText.includes(s), w.aside);
+      await page.evaluate(() => window.show("groups"));
+      await group.waitFor();
 
       // the group's rule, in words
       const title = await group.evaluate((g) => [...g.querySelectorAll("[title]")].map((e) => e.title).join("\n"));
@@ -178,7 +184,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert(save, `saved: ${JSON.stringify(posts)}`);
       assert.deepEqual(save.body.rules.map((r) => [r.use, !!r.pause, r.tokens || 0, r.time]), [
         ["a/glm", true, 0, { from: "14:00", to: "18:00", days: WEEKDAYS }],
-        ["b/other", true, 0, { from: "09:00", to: "12:00", days: [] }],
+        // hours set here are in the browser's zone, saved with them (c888ef272)
+        ["b/other", true, 0, { from: "09:00", to: "12:00", days: [], zone: "Asia/Tokyo" }],
       ]);
       assert.deepEqual(errors, []);
     });
@@ -187,6 +194,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
   for (const lang of Object.keys(words)) {
     test(`${engine} ${lang}: a pause rule at a narrow width`, async (t) => {
       const { page, group, errors } = await open(engine, lang, 420, t);
+      await page.evaluate(() => window.show("groups"));
+      await group.waitFor();
       await press(page, group.locator("button", { hasText: EDIT[lang] }));
       const row = page.locator(".rt-gedit .rt-rule").first();
       await row.waitFor();

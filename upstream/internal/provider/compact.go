@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -30,6 +32,12 @@ func CompactSet(id string) int {
 	return compactSet(settings.Load(), id, GroupFinder())
 }
 
+// CompactSetIn is CompactSet with the settings and group finder its caller
+// has already read (CompactFor's).
+func CompactSetIn(s settings.Settings, id string, find func(string) (Group, []Member, bool)) int {
+	return compactSet(s, id, find)
+}
+
 // CompactFor is where Codex compacts a conversation on e (catalog.Model's
 // Compact): the threshold the user set on it or its provider (CompactSet),
 // else, when its window is one the user typed (Entry.WindowSet) and no
@@ -54,7 +62,8 @@ func CompactFor(s settings.Settings, e Entry, find func(string) (Group, []Member
 // WindowTyped says the window agents are told for a model, by its
 // catalog id (as CompactSet takes it), is one the user typed: the
 // group's own size, a group's smallest member's that the user typed
-// (smallestWindow, #2224), or one set on the provider for the model or
+// (smallestWindow, #2224), its largest member's when it names no size
+// and the user typed that one (largestWindow), or one set on the provider for the model or
 // all of its models. Claude Code then isn't handed magpie's default
 // compaction window for it (CompactFor's rule, as Entry.WindowSet).
 func WindowTyped(id string) bool {
@@ -75,6 +84,8 @@ func WindowTyped(id string) bool {
 		case g.Context == ContextSmallest:
 			_, typed := smallestWindow(entries, membersIn(entries, all, g))
 			return typed
+		case g.Context == 0:
+			return largestWindow(entries, g)
 		}
 		return false
 	}
@@ -111,9 +122,10 @@ func ClaudeGroup(id string) bool {
 }
 
 // catalogID is an agent's model id as the catalog has it: magpie/ and
-// Claude Code's [1m] mark taken off.
+// Claude Code's [1m] mark taken off, a found group's auto/<model> as
+// group/auto-<slug> (CanonicalRef).
 func catalogID(id string) string {
-	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(id), "magpie/"), "[1m]")
+	return CanonicalRef(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(id), "magpie/"), "[1m]"))
 }
 
 func compactSet(s settings.Settings, id string, find func(string) (Group, []Member, bool)) int {
@@ -154,7 +166,7 @@ func entryModel(m Member) string {
 // model id, "*" for all of them: what its editor's Compact at shows.
 func CompactsOf(providerID string) map[string]int {
 	out := map[string]int{}
-	for k, n := range settings.Load().ModelCompacts {
+	for k, n := range settings.Shared().ModelCompacts {
 		if model, ok := strings.CutPrefix(k, providerID+"/"); ok && model != "" && n > 0 {
 			out[model] = n
 		}
@@ -164,14 +176,16 @@ func CompactsOf(providerID string) map[string]int {
 
 // SetModelCompacts makes a provider's thresholds cs, by model id, "*" for
 // all of them, as its editor's Compact at says: those it leaves out are
-// taken away, and every one set has to be a model the provider serves, as
-// for a reply limit (SetModelOutputs). Codex's and Claude Code's lists are
-// written again when anything changed.
+// taken away, and every one set or changed has to be a model the provider
+// serves, as for a reply limit (SetModelOutputs); one sent back as it is
+// for a model the provider no longer lists is kept, not refused (#3305).
+// Codex's and Claude Code's lists are written again when anything changed.
 func SetModelCompacts(providerID string, cs map[string]int) error {
 	p, err := Find(providerID)
 	if err != nil {
 		return err
 	}
+	s := settings.Load()
 	for model, n := range cs {
 		if n < 0 {
 			return errorf("a compaction threshold is a number of tokens, not %d", n)
@@ -179,11 +193,10 @@ func SetModelCompacts(providerID string, cs map[string]int) error {
 		if err := settings.CheckModelKey("a compaction threshold", p.ID+"/"+model); err != nil {
 			return err
 		}
-		if model != "*" && n > 0 && !p.serves(model) {
+		if model != "*" && n > 0 && s.ModelCompacts[p.ID+"/"+model] != n && !p.serves(model) {
 			return errorf("%s has no model %s (magpie provider %s lists them)", p.ID, model, p.ID)
 		}
 	}
-	s := settings.Load()
 	changed := false
 	for k := range s.ModelCompacts {
 		if model, ok := strings.CutPrefix(k, p.ID+"/"); ok && cs[model] <= 0 {
@@ -203,6 +216,45 @@ func SetModelCompacts(providerID string, cs map[string]int) error {
 	}
 	if !changed {
 		return nil
+	}
+	if err := settings.Save(s); err != nil {
+		return err
+	}
+	catalog.Touched()
+	return nil
+}
+
+// SetAgentCompact gives an agent of CompactAgents a Long conversations of
+// its own, c, over the one for every agent; nil takes it away, and the
+// agent follows that one again.
+func SetAgentCompact(agent string, c *settings.AgentCompact) error {
+	if !slices.Contains(settings.CompactAgents, agent) {
+		return errorf("%q writes no compaction window magpie sets", agent)
+	}
+	if c != nil && c.At < 0 {
+		return errorf("a compaction threshold is a number of tokens, not %d", c.At)
+	}
+	s := settings.Load()
+	cur, had := s.AgentCompacts[agent]
+	if c == nil {
+		if !had {
+			return nil
+		}
+		s.AgentCompacts = maps.Clone(s.AgentCompacts)
+		delete(s.AgentCompacts, agent)
+	} else {
+		n := *c
+		if n.At == settings.WorkingWindow {
+			n.At = 0
+		}
+		if had && cur == n {
+			return nil
+		}
+		s.AgentCompacts = maps.Clone(s.AgentCompacts)
+		if s.AgentCompacts == nil {
+			s.AgentCompacts = map[string]settings.AgentCompact{}
+		}
+		s.AgentCompacts[agent] = n
 	}
 	if err := settings.Save(s); err != nil {
 		return err

@@ -1,14 +1,12 @@
 package provider
 
-// PLUGIN-SERVED (see AGENTS.md): WorkBuddy ("workbuddy" and "workbuddy-ai")
-// is a deprecated built-in subscription served by its plugin,
-// @magpie-community/opencode-workbuddy-auth, once moved onto it
-// (provider.Moved; the default for a new sign-in). A moved one's sign-ins,
-// models, requests and usage are all the plugin's, never this code's (only
-// the move, in migrate*.go, still reads its accounts). A fix here alone
-// doesn't reach those users; fix the plugin
-// (github.com/magpie-community/plugins, packages/workbuddy) and raise the
-// mover's min in internal/provider/migrate_workbuddy.go.
+// PLUGIN-SERVED (see AGENTS.md): WorkBuddy ("workbuddy") and WorkBuddy AI
+// ("workbuddy-ai") are retired built-in subscriptions served by their
+// plugin, @magpie-community/opencode-workbuddy-auth. The check-in here
+// presses 签到 for the plugin's accounts, sent through the plugin's fetch,
+// when the plugin doesn't check in itself. A fix to the plugin's own paths
+// belongs in github.com/magpie-community/plugins (packages/workbuddy), with
+// the movers' min raised in internal/provider/migrate_workbuddy.go.
 
 // WorkBuddy's daily check-in (签到): while its event runs, a WorkBuddy
 // (China) account is given a few credits a day for pressing 签到 in the
@@ -21,7 +19,8 @@ package provider
 // and account id (no name, no token), so a restart doesn't ask again. An
 // answer — claimed, already in, not eligible, the event over — holds for
 // the rest of the day; a request that didn't get one (the network, a
-// refused token) is tried again after wbCheckinRetry, or, when it never
+// refused token) is tried again after wbCheckinRetry, or at the until a
+// plugin gave it (heldUntil), or, when it never
 // reached WorkBuddy (a machine just woken, its network not back yet), a
 // minute later, and twice as long each time it still doesn't.
 //
@@ -32,8 +31,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -70,7 +72,7 @@ const (
 	CheckinDone       = "done"       // in already, pressed in WorkBuddy or before
 	CheckinIneligible = "ineligible" // the account can't take part
 	CheckinInactive   = "inactive"   // no event running, or it has ended
-	CheckinFailed     = "failed"     // no answer; tried again later that day
+	CheckinFailed     = "failed"     // no answer; tried again later, at its until if given
 	// CheckinCaptcha is a plugin's check-in the vendor asked a captcha
 	// of: the user checks in in its own app, magpie never solves one
 	CheckinCaptcha = "captcha"
@@ -106,8 +108,10 @@ type WorkBuddyCheckin struct {
 	Credit  float64   `json:"credit,omitempty"`
 	Streak  int       `json:"streak,omitempty"`
 	Msg     string    `json:"msg,omitempty"`
-	// ValidUntil is a campaign's end, when a successful answer must be
-	// checked again, even if the Beijing day hasn't changed.
+	// ValidUntil is a campaign's end, or when a plugin said its vendor's
+	// day turns (auth.checkin's until), when the answer must be checked
+	// again, even if the Beijing day hasn't changed; on a failure, the
+	// time before which it isn't asked again (heldUntil).
 	ValidUntil time.Time `json:"until,omitzero"`
 	// Offline is a failure that never reached WorkBuddy, and Tries how
 	// many before it the same day did the same.
@@ -119,8 +123,61 @@ type WorkBuddyCheckin struct {
 	// Vendor is a plugin's provider by name, for a check-in By
 	// "plugin:<id>"; never kept.
 	Vendor string `json:"vendor,omitempty"`
-	// Asked is true of one checked in on this run, not one read back.
-	Asked bool `json:"-"`
+	// Asked is true of one checked in on this run, not one read back;
+	// sent so a press can tell a claim now from one earlier today.
+	// Never kept: the file is written before it is set.
+	Asked bool `json:"asked,omitempty"`
+	// Claimed is when magpie last saw the account's credits claimed,
+	// carried over while later answers that day say done: a done after
+	// magpie's own claim is the day's, one before it may be yesterday's
+	// (#3326).
+	Claimed time.Time `json:"claimed,omitzero"`
+	// Again says the answer is provisional (provisional): magpie asks
+	// the vendor again later that day. Worked out when shown, never
+	// kept.
+	Again bool `json:"again,omitempty"`
+}
+
+// checkinSureHour is the Beijing hour from which a done, inactive or
+// ineligible answer is taken as the day's. Before it, the vendor's own
+// day may not have turned: at 00:00:28 Beijing AutoClaw CN, WorkBuddy,
+// CodeArts, Trae CN, MiniMax and Raccoon answered "already in" for
+// accounts whose day's credits were still to claim, and a claim at 10:54
+// paid them (#3326, connoryang331, 14 of 29 accounts). Days that turn at
+// UTC midnight (08:00 Beijing) and Qoder CN's 10:00 campaigns are past by
+// noon; a vendor counting a US day isn't covered.
+const checkinSureHour = 12
+
+// claimedOn says whether magpie saw the account's credits claimed on day.
+func (r WorkBuddyCheckin) claimedOn(day string) bool {
+	return r.Outcome == CheckinClaimed && r.Day == day || !r.Claimed.IsZero() && wbCheckinDay(r.Claimed) == day
+}
+
+// provisional says whether r is an answer that may describe the vendor's
+// day before (#3326): a done, inactive or ineligible one given before
+// checkinSureHour, on a day magpie saw no claim. The loop asks such an
+// account again every wbCheckinEvery until a claim, or one of these
+// answers from checkinSureHour on, settles the day: at most 24 more
+// asks a day for an account that was in early, none once magpie claims.
+func (r WorkBuddyCheckin) provisional() bool {
+	return r.unclaimedAnswer() && r.At.In(beijing).Hour() < checkinSureHour
+}
+
+// unclaimedAnswer says whether r is the vendor's word on how its day
+// stands (done, inactive or ineligible) on a day magpie saw no claim:
+// one a press asks the vendor again for, as it may have changed.
+func (r WorkBuddyCheckin) unclaimedAnswer() bool {
+	switch r.Outcome {
+	case CheckinDone, CheckinInactive, CheckinIneligible:
+		return !r.claimedOn(r.Day)
+	}
+	return false
+}
+
+// shown is r as a reader is given it: Again worked out.
+func (r WorkBuddyCheckin) shown() WorkBuddyCheckin {
+	r.Again = r.provisional()
+	return r
 }
 
 // Checked says whether the day's credits are in, claimed now or before.
@@ -128,10 +185,17 @@ func (r WorkBuddyCheckin) Checked() bool {
 	return r.Outcome == CheckinClaimed || r.Outcome == CheckinDone
 }
 
-// settled says whether r answers for day: it is that day's, and not a
-// failure due another try (at now; soon, at once).
+// settled says whether r answers for day: it is that day's, not past
+// ValidUntil (a plugin's vendor whose day turns at another hour said when:
+// Qoder's daily credits open at 10:00 UTC+8, sdytman on Discord), and not
+// a failure due another try (at now; soon, at once).
 func (r WorkBuddyCheckin) settled(day string, now time.Time, soon bool) bool {
-	if r.Day != day {
+	// a failure held to the plugin's until waits it out, the day's turn
+	// too; a press still asks
+	if h := r.heldUntil(); !soon && now.Before(h) {
+		return true
+	}
+	if r.Day != day || !r.ValidUntil.IsZero() && !now.Before(r.ValidUntil) {
 		return false
 	}
 	return r.Outcome != CheckinFailed || !soon && now.Sub(r.At) < r.retryAfter()
@@ -146,6 +210,26 @@ func (r WorkBuddyCheckin) retryAfter() time.Duration {
 		return wbCheckinRetry
 	}
 	return min(wbCheckinRetry, wbCheckinSoon<<min(r.Tries, 5))
+}
+
+// checkinHoldMax bounds how long a failure's until holds it (heldUntil),
+// so a far-off or wrong until can't stop an account's check-ins for good.
+const checkinHoldMax = 24 * time.Hour
+
+// heldUntil is when a failure a plugin gave an until later than its own
+// retry (ZCode's claim read rate limited, its Retry-After or the plugin's
+// own backoff: plugins#503, plugins#793) is asked again: at the until, at
+// most checkinHoldMax after the failure, not every wbCheckinRetry, which
+// kept the limit on. Zero for any other answer: a failure with no until,
+// or one sooner than its retry, which settled asks again at the until.
+func (r WorkBuddyCheckin) heldUntil() time.Time {
+	if r.Outcome != CheckinFailed || !r.ValidUntil.After(r.At.Add(r.retryAfter())) {
+		return time.Time{}
+	}
+	if most := r.At.Add(checkinHoldMax); most.Before(r.ValidUntil) {
+		return most
+	}
+	return r.ValidUntil
 }
 
 // wbCheckinStatus is the event as an account sees it.
@@ -171,10 +255,71 @@ func wbCheckinPath() string { return filepath.Join(filepath.Dir(Path()), "workbu
 // wbCheckinKey is an account's entry in the file: its site and id.
 func wbCheckinKey(a wbAccount) string { return a.site.id + "|" + a.creds.UID }
 
-func readCheckins(path string) map[string]WorkBuddyCheckin {
+// readCheckins is what a check-in file at path keeps, by entry. A file not
+// there is empty. One there that can't be read or doesn't parse into
+// entries (cut short, zeroed, `[]`) is unknown, never empty: the error
+// says so, and what is given is what last read from it in this process,
+// so a card still shows it. A check-in neither asks nor writes on an
+// error, or it would check an account in twice in a day and write over
+// the entries it couldn't read.
+func readCheckins(path string) (map[string]WorkBuddyCheckin, error) {
 	st := map[string]WorkBuddyCheckin{}
-	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &st)
+	b, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		err = nil
+	case err == nil:
+		if err = json.Unmarshal(b, &st); err != nil || st == nil {
+			if err == nil {
+				err = errors.New("it holds null")
+			}
+			err = fmt.Errorf("%s doesn't parse (%v): magpie leaves it as it is and checks in no account of it until it does", path, err)
+		}
+	default:
+		err = fmt.Errorf("%s can't be read (%v): magpie leaves it as it is and checks in no account of it until it can", path, err)
+	}
+	checkinsReadMu.Lock()
+	defer checkinsReadMu.Unlock()
+	if err != nil {
+		// logged once while it stays the same, not on every card read
+		if checkinsBad[path] != err.Error() {
+			checkinsBad[path] = err.Error()
+			log.Printf("check-in: %v", err)
+		}
+		return maps.Clone(checkinsRead[path]), err
+	}
+	delete(checkinsBad, path)
+	checkinsRead[path] = maps.Clone(st)
+	return st, nil
+}
+
+// checkinsRead is each check-in file's entries as last read, for
+// readCheckins to give when the file can't be read now, and checkinsBad
+// the error last logged for one that can't.
+var (
+	checkinsReadMu sync.Mutex
+	checkinsRead   = map[string]map[string]WorkBuddyCheckin{}
+	checkinsBad    = map[string]string{}
+)
+
+// wroteCheckins notes st as written to path: what last read from it.
+func wroteCheckins(path string, st map[string]WorkBuddyCheckin) {
+	checkinsReadMu.Lock()
+	defer checkinsReadMu.Unlock()
+	delete(checkinsBad, path)
+	checkinsRead[path] = maps.Clone(st)
+}
+
+// shownCheckins is readCheckins for a reader that only shows the entries:
+// on an error, what last read (logged by readCheckins); each with Again
+// worked out.
+func shownCheckins(path string) map[string]WorkBuddyCheckin {
+	st, _ := readCheckins(path)
+	if st == nil {
+		st = map[string]WorkBuddyCheckin{}
+	}
+	for k, r := range st {
+		st[k] = r.shown()
 	}
 	return st
 }
@@ -218,16 +363,8 @@ func (c wbCheckiner) checkiner() checkiner {
 // wbCheckin checks a in for the day as WorkBuddy's 签到 does: the event's
 // status first, and a claim only while it runs and today's isn't in.
 func wbCheckin(ctx context.Context, a wbAccount) WorkBuddyCheckin {
-	var h map[string]string
+	var h map[string]string // the plugin's fetch signs the request
 	do := a.via
-	if do == nil {
-		do = http.DefaultClient.Do
-		creds, err := wbFresh(ctx, a)
-		if err != nil {
-			return wbCheckinFailed(err)
-		}
-		h = wbAuthHeaders(a.site, creds)
-	}
 	var st wbCheckinStatus
 	if err := wbCallVia(ctx, do, http.MethodPost, a.site.api()+"/v2/billing/meter/checkin-activity-status", h, map[string]any{}, &st); err != nil {
 		return wbCheckinUnauthorized(ctx, do, a, h, err)
@@ -322,7 +459,7 @@ func CheckInWorkBuddy(ctx context.Context) []WorkBuddyCheckin {
 // WorkBuddyCheckins is each WorkBuddy (China) account's last check-in, as
 // kept, by its name now; asks nothing.
 func WorkBuddyCheckins() []WorkBuddyCheckin {
-	st := readCheckins(wbCheckinPath())
+	st := shownCheckins(wbCheckinPath())
 	var out []WorkBuddyCheckin
 	listed := map[string]bool{}
 	for _, a := range wbCheckinAccounts() {
@@ -344,11 +481,38 @@ func WorkBuddyCheckins() []WorkBuddyCheckin {
 // those in through the plugin's fetch. qs, which may be the usage cache,
 // is left as it is; nothing is asked.
 func WithCheckins(qs []SubscriptionQuota) []SubscriptionQuota {
-	qs = withCheckins(qs, wbCheckinAccounts(), readCheckins(wbCheckinPath()))
-	qs = markCheckins(qs, traeCards(traeCheckinAccounts()), readCheckins(traeCheckinPath()), "trae")
-	qs = markCheckins(qs, miniMaxCards(miniMaxCheckinAccounts()), readCheckins(miniMaxCheckinPath()), "minimax")
-	qs = markCheckins(qs, qoderCards(qoderCheckinAccounts()), readCheckins(qoderCheckinPath()), "qoder")
+	qs = withCheckins(qs, wbCheckinAccounts(), shownCheckins(wbCheckinPath()))
+	qs = markCheckins(qs, traeCards(traeCheckinAccounts()), shownCheckins(traeCheckinPath()), "trae")
+	qs = markCheckins(qs, miniMaxCards(miniMaxCheckinAccounts()), shownCheckins(miniMaxCheckinPath()), "minimax")
+	qs = markCheckins(qs, qoderCards(qoderCheckinAccounts()), shownCheckins(qoderCheckinPath()), "qoder")
 	return pluginCheckinMarks(qs)
+}
+
+// LoginCheckins is m, agent's accounts' readings by user (LoginUsage),
+// with each account's daily check-in as its Usage card has it
+// (WithCheckins), for the provider editor's account rows (xwoffice_91592).
+func LoginCheckins(agent string, m map[string]SubscriptionQuota) map[string]SubscriptionQuota {
+	if len(m) == 0 {
+		return m
+	}
+	card := loginProvider(Login{Agent: agent})
+	if pp, ok := pluginOfAgent(agent); ok {
+		card = PluginID(pp.ID)
+	}
+	users := make([]string, 0, len(m))
+	qs := make([]SubscriptionQuota, 0, len(m))
+	for u := range m {
+		users = append(users, u)
+		qs = append(qs, SubscriptionQuota{Provider: card, User: u})
+	}
+	qs = WithCheckins(qs)
+	out := make(map[string]SubscriptionQuota, len(m))
+	for i, u := range users {
+		q, c := m[u], qs[i]
+		q.Checkins, q.CheckinBy, q.Checkin, q.CheckinOff, q.CheckinKey = c.Checkins, c.CheckinBy, c.Checkin, c.CheckinOff, c.CheckinKey
+		out[u] = q
+	}
+	return out
 }
 
 func withCheckins(qs []SubscriptionQuota, accts []wbAccount, st map[string]WorkBuddyCheckin) []SubscriptionQuota {
@@ -397,7 +561,7 @@ func markCheckins(qs []SubscriptionQuota, on []checkinCard, st map[string]WorkBu
 		if a == nil {
 			continue
 		}
-		out[i].Checkins, out[i].CheckinBy, out[i].CheckinOff = true, by, off[a.key]
+		out[i].Checkins, out[i].CheckinBy, out[i].CheckinOff, out[i].CheckinKey = true, by, off[a.key], a.key
 		if r, ok := st[a.key]; ok {
 			r.User, r.By = a.User, by
 			out[i].Checkin = &r
@@ -410,24 +574,14 @@ func markCheckins(qs []SubscriptionQuota, on []checkinCard, st map[string]WorkBu
 func HasWorkBuddy() bool { return len(wbCheckinAccounts()) > 0 }
 
 // wbCheckinAccounts are the WorkBuddy (China) accounts checked in: the
-// plugin's once WorkBuddy is moved onto it, checked in through it; not
-// moved, the built-in's, and the plugin's too where it is signed in under
-// its own id, "workbuddy-plugin" (signed in before the move existed, or
-// moved back), whose cards had their credits by day but no check-in
-// (#694, Dazzle-sys on 0.1.774: 没看到).
+// plugin's, checked in through it, unless the plugin checks them in
+// itself.
 func wbCheckinAccounts() []wbAccount {
-	if Moved(wbCN.id) {
-		pp, ok := PluginOf(wbCN.id)
-		if !ok || pluginChecksIn(pp) {
-			return nil
-		}
-		return wbPluginAccounts(pp)
+	pp, ok := PluginOf(wbCN.id)
+	if !ok || pluginChecksIn(pp) {
+		return nil
 	}
-	out := wbLogins(wbCN)
-	if pp, ok := PluginOf(PluginID(wbCN.id)); ok && pp.ID == wbCN.id && !pluginChecksIn(pp) {
-		out = append(out, wbPluginAccounts(pp)...)
-	}
-	return out
+	return wbPluginAccounts(pp)
 }
 
 // wbPluginAccounts are the WorkBuddy plugin's accounts of pp, each sent
@@ -512,10 +666,15 @@ func (l *wbCheckinLoop) tick(ctx context.Context, c checkinRunner) []WorkBuddyCh
 	defer cancel()
 	rs := c.checkinNow(cx, false)
 	for _, r := range rs {
-		if r.Outcome != CheckinFailed {
-			continue
+		due := time.Time{}
+		if r.Outcome == CheckinFailed {
+			due = cmp.Or(r.heldUntil(), r.At.Add(r.retryAfter()))
 		}
-		if due := r.At.Add(r.retryAfter()); l.again.IsZero() || due.Before(l.again) {
+		// and as the vendor's own day turns, when it said (ValidUntil)
+		if u := r.ValidUntil; u.After(now) && (due.IsZero() || u.Before(due)) {
+			due = u
+		}
+		if !due.IsZero() && (l.again.IsZero() || due.Before(l.again)) {
 			l.again = due
 		}
 	}

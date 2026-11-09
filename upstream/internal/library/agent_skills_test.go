@@ -190,6 +190,39 @@ func TestDroidGrokInstructions(t *testing.T) {
 	}
 }
 
+// Devin CLI reads its global rules from AGENTS.md in its config folder
+// (~/.config/devin, %APPDATA%\devin on Windows), else the singular AGENT.md
+// there (#3151): the library's instructions reach it, after what the user
+// wrote, which stays, and Devin is offered them rather than listed as having
+// no user-wide file.
+func TestDevinInstructions(t *testing.T) {
+	h := sandbox(t)
+	write(t, filepath.Join(h, ".config/devin/config.json"), "{}")
+	tg := targetByID("devin")
+	if tg == nil {
+		t.Fatal("Devin isn't a target")
+	}
+	f := filepath.Join(tg.Agent.Dir, "AGENTS.md")
+	if tg.Instructions != f {
+		t.Fatalf("Devin's instructions: %q, want %q before the file is there", tg.Instructions, f)
+	}
+	write(t, f, "# Mine\n")
+	shared := "Use tabs."
+	ok(t)(SaveInstructions(InstructionsChange{Shared: &shared, Agents: []string{"devin"}}))
+	if s := read(t, f); s != "# Mine\n\n"+blockBegin+"\nUse tabs.\n"+blockEnd+"\n" {
+		t.Fatalf("Devin's AGENTS.md:\n%s", s)
+	}
+
+	// a user who keeps theirs as AGENT.md has it written there instead
+	h = sandbox(t)
+	write(t, filepath.Join(h, ".config/devin/config.json"), "{}")
+	dir := targetByID("devin").Agent.Dir
+	write(t, filepath.Join(dir, "AGENT.md"), "# Mine\n")
+	if tg := targetByID("devin"); tg.Instructions != filepath.Join(dir, "AGENT.md") {
+		t.Fatalf("Devin with AGENT.md: %q", tg.Instructions)
+	}
+}
+
 // Qwen Code reads QWEN.md in its folder ($QWEN_HOME, else ~/.qwen) before
 // every conversation (wongxy on Discord): the library's instructions reach
 // it there, after what the user wrote, which stays; its settings'
@@ -421,5 +454,28 @@ func TestPiInstructionsFirstThere(t *testing.T) {
 	write(t, filepath.Join(pi, "AGENTS.md"), "")
 	if tg := targetByID("pi"); tg.Instructions != filepath.Join(pi, "AGENTS.md") {
 		t.Fatalf("AGENTS.md comes before CLAUDE.md: %q", tg.Instructions)
+	}
+}
+
+// A skill kept in ~/.agents/skills reaches ZCode, which reads that folder
+// beside its own ~/.zcode/skills: giving it to zcode ticks the chip the
+// shared copy already answers, and no second link lands in its own folder
+// (#4987).
+func TestSharedSkillReachesZCode(t *testing.T) {
+	h := sandbox(t)
+	write(t, filepath.Join(h, ".zcode/cli/config.json"), "")
+	write(t, filepath.Join(h, ".zcode/v2/config.json"), "{}")
+	shared := filepath.Join(h, ".agents/skills/orca")
+	skill(t, shared, "orca", "Orca")
+	ok(t)(ImportSkill("orca"))
+	own := filepath.Join(h, ".zcode/skills/orca")
+
+	ok(t)(SkillAgents("orca", []string{"kimi", "zcode"}))
+	if _, err := os.Lstat(own); !os.IsNotExist(err) {
+		t.Error("zcode has a second link to it in its own folder")
+	}
+	ok(t)(Sync())
+	if _, err := os.Lstat(own); !os.IsNotExist(err) {
+		t.Error("zcode's own folder got it on the sync too")
 	}
 }

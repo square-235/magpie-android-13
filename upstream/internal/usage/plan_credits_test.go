@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // What a request said it cost in its plan's credits (#2512) is summed by
@@ -49,10 +50,10 @@ func TestPlanCreditsSummed(t *testing.T) {
 		}
 	}
 	vias := Vias(time.Time{})
-	if v := vias["claude-code|s1"]; len(v) != 1 || !near(v[0].Credits, 0.7) || v[0].Credited != 70 {
+	if v := vias.Of("claude-code|s1"); len(v) != 1 || !near(v[0].Credits, 0.7) || v[0].Credited != 70 {
 		t.Fatalf("session s1: %+v", v)
 	}
-	if v := vias["codex|s2"]; len(v) != 2 || v[0].Credited+v[1].Credited != 1 {
+	if v := vias.Of("codex|s2"); len(v) != 2 || v[0].Credited+v[1].Credited != 1 {
 		t.Fatalf("session s2: %+v", v)
 	}
 	if got := FormatCredits(page.Sum); got != "0.7 credits" {
@@ -108,7 +109,7 @@ func TestPlanCreditsPacked(t *testing.T) {
 		}
 		chunk.add(Row{Record: r}, "", int64(i), false)
 	}
-	b := newBlockPricer(nil, nil, func(Record) *catalog.Price { return nil })
+	b := newBlockPricer(provider.Renames{}, nil, func(Record) *catalog.Price { return nil })
 	defer b.release()
 	packed := chunk.pack()
 	if len(packed.Archive) == 0 {
@@ -122,4 +123,35 @@ func TestPlanCreditsPacked(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Each account's credits are its own on the Usage page's Accounts list
+// (lcyksp on Discord: WorkBuddy's 积分 spent, per account, not only
+// tokens), through the summary and the Requests page's account groups.
+func TestPlanCreditsByAccount(t *testing.T) {
+	resetUsageTest(t)
+	at := Clock().Add(-time.Hour)
+	credit := func(v float64) *float64 { return &v }
+	for i := 0; i < 70; i++ {
+		Append(Record{Time: at.Add(time.Duration(i) * time.Second), Agent: "codex", Provider: "workbuddy", ProviderAccount: "a@x", Model: "glm-5.3", Input: 9, Output: 12, Status: 200, Credits: credit(0.5)})
+	}
+	Append(Record{Time: at.Add(2 * time.Minute), Agent: "codex", Provider: "workbuddy", ProviderAccount: "b@x", Model: "glm-5.3", Input: 9, Output: 1, Status: 200, Credits: credit(2.25)})
+	Append(Record{Time: at.Add(3 * time.Minute), Agent: "codex", Provider: "workbuddy", ProviderAccount: "b@x", Model: "glm-5.3", Input: 9, Output: 1, Status: 200})
+
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+	want := map[string]Totals{"a@x": {Credits: 35, Credited: 70}, "b@x": {Credits: 2.25, Credited: 1}}
+	check := func(what string, groups []Group) {
+		t.Helper()
+		if len(groups) != len(want) {
+			t.Fatalf("%s: %d accounts, want %d: %+v", what, len(groups), len(want), groups)
+		}
+		for _, g := range groups {
+			w := want[g.Account]
+			if !near(g.Credits, w.Credits) || g.Credited != w.Credited {
+				t.Fatalf("%s %s: %v credits of %d calls, want %v of %d", what, g.Account, g.Credits, g.Credited, w.Credits, w.Credited)
+			}
+		}
+	}
+	check("summary", Summarize(All).Accounts)
+	check("requests", QueryPage(All, Filter{}, 0, 50).Accounts)
 }

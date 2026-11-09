@@ -57,8 +57,8 @@ func TestGroupImages(t *testing.T) {
 		got[g.ID] = g.Images
 	}
 	want := map[string]bool{
-		GroupPrefix + "auto-kimi-k3": true, GroupPrefix + "auto-glm-5-3": true,
-		GroupPrefix + "auto-deepseek-v4-1-flash": true, GroupPrefix + "auto-glm-5-2": false,
+		AutoPrefix + "kimi-k3": true, AutoPrefix + "glm-5.3": true,
+		AutoPrefix + "deepseek-v4.1-flash": true, AutoPrefix + "glm-5.2": false,
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("%v", got)
@@ -101,5 +101,40 @@ func TestCodexListedKeepsGroups(t *testing.T) {
 	// Codex offers /fast on the group, a ChatGPT GPT model being in it
 	if !ms[0].Fast || ms[1].Fast {
 		t.Errorf("fast: group %v, model %v", ms[0].Fast, ms[1].Fast)
+	}
+}
+
+// A group keeps what Kimi Code's list says of its models (always thinks,
+// loads tools mid-conversation, its default effort) when every member says
+// it, and has none of it when one member doesn't (jiabubu on Discord: a Kimi
+// model put in a group lost always_thinking and dynamically_loaded_tools in
+// Kimi Code).
+func TestGroupSharesKimiFacts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", "")
+	e := func(p, m string, always, dynamic bool, def string) Entry {
+		return Entry{ID: p + "/" + m, Model: m, Name: m, Provider: Provider{ID: p}, Reasoning: true,
+			Efforts: []string{"low", "medium", "high"}, AlwaysThinks: always, DynamicTools: dynamic, DefaultEffort: def}
+	}
+	type facts struct {
+		always, dynamic bool
+		def             string
+	}
+	got := map[string]facts{}
+	for _, g := range groupEntries([]Entry{
+		e("kimi-code", "kimi-k3", true, true, "high"), e("kimi-code-cn", "kimi-k3", true, true, "high"),
+		e("kimi-code", "kimi-k2.7", true, true, "high"), e("or", "kimi-k2.7", false, false, ""),
+		e("kimi-code", "kimi-k2.8", true, false, "medium"), e("kimi-code-cn", "kimi-k2.8", true, true, "high"),
+	}) {
+		got[g.ID] = facts{g.AlwaysThinks, g.DynamicTools, g.DefaultEffort}
+	}
+	want := map[string]facts{
+		AutoPrefix + "kimi-k3":   {true, true, "high"},
+		AutoPrefix + "kimi-k2.7": {},
+		AutoPrefix + "kimi-k2.8": {always: true},
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }

@@ -24,7 +24,9 @@ param(
     [string[]]$Abis = @("arm64-v8a", "x86_64"),
     [string]$Version = "android-port",
     [string]$Ndk = "",
-    [int]$ApiLevel = 0,
+    # The shell's minSdk: link against API 33 so the binary runs on Android 13.
+    # Pass 0 to link against the newest API the NDK carries.
+    [int]$ApiLevel = 33,
     [string]$GoToolchain = "",
     [string]$Goproxy = ""
 )
@@ -76,9 +78,10 @@ $ndkRoot = Find-Ndk -Given $Ndk
 $ndkBin = Join-Path $ndkRoot "toolchains\llvm\prebuilt\windows-x86_64\bin"
 Write-Host "NDK: $ndkRoot"
 
-# The NDK ships one wrapper per API level; the highest one is what a build for
-# Android 16 wants (r28c stops at 35, which links and runs under 36 all the
-# same; r29 and later have 36).
+# The NDK ships one wrapper per API level. The app's minSdk is 33 (Android
+# 13), so the gateway links against 33: a binary linked against a newer API
+# may name a libc symbol Android 13 doesn't have. 33 exists in every NDK this
+# repo supports (r28c stops at 35; r29 and later carry 36 too).
 function Wrapper-For {
     param([string]$Arch, [string]$Prefix)
     $min = if ($ApiLevel -gt 0) { $ApiLevel } else { 21 }

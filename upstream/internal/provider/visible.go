@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/settings"
@@ -17,14 +18,19 @@ import (
 // the two never differ.
 
 // Names are what an entry answers to in a visibility: its family, and its
-// provider's id or its group's id (as group/<id> too).
+// provider's id or its group's id (as group/<id> too, and a found group's
+// auto/<model>).
 func (e Entry) Names() []string {
 	var out []string
 	if e.Family != "" {
 		out = append(out, e.Family)
 	}
 	if e.Group != "" {
-		return append(out, e.Group, GroupPrefix+e.Group)
+		out = append(out, e.Group, GroupPrefix+e.Group)
+		if e.ID != GroupPrefix+e.Group { // a found group's auto/<model>
+			out = append(out, e.ID)
+		}
+		return out
 	}
 	return append(out, e.Provider.ID)
 }
@@ -59,7 +65,31 @@ func described() bool { return Described != nil && Described() }
 // (none when its lists aren't narrowed): its visibility's, less the models
 // taken out of its lists one by one (HiddenModels), or, when it is shown
 // only the models picked for it, those alone (PickedModels).
+//
+// It is kept across requests with the catalog (keptOf): a window poll
+// asks it for every agent, and building each again from the whole
+// catalog was ~140 MB of what twenty polls allocated. Each caller gets
+// its own copy of the lists.
 func CatalogFor(agent string) (shown, hidden []Entry) {
+	c := catalogKept(agent)
+	return slices.Clone(c.shown), slices.Clone(c.hidden)
+}
+
+// catalogKept is CatalogFor's lists as kept, only for reading.
+func catalogKept(agent string) catalogLists {
+	return keptOf("catalog-for\x00"+agent, func() catalogLists {
+		catalogsBuilt.Add(1)
+		s, h := catalogFor(agent)
+		return catalogLists{slices.Clip(s), slices.Clip(h)}
+	})
+}
+
+type catalogLists struct{ shown, hidden []Entry }
+
+// catalogsBuilt counts the lists CatalogFor built, for a test.
+var catalogsBuilt atomic.Int64
+
+func catalogFor(agent string) (shown, hidden []Entry) {
 	listed, hidden := ListedFor(agent)
 	off := ModelOff(agent)
 	for _, e := range listed {
@@ -75,7 +105,7 @@ func CatalogFor(agent string) (shown, hidden []Entry) {
 // ListedFor is the catalog agent's visibility gives it, the models it may
 // pick to show or not among, and what the visibility keeps from it.
 func ListedFor(agent string) (listed, kept []Entry) {
-	all := Catalog()
+	all := catalogOf(agent)
 	names, ok := VisibleTo(agent)
 	if !ok {
 		return InOrder(agent, all), nil
@@ -90,17 +120,20 @@ func ListedFor(agent string) (listed, kept []Entry) {
 	return InOrder(agent, listed), kept
 }
 
-// HiddenModels are the ids of the entries taken out of agent's lists.
+// HiddenModels are the ids of the entries taken out of agent's lists, a
+// found group saved by its old id, group/auto-<slug>, by the one it is
+// listed by now (PublicRef).
 func HiddenModels(agent string) map[string]bool {
 	ids := heldSettings().HiddenModels[strings.ToLower(agent)]
 	out := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		out[id] = true
+		out[PublicRef(id)] = true
 	}
 	return out
 }
 
-// PickedModels are the only entries agent's lists show, by id, and whether
+// PickedModels are the only entries agent's lists show, by id (a found
+// group by the id it is listed by now, PublicRef), and whether
 // it is shown only those (#1337): a model not among them, one that came
 // after the user switched to it among them, is not shown.
 func PickedModels(agent string) (map[string]bool, bool) {
@@ -110,7 +143,7 @@ func PickedModels(agent string) (map[string]bool, bool) {
 	}
 	out := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		out[id] = true
+		out[PublicRef(id)] = true
 	}
 	return out, true
 }
@@ -286,7 +319,14 @@ func SetOwnModelsHidden(agent string, on bool) error {
 	} else {
 		s.OwnModelsHidden = slices.DeleteFunc(s.OwnModelsHidden, func(a string) bool { return a == agent })
 	}
-	return settings.Save(s)
+	if err := settings.Save(s); err != nil {
+		return err
+	}
+	// an agent's own config says the switch too (Claude Code's modelPicker
+	// replaceBuiltInOptions, #4548), so it is written again now, as a
+	// hidden model's change is
+	catalog.Touched()
+	return nil
 }
 
 // Families are the families providers and groups are tagged with, sorted.
@@ -300,7 +340,7 @@ func Families() []string {
 	for _, p := range All() {
 		add(p.Family)
 	}
-	for _, g := range Groups() {
+	for _, g := range sharedGroups() {
 		add(g.Family)
 	}
 	slices.Sort(out)
@@ -308,9 +348,14 @@ func Families() []string {
 }
 
 // ModelOrder is the order the user put agent's models in (OrderedModels),
-// by entry id; none when they never did.
+// by entry id, a found group by the id it is listed by now (PublicRef);
+// none when they never did.
 func ModelOrder(agent string) []string {
-	return slices.Clone(heldSettings().OrderedModels[strings.ToLower(agent)])
+	ids := slices.Clone(heldSettings().OrderedModels[strings.ToLower(agent)])
+	for i, id := range ids {
+		ids[i] = PublicRef(id)
+	}
+	return ids
 }
 
 // SetModelOrder lists agent's models in this order, by entry id: the ones

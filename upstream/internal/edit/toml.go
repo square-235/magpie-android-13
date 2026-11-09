@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+	"unique"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pelletier/go-toml/v2/unstable"
@@ -24,18 +26,16 @@ import (
 // array-table headers. A name is the header's key path: a quoted part keeps its
 // quotes, and whitespace around the dots is not part of it, so `[ a . b ]` is
 // the name `a.b`. Missing files return (nil, nil); errors include the path.
+// The list is made once each time the file is read and shared by every
+// caller, so read only (an append makes a copy): a Codex config.toml with a
+// table for each of 11,000 projects had it made again for each look, 46 MB
+// of what twenty window polls allocated.
 func TOMLTables(path string) ([]string, error) {
-	tables, err := tomlTablesOf(path)
+	doc, err := tomlFileOf(path)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, table := range tables {
-		if !table.array {
-			out = append(out, table.name)
-		}
-	}
-	return out, nil
+	return doc.names, nil
 }
 
 // GetTOMLTable returns the scalar keys of one table, or (nil, nil) when
@@ -300,7 +300,7 @@ func GetTOMLTop(path, key string) (string, bool) {
 // getTOMLTopLines is GetTOMLTop for a file that isn't valid TOML: the first
 // line that looks like `key = value` before one that looks like a header.
 func getTOMLTopLines(path, key string) (string, bool) {
-	raw, err := Read(path)
+	raw, err := readHeld(path)
 	if err != nil || raw == nil {
 		return "", false
 	}
@@ -480,12 +480,55 @@ func tomlFileOf(path string) (tomlFile, error) {
 		if err != nil {
 			return tomlFile{}, fmt.Errorf("%s: %w", path, err)
 		}
+		// what is kept holds no slack and no piece of the file's text: a
+		// key's prefix, suffix and text were slices of it, which kept the
+		// whole file (1.5 MB of Codex's config, with its ~11k projects)
+		// alive beside them, and the tables and names grew by append (#2278)
+		doc.root.keys = keptKeys(doc.root.keys)
+		tables := make([]tomlTableSpan, len(doc.tables))
+		copy(tables, doc.tables)
+		doc.tables = tables
+		n := 0
+		for i := range doc.tables {
+			doc.tables[i].keys = keptKeys(doc.tables[i].keys)
+			if !doc.tables[i].array {
+				n++
+			}
+		}
+		if n > 0 {
+			doc.names = make([]string, 0, n)
+		}
+		for _, table := range doc.tables {
+			if !table.array {
+				doc.names = append(doc.names, table.name)
+			}
+		}
 		return doc, nil
 	})
 	if errors.Is(err, fs.ErrNotExist) {
 		return tomlFile{}, nil
 	}
 	return doc, err
+}
+
+// keptKeys is keys to keep: each one's text, prefix and suffix copied out
+// of the file's text, and no room past the last.
+func keptKeys(keys []tomlKeySpan) []tomlKeySpan {
+	keys = slices.Clip(keys)
+	for i := range keys {
+		k := &keys[i]
+		k.text, k.prefix, k.suffix = strings.Clone(k.text), keptPiece(k.prefix), keptPiece(k.suffix)
+	}
+	return keys
+}
+
+// keptPiece is s copied, but the same few prefixes and suffixes (`key = `,
+// "") a config repeats on every line are one string each.
+func keptPiece(s string) string {
+	if s == "" {
+		return ""
+	}
+	return unique.Make(s).Value()
 }
 
 // parseTOMLTables finds both ordinary and array-table blocks in one parser pass.
@@ -501,6 +544,7 @@ func parseTOMLTables(lines []string) ([]tomlTableSpan, error) {
 type tomlFile struct {
 	root   tomlTableSpan
 	tables []tomlTableSpan
+	names  []string // TOMLTables
 }
 
 // parseTOMLFile is parseTOMLTables with the top-level keys too, located the
@@ -648,6 +692,7 @@ func tomlParseError(p *unstable.Parser, err error) error {
 // the document, so comments and formatting survive validation unchanged.
 func writeTOML(path string, lines []string) error {
 	orig, _ := Read(path)
+	lines = markTOML(lines, string(orig))
 	data := []byte(joinLinesLike(lines, string(orig)))
 	if err := validateTOML(data); err != nil {
 		return fmt.Errorf("%s: edited TOML is invalid: %w", path, err)
@@ -676,8 +721,7 @@ func validateTOML(data []byte) error {
 	if err := p.Error(); err != nil {
 		return tomlParseError(&p, err)
 	}
-	var decoded map[string]any
-	if err := toml.Unmarshal(data, &decoded); err != nil {
+	if err := validateTOMLDefinitions(data); err != nil {
 		if de, ok := err.(*toml.DecodeError); ok {
 			line, column := de.Position()
 			return fmt.Errorf("line %d, column %d: %w", line, column, err)

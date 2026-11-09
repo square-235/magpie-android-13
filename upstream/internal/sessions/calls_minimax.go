@@ -51,6 +51,9 @@ const mcodeGateway = "custom_provider:magpie"
 // beside it (messages*.jsonl). A reply copied into another generation keeps
 // its message_id, and Calls counts an id once.
 func minimaxCallFiles() []file {
+	if !Reads("minimax-code") {
+		return nil
+	}
 	var out []file
 	walkLinked(minimaxSessions(), func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -106,7 +109,7 @@ func readMiniMaxCalls(f file) (*callFile, bool) {
 	}
 	defer r.Close()
 	st := &callFile{Agent: "minimax-code", Path: f.path, Session: strings.TrimPrefix(f.key, "minimax-code:")}
-	br := bufio.NewReaderSize(r, 1<<20)
+	br := bufio.NewReaderSize(r, scanBuffer(r, 0))
 	for {
 		b, err := br.ReadBytes('\n')
 		if err != nil && (!errors.Is(err, io.EOF) || len(bytes.TrimSpace(b)) == 0) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Calcium-Ion/moejs"
+	"github.com/MoeForge/moejs"
 
 	"github.com/yetone/magpie/internal/gwmw"
 )
@@ -72,6 +72,20 @@ func (r *Run) End() {
 	}
 }
 
+// letGo lets the runtimes drop the request's body as its hooks were
+// given it, and what they made of it: a runtime is the request's until its
+// reply has streamed, minutes on a long one, and kept a long context's
+// body alive all that time, ~10 MB a 7 MB body (#3383). ctx, and what
+// ctx.state holds, stay. Not after each onEvent: an event is small, and
+// its hooks run a thousand times a reply.
+func (r *Run) letGo() {
+	for _, in := range r.insts {
+		if in != nil {
+			in.rt.ReleaseCallData()
+		}
+	}
+}
+
 // acquire is middleware i's runtime for this request and its ctx: the
 // request's Info, the plugin's options, a state of its own and reject.
 func (r *Run) acquire(i int) (*inst, moejs.Value, error) {
@@ -130,6 +144,7 @@ func (r *Run) Request(body []byte) ([]byte, *Reject) {
 	if r == nil {
 		return body, nil
 	}
+	defer r.letGo()
 	for i, m := range r.set.list {
 		if !m.hasReq {
 			continue
@@ -147,6 +162,47 @@ func (r *Run) Request(body []byte) ([]byte, *Reject) {
 		}
 	}
 	return body, nil
+}
+
+// Tried runs each onProvider on body as it goes to one provider, in turn,
+// with ctx.provider saying which (gwmw.To): what one returns is the body
+// the next is given and that try is sent, and undefined leaves it as it
+// was. Another try, on another provider or the same one, starts again from
+// the body onRequest left. A hook that throws, takes too long or returns
+// null leaves it as it was; ctx.reject turns nothing away here.
+func (r *Run) Tried(body []byte, to gwmw.To) []byte {
+	if r == nil {
+		return body
+	}
+	defer r.letGo()
+	b, _ := json.Marshal(to)
+	for i, m := range r.set.list {
+		if !m.hasProv {
+			continue
+		}
+		in, ctx, err := r.acquire(i)
+		if err == nil {
+			var v moejs.Value
+			if v, err = in.rt.ParseJSON(b); err == nil {
+				realm := in.rt.Realm()
+				err = realm.SetV(ctx, realm.KeyFromGoString("provider"), v)
+			}
+		}
+		if err != nil {
+			m.fail("onProvider", err)
+			continue
+		}
+		out, err := r.apply(i, m.onProv, requestLimit, body, nil)
+		switch {
+		case errors.Is(err, errDropped):
+			m.fail("onProvider", errors.New("returned null; a request can't be dropped"))
+		case err != nil:
+			m.fail("onProvider", err)
+		case out != nil:
+			body = out
+		}
+	}
+	return body
 }
 
 var errDropped = errors.New("dropped")

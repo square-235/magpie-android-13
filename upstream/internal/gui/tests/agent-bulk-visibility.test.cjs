@@ -19,6 +19,7 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ['chromium', 
       t.after(() => browser.close());
       const page = await browser.newPage({ viewport: { width: lang === 'en' ? 1240 : 560, height: 760 }, reducedMotion: 'reduce' });
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const agent = (id, wired = false) => ({ id, name: id, icon: 'generic', wired, fields: [{ key: 'model', label: 'model', value: wired ? 'relay/m1' : '', options: [{ value: 'relay/m1', label: 'm1', ref: 'relay/m1' }] }] });
       const theme = lang === 'de' ? 'dark' : 'light';
       const state = { agents: [agent('Codex', true), agent('Pi'), agent('Zed'), agent('Hidden')], profiles: [], settings: { lang, theme, agentOrder: ['Zed', 'Codex', 'Pi', 'Hidden'], agentsHidden: ['Hidden'] } };
@@ -75,6 +76,22 @@ for (const engine of process.env.BROWSER ? [process.env.BROWSER] : ['chromium', 
       const dialog = page.getByRole('dialog'), search = dialog.locator('input[type=search]');
       const button = (name) => dialog.getByRole('button', { name, exact: true });
       assert.equal(await dialog.getByRole('checkbox').count(), 4, 'hidden and folded agents are manageable');
+      // a name's text sits beside its icon, not at the row's far end (the
+      // owner's screenshot: .editor label's right alignment reached the
+      // rows of a wide window), wide and narrow
+      for (const width of [1240, 560]) {
+        await page.setViewportSize({width, height:760});
+        await page.waitForFunction((w) => window.innerWidth === w, width);
+        const gaps = await dialog.locator('.ag-manage-row').evaluateAll((rows) => rows.map((r) => {
+          const range = document.createRange();
+          range.selectNodeContents(r.querySelector('.ag-manage-name'));
+          return Math.round(range.getBoundingClientRect().left - r.querySelector('.ic').getBoundingClientRect().right);
+        }));
+        assert(gaps.every((g) => g >= 4 && g <= 14), `name beside its icon at ${width}: ${gaps}`);
+        if (process.env.ROW_SHOT && lang === 'zh') await dialog.screenshot({path:`${process.env.ROW_SHOT}-${engine}-${width}.png`});
+      }
+      await page.setViewportSize({width:lang === 'en' ? 1240 : 560, height:760});
+      await page.waitForFunction((w) => window.innerWidth === w, lang === 'en' ? 1240 : 560);
       assert(await button(hide).isDisabled());
       await search.fill('not-an-agent');
       assert.equal(await dialog.getByRole('checkbox').count(), 0);

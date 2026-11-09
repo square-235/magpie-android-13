@@ -77,6 +77,19 @@ run of chosen GUI files left i18n-keys red under a tag. A suite run at an
 older base passed while the pushed head failed. Parallel full suites on
 one machine made every run time out until the sessions took turns.
 
+From 10-17 04:00 to 10-18 04:00 there were 77 commits and 7 tags
+(v0.1.1277 to v0.1.1283), each on a green run with its 16 assets. The
+retire stack (0f1666b38 to de671719a, about 30k lines out) took all 11
+deprecated built-ins out of magpie, with a dead-code diff and real
+accounts for 8 of them. What went wrong was again at the edges of a run.
+Four bodies recorded a run at a tree other than the one pushed. Reds
+"under load" were filed (27 such issues since 10-16) and then commented
+on with no owner until CI went red on them. A check added to the fallback
+path read every passing reply's whole body, and a 24MB reply waited past
+its client's timeout on CI (7ac20247a). Two lessons were seen a third day
+and moved into the code standards: magpie's default never overrides a
+value the user set, and a checkout belongs to the session that made it.
+
 ## Reading the report
 
 **Reproduce the reporter's exact case, on the surface they use, before you
@@ -171,7 +184,13 @@ protocol, never by a key's name.**
   never keeps anything under a tool call's arguments.
 - Test the exemption with the protected key placed where the user's data
   goes: tool arguments, message text, a nested object.
-- Seen 1× (2026-10-09).
+- 10-28: 3e96197da let an sk- value with no capital and no run of 16
+  between hyphens go unmasked, so SK hynix article addresses are no key.
+  Its tests held four key shapes, none of them the closest to a slug: sk-
+  and a UUID in lower case passed as words and went to the vendor
+  (bad05e1b7). An exemption by shape is tested with the real secret that
+  looks most like what it lets through.
+- Seen 2× (2026-10-09, 2026-10-28).
 
 **A security gap a doc names is an open bug, not a description.**
 - docs/subsystems/gateway-routing.md said "There is no `Host` check, so a
@@ -229,6 +248,26 @@ nor the vendor's limits.**
   ban risk, so a prompt change gets the same care as a header change.
 - Seen 1× (2026-10-12).
 
+**A new reader of a live object reads each field the way its writer
+writes it.**
+- 7f827b3b0 (10-27) added /v1/magpie/claude-runs, which lists every
+  run and calls pid() on each. pid() read cmd.Process without a lock
+  while a run's launch was still in cmd.Start writing it. It was red
+  under -race on ubuntu CI at 6104e88aa only (run 40698575099), since
+  most runs were cancelled by the next push. 983fff23d reads the run's
+  tree under mu first; it was red with a 50ms sleep injected at launch,
+  and not in 30 runs without it.
+- Before adding a list or status route, find who writes each field it
+  reads and under which lock. Run its test under -race with a delay
+  injected into the writer.
+- The fix moved when the pid shows, and the test waiting on it wasn't
+  re-read: TestClaudeRunsNamesEachProcess took a listing, then read the
+  fake's hang.pid, and could end on a list made before the tree was set
+  (PID 0), red on CI at 5bfd76cd8. 3dd59428e waits for a run listed
+  with that pid; red 3 of 3 with a sleep injected in the listing before.
+  A change to when a value appears re-reads every wait on it.
+- Seen 1× (2026-10-28).
+
 **A bit or enum value has one owner.**
 - d4c2512d2 (#1874) gave a usage row's Flags bit 256 to rowOwnCost while
   a rebase of #1463 gave it to rowReasoningHidden, so every reported cost
@@ -245,22 +284,26 @@ write.**
   a sandbox HOME.
 - Seen 1× (2026-10-11).
 
+**A sibling the body names and leaves alone gets an issue in the same
+commit.**
+- d4a1b9baa (#2634) ended a think block at the first `</think>` no
+  longer, and said "Not changed: the plugins repo's think-tags middleware"
+  with the same rule. Nothing was filed until the review's plugins#176,
+  fixed half an hour later.
+- Seen 1× (2026-10-17).
+
+**A fix that holds only for new data says what happens to the old, for
+every user.**
+- dccfefdf7 (#2635) made an imported skill follow the app's versioned
+  folder. Skills imported before keep the stale link, and only the
+  reporter was told to import again.
+- Seen 1× (2026-10-17).
+
 ## The user's own files and settings
 
-**Never let magpie's default override a value the user set themselves.**
-- CLAUDE_CODE_AUTO_COMPACT_WINDOW overrode the user's own autoCompactWindow
-  for ~150 releases (602d4ec6).
-- `magpie claude model default` deleted the user's own ANTHROPIC_BASE_URL and
-  dropped the stash for 12 days (fe2603ff).
-- Before writing a key, list everywhere the agent reads that setting from.
-  Test with user-owned values present.
-- 10-09/10-10: four fixes for magpie writing over a user's own choice.
-  - 603dc0c4: dsh's picked model was lost on Disconnect.
-  - 5aca7d09: Codex's effort left at Default was written over with medium.
-  - c65d9fb4: magpie-models.json dropped keys added by hand.
-  - d9bf7c1c: ZCode's API format was put back on every start.
-  - Each was written first without a test that holds a user-set value.
-- Seen 2× (2026-10-05, 2026-10-10).
+**Never let magpie's default override a value the user set themselves**
+is in the code standards since 10-18. See
+[Moved to the code standards](#moved-to-the-code-standards).
 
 **Before deleting or overwriting a live credential, find every record that
 could match the same key.**
@@ -286,11 +329,21 @@ could match the same key.**
   it once with TZ=UTC and once in a far zone.
 - Seen 1× (2026-10-15).
 
-**A new field on a polled endpoint is costed at the poll's rate.**
+**Work added to a path every request or poll takes is costed at that
+rate and at its largest input.**
 - 644f4316f's Codex model/effort consumption was read again on every 15s
   Sessions poll. 019199e0f reads it again only when a call, price or
   identity changed, before a release.
-- Seen 1× (2026-10-14), done right.
+- b14784c03 (10-18) put `failure(hw.code(), hw.errBody())` in an if's
+  init in serve, so it ran on every try, a passing one too. A JSON reply
+  is held whole, and `failure` over a 24MB one took 1m45s, so
+  TestPluginStreamLargeReplies' JSON cases waited past their client's
+  timeout on ubuntu and macOS CI. 7ac20247a reads the body only once
+  the try is known to have failed, as every other `failure` call in
+  serve does.
+- Put a body scan after the cheap checks that rule it out, and time it
+  on the largest reply a test has.
+- Seen 2× (2026-10-14, 2026-10-18).
 
 **A full run gives the slow packages room.** `go test ./...` at the default
 10m timeout times out in internal/gateway (#2108), and under load in
@@ -308,15 +361,26 @@ ok except gateway" stops being a normal run record.
   them (#2557).
 - Done right from the evening on: a751f5282 and later commits ran
   "through suite-lock", one suite per machine, and their records say ok.
-- Seen 1× (2026-10-16).
+- 10-17: at 10:07 the box had three `go test ./...` runs, ~35 GUI
+  runners and over 100 browsers from several sessions, at load 313.
+  d4a1b9baa's GUI run was killed at its 30s bar, ebf3f48f7's shared Go
+  cache had files trimmed mid-run by another run, internal/agent took
+  50 to 58 minutes (#2544), and dccfefdf7's eight AppKit tests were
+  killed (#2645). The rule lives in this file only; a lock every suite
+  goes through would hold it.
+- Seen 2× (2026-10-16, 2026-10-17).
 
-**A mover's min is npm's version when the change lands, not when the
-work started.**
-- 19e9fc47f (10-16) raised Cursor's min to 0.2.17 while npm already had
-  0.2.18, bumped an hour before it landed. 53009f81a then raised six mins
-  to `npm view --prefer-online` at landing, and left Factory a version
-  behind (#2557).
-- Seen 1× (2026-10-16).
+**A suite's log is kept whole until its reds are named.**
+- 5b12407e8 (10-17) piped a full run through tail, lost which
+  internal/gateway test failed at 2559s, and shipped with an unnamed red.
+  `tee` the log to a file of your own and grep it.
+- 10-28: ca9b5048e (#3764) recorded "531 ok and 5 red when this was
+  written (the run goes on)". Its 200px steps box, which scrolls on its
+  own, took reader.cjs's wheel, and routing-model-rest went 20 of 20 red,
+  which isn't among the five it names (a8098a886). Write the record once
+  the run has ended. A change that adds a box that scrolls on its own
+  runs every GUI file that wheels the page (`reach`, `wheelTo`).
+- Seen 2× (2026-10-17, 2026-10-28).
 
 **Windows CI only compiles the tests, so a Windows-only red shows
 nowhere.** Run the package on the Windows box before calling a Windows
@@ -451,9 +515,65 @@ cause:
   (#2207). b476dc5a9's Routing GUI reds on untouched main have #2252 and
   nothing else. A red gets its own issue, with its output, in the same
   commit.
+- 10-17: the #1794 pattern on a second day. #2444 had ump45nose's patch
+  for 22 hours while two sessions commented "seen again"; it went red on
+  CI at f191d6423 and was fixed with that patch (50a703190). #2737 got
+  three "Not taking it; recording the numbers" comments before a3b48e0f7
+  fixed it.
+  - One test's subtests were filed three times: #2169, #2711 and #2737
+    are all TestTranslatedStreamKeepsClientAlive. Search the test's name
+    before filing, and file per test.
+  - A red filed "under load" is a CI red soon after: bf931f82c filed
+    #2711 and shipped past it, and its own CI run went red on another
+    subtest of the same test. 27 issues titled "under load" were opened
+    on 10-16 and 10-17. Fix the class (wait on state, room on both sides) instead
+    of filing one a test.
+  - 10-28: the same on a third day. JoeyWu-tech posted a patch for
+    #3568 (TestHandedOverGatewayFinishesItsStream, a real handover drop)
+    on 10-25, with a reproduction and red-on-old tests. Nobody ported it
+    for three days, and it went red on ubuntu CI again at 0a7633136. It
+    was ported unchanged as 11c427eaa. Now in the code standards (a
+    red's issue is read to its last comment, 77898391d).
+- 10-27: the #1794 pattern on a third day. internal/provider has died
+  on main since 10-25 in TestUnreadLoginsWriteErrorsKeepCredentials
+  (#3632, a synctest fatal, 2 of 2 on mote at 4b0a32e0f). The issue has
+  two complete patches (JoeyWu-tech's and skygunner's) and nine
+  comments, no owner. #3919 and #3924 have had JoeyWu-tech's patches
+  since 10-27 15:37 and 16:24, and #3854 has three TestFetch* reds.
+  Every tag since, to v0.1.1780, went out over them, and a provider
+  change can only pass its package with those tests skipped.
+  - A patch on a red issue is reviewed and merged, or answered with
+    why not, the day it is posted.
+  - A red that kills its package hides every new red behind it.
+    6eb510f78 (10-26) made a Codex ask of the models list that three
+    TestFetch* tests counted as a second ask; its provider run died at
+    #3632 first, it then ran `-run Codex`, and the three were filed
+    only later as #3854. With #3632 fixed (4842f69be), #3854 and #3906
+    merged too (759b3b8c4, ed49d1b38), internal/provider passed whole
+    on 10-28 for the first time since 10-25.
+  - A red step hides every step after it. CI's Race step runs only
+    when Test passes, so 9a888323a's allocation bound (#3472), red
+    every time under -race, first showed on 10-28 once Test was green
+    (#3956, fafce6545). A test that bounds bytes runs once under
+    -race before it lands: sync.Pool drops a quarter of what is put in
+    it there, and regexp and zstd take their state from one.
+  - A red assertion hides every assertion after it. #3410 (routing-pause)
+    was filed on 10-23 and failed at its first press, from 91b0be836's
+    motion. On 10-25 c888ef272 saved a rule's hours with a zone, and the
+    fixture's later expectation, without a zone, stayed wrong unseen
+    until 7b007e986 fixed the press on 10-28. #3408 to #3411 sat five
+    days with no owner, and #3104 (usage-ledger) has had none since
+    10-20. A filed red is still a test that checks nothing after its
+    first failure.
 - A cancelled run tests nothing. On 10-14 nine pushes in ten minutes
   cancelled each other's runs, and 3c4b4dc97 never had a run of its own;
   its red showed first at 84f14e555.
+  - 10-28: of main's last 58 Test runs, 49 were cancelled by the next
+    push. 0b99b8fbe's new allocation bound went red in macOS's Race job
+    (sync.Pool lets go under -race) at 25df3187b, the first run after it
+    that finished, and sat red until d3f3f3381. A test that bounds
+    allocations or a pool's savings checks `raceOn` (race_on_test.go)
+    and is run once with -race before it is pushed.
 - Done right: 2bd49cc5's race was fixed at its cause in 25 minutes
   (28049bd2, -race -count=40 -cpu 1,2). 60f87223, b1cba654, 443f1cbc and
   395c4bc5 fixed flakes at their cause instead of retrying. 06420a71 fixed
@@ -484,6 +604,43 @@ before the merge, are in the code standards.)
   four known-wrong translations. Fix or file the problems first.
 - Seen 1× (2026-10-05).
 
+**An issue that names two problems is closed when both are fixed.**
+- #2449's title named a lost tail and plugin hosts outliving their
+  test's HOME. 6641e1b0a fixed the first and it was closed on 10-15. The
+  second came back on macOS CI at 84cd686af on 10-17 with no owner
+  (#2702).
+- Seen 1× (2026-10-17).
+
+**A size budget raised whenever a change reaches it bounds nothing.**
+- app.js's budget was raised four times in 2.5 days, the last to
+  1,269,000 by 85eef5d87, while app.js grew 53KB and nothing moved out
+  (#2710). 17557132c met the same budget without a raise.
+- A raise moves something out first, or follows a growth rate the owner
+  set.
+- Seen 1× (2026-10-17).
+
+**A release published after a newer one takes Latest, and with it the
+update feed and the tap, unless the publish step checks.**
+- 10-15: v0.1.1255 was published 25 minutes after v0.1.1256, and
+  GitHub marked the older one Latest (moved back by hand then).
+- 10-28: v0.1.1891 finished 16s after v0.1.1892. 1891 became Latest,
+  which usemagpie.ai's /api/latest serves, and the Homebrew tap went from
+  1892 back to 1891 (tap 1d47b64). v0.1.1890, still notarising, would
+  have done it again. magpie-releases ee73d7a now passes `make_latest`
+  only to the highest version and runs the tap update only then.
+- A fix made by hand once is a fix for that release only. When it comes
+  back, fix the step that does it.
+- Seen 2× (2026-10-15, 2026-10-28).
+
+**A publish run that stays red for one known package hides every new
+failure behind it.**
+- think-tags 0.1.1 can't publish (E404, publish.yml isn't its trusted
+  publisher, plugins#180), so every plugins publish run since b3a860c is
+  red, and a new package's failure would look the same.
+- Check each package with `npm view --prefer-online`, not the run's
+  colour, until the known red is fixed.
+- Seen 1× (2026-10-17).
+
 **Keep the issue open until the reporter's case works. Reopen when they say
 it doesn't.**
 - On #876 the reporter couldn't reopen it themselves and had to file #888.
@@ -493,14 +650,8 @@ it doesn't.**
   open for the reporter.
 - Seen 1× (2026-10-05).
 
-**One commit, one goal.**
-- 653cb8ee bundled ZCode sign-in with WSL session deletion.
-- 5464a362 capped six pages at 1200px when #860 asked for a speed display.
-- A fix found on the way goes in its own commit. 1e0829b1 hid the ja/de fix
-  inside a Usage change, beside two issues (#925, #928).
-- 76dc5aed bundled a Routing animation fix, a scrollbar fix and bringing the
-  GUI tests up to date.
-- Seen 2× (2026-10-05, 2026-10-06).
+**One commit, one goal** is in the code standards since 10-28. See
+[Moved to the code standards](#moved-to-the-code-standards).
 
 **A squash merge's message is written, not GitHub's default.** Give
 `gh pr merge --squash` a `--subject` and a `--body-file` holding the PR's
@@ -525,24 +676,40 @@ alone.**
   no.
 - Seen 1× (2026-10-14).
 
-**Two sessions never commit from the same checkout.**
-- 10-09 12:10: 2018882e carries the davsync subject but holds the GTK
-  font-DPI fix (#1371, 7 files). b86001d4, "#1371 GTK", is empty. be203728
-  is the real davsync change under the same subject. One session committed
-  the other's staged files, because they shared the main checkout's index.
-- Work in a worktree of your own (`git worktree add --detach`). After
-  committing, `git show --stat HEAD` must list your files and only yours. An
-  empty commit means another session took your index.
-- 10-12 21:25: 3e88fc09d carries the auto-mode subject but holds the Get
-  started card; the auto-mode change is 24350a372. A review reads
-  `git show --stat` against the subject, not the subject alone (#1825).
-- Seen 2× (2026-10-09, 2026-10-12).
+**Two sessions never commit from the same checkout** is in the code
+standards since 10-18, widened to a worktree and its logs. See
+[Moved to the code standards](#moved-to-the-code-standards).
 
 ## Moved to the code standards
 
+- **A red's issue is read to its last comment, and a patch on it is
+  taken first** (10-12, 10-17, 10-27, 10-28). On 10-28 JoeyWu-tech's
+  #3568 patch sat three days until CI went red on it again (11c427eaa).
+- **A mover's min is npm's version when the change lands** (10-16,
+  10-18, 10-24). On 10-16 19e9fc47f raised Cursor's min a version behind
+  npm, and 53009f81a left Factory one behind (#2557). On 10-18 zed 0.1.9
+  was published with no min raised until the review's ccb2eea15.
+  On 10-24 factory 0.1.38 (plugins #349, an option a user asked for)
+  was published and the min stayed 0.1.37 for four days, until
+  490c0a4ad. The rule now also says a plugin version raises the min the
+  same day.
 These were seen on three or more days. The rules and their evidence are in
 [docs/code-standards.md](docs/code-standards.md); a review still checks
 each one.
+
+- **One commit, one goal** (10-05, 10-06, 10-28). On 10-28 6e080ca04
+  answered psikent (/v1/models says every model takes tools) and windy
+  (a group's Context hint names the member a longer conversation skips)
+  under one subject that names only the first.
+- **Never let magpie's default override a value the user set themselves**
+  (10-05, 10-10, 10-17). On 10-17 5a2414acd brought every plugins.yml
+  without `settled` up once, Essentials to All. A user who had run
+  `magpie plugin preset essentials` themselves wrote the same file, and
+  the body doesn't name them (#2749).
+- **A checkout, worktree or log belongs to the session that made it**
+  (10-09, 10-12, 10-17). On 10-17 another session checked out
+  origin/main in 7660399a1's worktree mid-run, and another deleted the
+  first part of 17557132c's GUI log.
 
 - **A fix reaches every sibling of the bug** (10-05, 10-06, 10-07). Seen
   six times on 10-05. On 10-07 cd8d64a9's sub2api balance URL was left out
@@ -673,6 +840,25 @@ each one.
     change.
   - A cancelled run tests nothing: 6b3ee5a03 and e243937ca never had a
     run of their own; the next push's run covered them.
+- **10-17, criteria still missed.**
+  - What was run at the pushed head: d4a1b9baa ran "this change plus the
+    next commit's library edit". 252bc61ce said it was rebased on
+    cb05dc2d1, but its parent 84cd686af changed internal/agent three
+    minutes before, and the pair first ran together on CI. bad4508c4
+    and bf931f82c ran at older bases too.
+  - Each citation is checked: 04e8aa8f1 cites #2710 for a GUI red that
+    is #2552.
+- **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
+  diffed staticcheck's U1000 against its base for dead code, b98f906b1
+  was red on the old code for an own-account gap, and 8 subscriptions
+  were moved with real accounts. Kiro, Factory and Zed were not, and
+  Qoder answers 401 (plugins#181); both said. df3734b95 (#2627) fixed
+  the shared reader with the reporter's fish_variables and ran real fish
+  3.7.1. f550d3699 tried Bun's Claude Code with a real SOCKS proxy.
+  48aae83b8 found an unmasked route to Jev by reading callers. 9f9bfc160
+  scoped Codex's 272K window to Codex and checked an OpenAI model
+  unchanged. c4aeaec74 checked npm before the Cursor min.
+  2042123f4 (timonwong) and 992f288e2 (JJ-Lin) were ported with credit.
 - **Done right on 10-16.** a751f5282 (#2567) found its 408 by injecting a
   250ms stall and was red with renewal turned off. 9b04c4e20 ran a real
   Codex Pro sign-in on every protocol. #1717 (deephbz) took four review

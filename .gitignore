@@ -13,9 +13,9 @@ android/.idea/
 # release the script pins by SHA-256.
 android/app/src/main/jniLibs/
 
-# The build script's downloads (Bun zips) and the Go build's own output.
+# The build script's downloads (Bun zips). Upstream's build/ is source
+# (icon generators, Windows/macOS manifests), so it is not ignored.
 android/build/bun-cache/
-upstream/build/
 
 # IDE and OS noise.
 .idea/

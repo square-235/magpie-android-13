@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -155,8 +156,9 @@ func TestInferredGroupImagesReachAgentCatalogs(t *testing.T) {
 	if err := catalog.SaveLive("unknown", "https://example.test/v1", []catalog.Model{{ID: "claude-sonnet-4-5"}}); err != nil {
 		t.Fatal(err)
 	}
-	id := "group/auto-claude-sonnet-4-5"
-	oc := magpieProviderJSON("opencode").(map[string]any)["models"].(map[string]any)[id].(map[string]any)
+	id := "auto/claude-sonnet-4-5"
+	ms := magpieProviderJSON("opencode").(map[string]any)["models"].(orderedJSON)
+	oc, _ := ms[slices.IndexFunc(ms, func(p jsonPair) bool { return p.k == id })].v.(map[string]any)
 	if _, ok := oc["attachment"]; ok || !reflect.DeepEqual(oc["modalities"].(map[string]any)["input"], []string{"text", "image"}) {
 		t.Fatalf("OpenCode group image input: %v", oc)
 	}

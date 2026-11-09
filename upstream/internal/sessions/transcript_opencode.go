@@ -8,14 +8,24 @@ import (
 // openCodeTranscript reads the conversation in message order from the same
 // store the listing chose, including while a v1 to v2 migration is underway.
 func openCodeTranscript(s Session, add func(bool, Part) bool) error {
-	dbReadMu.Lock()
-	defer dbReadMu.Unlock()
-	defer closeDBs()
-	for _, f := range openCodeFiles() {
-		if f.sid != s.ID {
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+	// the store handles are shared with the reads that hold mu: they are
+	// opened and given back under it, and read from without it
+	mu.Lock()
+	release := useDBs()
+	files := openCodeFiles()
+	mu.Unlock()
+	defer func() {
+		mu.Lock()
+		release()
+		mu.Unlock()
+	}()
+	for _, f := range files {
+		if f.m().sid != s.ID {
 			continue
 		}
-		if v, ok := f.oc.(ocV2DB); ok {
+		if v, ok := f.m().oc.(ocV2DB); ok {
 			rows, err := v.db.Query("SELECT type,data FROM session_message WHERE session_id=? AND type IN ('user','assistant') ORDER BY seq", s.ID)
 			if err != nil {
 				return err
@@ -52,7 +62,7 @@ func openCodeTranscript(s Session, add func(bool, Part) bool) error {
 			return rows.Err()
 		}
 		var messages []ocMessage
-		for _, b := range f.oc.messages(f.sid) {
+		for _, b := range f.m().oc.messages(f.m().sid) {
 			var m ocMessage
 			if json.Unmarshal(b, &m) == nil {
 				messages = append(messages, m)
@@ -65,7 +75,7 @@ func openCodeTranscript(s Session, add func(bool, Part) bool) error {
 			return messages[i].ID < messages[j].ID
 		})
 		for _, m := range messages {
-			for _, p := range f.oc.parts(m.ID) {
+			for _, p := range f.m().oc.parts(m.ID) {
 				if !openCodeTranscriptPart(m.Role, m.ModelID, p, add) {
 					return nil
 				}

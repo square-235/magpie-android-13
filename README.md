@@ -1,4 +1,4 @@
-# magpie 安卓版（Android 16）
+# magpie 安卓版（Android 13+）
 
 把 [yetone/magpie](https://github.com/yetone/magpie) 搬到手机上：magpie 的网关直接在
 Android 里跑起来，网关端口默认 **3425**（和桌面版一致），magpie 自己的网页界面也一起带着，
@@ -8,24 +8,26 @@ Android 里跑起来，网关端口默认 **3425**（和桌面版一致），mag
 Termux 那套路径），外面套一层很小的安卓壳子：一个前台服务把网关跑在后台，一个 WebView
 显示 magpie 的网页界面。
 
-已在 Android 16（API 36）的 x86_64 模拟器上实测通过：网关监听 `127.0.0.1:3425`、网页界面
-正常打开、应用进程里联网和 DNS 都正常、局域网开关会改成监听 `0.0.0.0:3425` 并强制要求网关
-密钥。arm64（手机）那份由同一套脚本和 NDK 编出，二进制检查过是合法的安卓 AArch64 PIE，
-但没有在真机上跑过——真机上如果遇到问题，先看菜单里的日志。
+应用的最低版本是 **Android 13（API 33）**，网关二进制也按 API 33 链接，所以 Android 13
+及以上的设备都能装。移植本身最初在 Android 16（API 36）的 x86_64 模拟器上实测通过：网关
+监听 `127.0.0.1:3425`、网页界面正常打开、应用进程里联网和 DNS 都正常、局域网开关会改成
+监听 `0.0.0.0:3425` 并强制要求网关密钥。arm64（手机）那份由同一套脚本和 NDK 编出，二进制
+检查过是合法的安卓 AArch64 PIE，但没有在真机上跑过——真机上如果遇到问题，先看菜单里的日志。
 
 
 ## 目录
 
 | 目录 | 内容 |
 | --- | --- |
-| `upstream/` | magpie 上游源码（main 分支，2026-10-16 抓取），完全没有改动 |
+| `upstream/` | magpie 上游源码（main 分支，2026-11-09，`f37de8c` 时抓取），完全没有改动 |
 | `android/` | 安卓工程，壳子代码在 `app/src/main/java/com/magpie/android/` |
 | `scripts/` | 构建脚本：`build-magpie-android.ps1` 编译网关，`build-apk.ps1` 打 APK |
 
 ## 需要什么
 
 - **JDK 21**
-- **Android SDK**，要有 Android 16（API 36）的 platform 和 build-tools
+- **Android SDK**，要有 API 36 的 platform 和 build-tools（`compileSdk`/`targetSdk` 仍是
+  36；应用能装到 Android 13 上是由 `minSdk = 33` 决定的）
 - **Android NDK r28c**（只在编译网关时用，Gradle 不依赖它）
 - **Go 1.26.8**：`upstream/go.mod` 要求这个版本，本机版本低的话 Go 会自己下载
   （脚本默认把 `GOPROXY` 设成 `goproxy.cn`）
@@ -36,8 +38,9 @@ curl.exe -L -o ndk.zip https://dl.google.com/android/repository/android-ndk-r28c
 Expand-Archive ndk.zip -DestinationPath $env:USERPROFILE\sdk
 ```
 
-r29 以后才有 API 36 的编译器包装，r28c 最高只到 35——用 35 编出来的二进制在 36 上跑没
-问题，脚本会自动挑当前 NDK 支持的最高一档。
+网关默认按 NDK 的 **API 33** 包装编译（`build-magpie-android.ps1` 的 `-ApiLevel` 默认值
+就是 33），这样二进制只引用 Android 13 也有的 libc 符号；r28c 里 33 这一档是有的。想改回
+“当前 NDK 支持的最高一档”，传 `-ApiLevel 0`。
 
 ## 构建
 
@@ -150,7 +153,8 @@ magpie 优先用它，所以不需要改上游代码。
 - 局域网开关打开后网关绑 `0.0.0.0`，此时**必须**在 magpie 的 Gateway 设置里配好网关密钥
   （magpie 会拒绝没有密钥的请求）。别在公共 Wi-Fi 下开。
 - Android 16 的本地网络保护默认关闭。应用已声明 `ACCESS_LOCAL_NETWORK`，开启局域网访问时
-  会顺手申请一次，等 Android 17 强制要求时也能继续用。
+  会顺手申请一次，等 Android 17 强制要求时也能继续用。Android 13～15 上这个权限还不存在，
+  代码会跳过申请，局域网访问照旧。
 
 ## 后台运行
 
@@ -160,15 +164,19 @@ magpie 优先用它，所以不需要改上游代码。
 的电池/自启动白名单里再放行一次。
 
 
-**想改支持的安卓版本** — 改 `android/app/build.gradle.kts`：`minSdk` 现在是 36
-（Android 16），往下调低也可以，壳子代码没用到更新的 API；`compileSdk`/`targetSdk` 是 36，
-要退回旧版本就一起改。
+**想改支持的安卓版本** — 改 `android/app/build.gradle.kts`：`minSdk` 现在是 33
+（Android 13）。壳子用了 API 33 的 `OnBackInvokedDispatcher` 和
+`enableOnBackInvokedCallback`，33 是当前的下限；再往下要改返回键处理，并重新考虑前台服务
+类型。`compileSdk`/`targetSdk` 仍是 36，要退回旧版本就一起改；网关侧同步改
+`scripts/build-magpie-android.ps1` 的 `-ApiLevel`。
 
 **想只编一个架构、或者加 32 位** — `-Abis` 支持 `arm64-v8a`、`armeabi-v7a`、`x86_64`、
 `x86`，改完记得同步 `app/build.gradle.kts` 里的 `abiFilters`。
 
-**换上游新版 magpie** — 用新版覆盖 `upstream/` 里的文件，重跑
-`scripts/build-apk.ps1` 就行。`upstream/` 里没有任何改动，方便对比和跟进上游。
+**换上游新版 magpie** — 用新版覆盖 `upstream/` 里的文件（别把它的 `.git` 带进来），重跑
+`scripts/build-apk.ps1` 就行。当前跟的是 `main` 的 `f37de8c`（2026-11-09）。`upstream/`
+里没有任何改动，方便对比和跟进上游；上游的 `build/` 目录是源码的一部分（图标生成器和
+Windows/macOS 清单），要一起保留，仓库的 `.gitignore` 也不再忽略它。
 
 ## 不想打包 APK 的话
 

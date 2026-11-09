@@ -17,6 +17,7 @@ describe and review a change to a subsystem is in the
 | A failed read, parse or hash means "unknown". | It never means "empty", "none" or "equal". Keep what was read before, copy a file that doesn't parse aside before writing over it, and fix the shared reader rather than writing a strict one beside it. A list that guards access (an allow list, a key limit) fails closed when its file can't be read. Test with the file unreadable. readLogins wrote a parse error back as "no accounts" (b363327d), and agent/stash.go had the same bug two days later (270b5257). On 10-12 7a9490638's IP allow list read an unreadable settings.json as an empty list and let every address in (7d9382db2). On 10-13 #2017's patch read an unreadable codex-autoreset.json as "no reset spent" (e297a8ab2). |
 | Another app's values come from that app. | When magpie writes another app's file or speaks for it, take each field's type and value from that app's own data, binary, merge code or docs, not only its field names. 84554e57 wrote updatedAt in milliseconds and hung Claude Desktop's skills page (#863). #966 guessed Codex's limit_reached, which #996 undid after reading ChatGPT.app. On 10-13 accc8c090 copied Claude Code's OAuth client names but sent its own redirect_uri (127.0.0.1, where Claude Code sends localhost); e0ecf0161 read the binary and fixed it. |
 | Nothing that can block runs under a lock its reader needs. | Never send on a channel or call anything that can block while holding a lock the receiver takes first. Set shared state before the handoff that lets another goroutine look at it, and a struct copied by value that holds a map is not a copy. A fake server's handler runs on many goroutines: guard what it records with a lock, and count only the calls the test makes, since background reads reach it too. A change that starts a goroutine or timer runs `-race` before it is pushed. 85fd35ab hung macOS -race CI (4fb8e887). 01e66e0f's marshal wrote into a shared map (15afd988). On 10-11 7cba316b9's turn-done timer read fields on its own goroutine and went red under -race (a2afc1828). On 10-13 TestKeptLoginStandsAtItsPlace's fake Codex appended from two goroutines (a75de4c21). |
+| magpie's default never overrides a value the user set. | Before writing a key, list everywhere the agent or magpie reads that setting from, and test with a user-set value present. A migration that rewrites a setting names the users who set it themselves, and leaves their value alone or says in the release why not. CLAUDE_CODE_AUTO_COMPACT_WINDOW overrode the user's own autoCompactWindow for ~150 releases (602d4ec6). On 10-10 four fixes (603dc0c4, 5aca7d09, c65d9fb4, d9bf7c1c) each started without a test holding a user-set value. On 10-17 5a2414acd turned every unmarked Essentials preset into All, including one a user picked with `magpie plugin preset essentials` (#2749). |
 | Checks cover the edges the change touches. | For numbers, check the boundaries. For paths, check each platform (macOS, Linux, Windows). For concurrency, check races and stale state. Pick checks by risk. |
 
 ## Tests
@@ -28,6 +29,7 @@ describe and review a change to a subsystem is in the
 | Tests use real inputs. | Fixtures look like real requests, real serialized output and real files on disk. That includes missing fields, empty values and defaults. |
 | Tests check behavior, not implementation. | Assert what the user or caller needs. Formatting changes and internal refactors shouldn't break a test, unless exact bytes are the requirement. |
 | A test that fails on `main` is a bug to fix now. | "Fails the same on origin/main" is not a baseline, and neither is "fails under the full run, passes alone". Fix it at its cause, or open an issue naming the cause, in a commit of its own, before shipping on top of it. From 10-05 to 10-07 dozens of commits shipped past red tests. Some were real bugs: a data race (a45b3e09), test order (bfe8bcaf), and click-scroll red since 5d871723 while dcbae2ef, 76d82528 and b2345078 shipped past it. Run `go test -race -count=20 -run X` before calling a Go test a flake. |
+| A red's issue is read to its last comment, and a patch on it is taken first. | Before filing, commenting on or shipping past a red, search its test's name and read every comment. "Seen again" is not work on it: take it, or say who has it. A patch posted there is reviewed and ported before anyone writes another. #1794 got four "seen again" comments before anyone took it (10-12). #2444 had ump45nose's patch for 22 hours while two sessions commented, until CI went red at f191d6423 (10-17). JoeyWu-tech's #3568 patch, with red-on-old tests, waited three days until 0a7633136's CI went red and 11c427eaa ported it (10-28). |
 | Tests stay out of the real machine. | Run them under a temp HOME with Go's caches pinned (see the snippet in [provider-plugins.md](subsystems/provider-plugins.md)). Never touch a real agent's config or `~/.config/magpie`. An agent's variable goes in `agentenv.Vars`, so the sandbox clears it. |
 | Whatever a test starts ends when the test does. | A fake process, a goroutine or an async refresh a test sets going is stopped or waited for before the test returns, or it writes into the next test's folder ("directory not empty") or spins for days. A package that isolates itself in its own `TestMain` instead of `testenv.Run` sets what testenv sets, `testenv.Marker` included. TestClaudeSignInByPaste's fake polled for 2 days (38a0f470). On 10-11 a CLI-identity ask outliving its test broke the next one (#1524): 4ee3a76b fixed it in internal/gateway only, 9c377231 for every package through the marker, which the gateway never set (a349de82). |
 | A timing test leaves room on both sides. | Never bound a test by wall-clock time a loaded runner can exceed, and keep a threshold classifier's fixture far from every threshold it has. Reproduce a timing failure by injecting the delay (a held write, a late first arrival), not by rerunning until it fails, and list every timing assumption in the test when fixing one. 319b72c7 fixed one of two loops sharing a 2000-line bound and the other went red 9h later (229ce19a). On 10-11 TestMaxRPM's flake was a real gap: a first request that reached the vendor late let the vendor see one too many in its minute (ce1ecaa4), and the queued-stream tests timed the client's clock under CPU starvation (3f4287e6). |
@@ -134,8 +136,12 @@ tag cover it. v0.1.1213 (hdiutil "Resource busy") and v0.1.1218 (notarising
 lost the network) were never published, and nobody noticed the first for
 1.5 hours (#1846). The same holds for a plugin version: `npm view
 <package>@<version> --prefer-online` before a mover's `min` or a reply
-names it. A PR that only adds tests doesn't get a
-release of its own.
+names it. A plugin version published for a moved subscription
+raises its mover's `min` to that version the same day, since
+`keepMovedCurrent` installs only `min`: zed 0.1.9 (10-18) and factory
+0.1.38 (10-24, raised 10-28 in 490c0a4ad) reached nobody until a review
+compared every mover with `npm view --prefer-online`. A PR that
+only adds tests doesn't get a release of its own.
 
 ## Reviewing a PR
 
@@ -211,3 +217,22 @@ P0, 2137 lines) put its full-suite results in "the push notes"; it had
 left two GUI tests red, found by 2dcc51417 the same evening. When a
 community commit is applied without a body, the review commit says what
 was run against that author's code.
+
+One commit has one goal. Two reports fixed together are two commits,
+each with its own record, so a revert takes back one and keeps the other,
+and a review can tell which test guards which change. A fix found on the
+way goes in a commit of its own. 653cb8ee bundled ZCode sign-in with WSL
+session deletion, and 1e0829b1 hid a ja/de fix inside a Usage change. On
+10-28 6e080ca04 put psikent's /v1/models tools flag and windy's routing
+group Context hint, two reports in two layers (gateway, GUI), under one
+subject that names only the first.
+
+A checkout, a worktree and the logs in it belong to the session that made
+them. Work in a worktree of your own (`git worktree add --detach`), never
+check out, commit from or clean another session's, and after committing
+check that `git show --stat HEAD` lists your files and only yours. On
+10-09 2018882e carried the davsync subject but held another session's GTK
+fix, taken from a shared index. On 10-12 3e88fc09d carried the auto-mode
+subject but held the Get started card (#1825). On 10-17 another session
+checked out origin/main in 7660399a1's worktree mid-run, and another
+deleted part of 17557132c's GUI log.

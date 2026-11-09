@@ -278,13 +278,7 @@ public final class MainActivity extends Activity {
         });
 
         getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> {
-                    if (web.canGoBack()) {
-                        web.goBack();
-                    } else {
-                        finish();
-                    }
-                });
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::back);
 
         if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
@@ -293,6 +287,25 @@ public final class MainActivity extends Activity {
         showAddress();
         requestLocalNetworkPermissionIfNeeded();
         MagpieService.start(this);
+    }
+
+    /** Back: the page's own history first, then the app. */
+    private void back() {
+        if (web != null && web.canGoBack()) {
+            web.goBack();
+        } else {
+            finish();
+        }
+    }
+
+    /**
+     * The dispatcher above is API 33 and the manifest opts in to it. This is
+     * the path a platform still takes when that opt-in is not honoured.
+     */
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        back();
     }
 
     @Override

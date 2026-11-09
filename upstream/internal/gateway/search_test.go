@@ -192,7 +192,7 @@ func TestWebSearchForAModelThatCannot(t *testing.T) {
 	if rec.Code != 200 || len(res.Choices) != 1 || res.Choices[0].Message.Content != "Let me check.\n\nGo 1.27.1 is out." || len(res.Choices[0].Message.ToolCalls) != 0 || res.Choices[0].FinishReason != "stop" {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	if res.Usage.Prompt != 40 || res.Usage.Completion != 12 {
+	if res.Usage.Prompt != 10 || res.Usage.Completion != 12 { // the last round's prompt, both rounds' output
 		t.Fatalf("usage %+v", res.Usage)
 	}
 
@@ -295,8 +295,10 @@ func TestSearchZeroCacheSplitKeepsWrites(t *testing.T) {
 	}
 	client := newSniffer(provider.Anthropic, "text/event-stream")
 	client.write(w.Body.Bytes())
-	if client.u.CacheWrite != 50 {
-		t.Fatalf("zero delta after search round reduced client cache writes: got %d, want 50", client.u.CacheWrite)
+	// the client is told the last round's writes, the first round's
+	// billed with them
+	if client.u.CacheWrite != 20 {
+		t.Fatalf("zero delta after search round reduced client cache writes: got %d, want the last round's 20", client.u.CacheWrite)
 	}
 }
 
@@ -655,4 +657,50 @@ func TestPluginSaidToSearch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A request's body is looked at for web search without a copy of it, and
+// not parsed at all for a provider that searches by itself: Codex offers
+// web_search on every turn, and each relayed turn was parsed whole.
+func TestSearchAskedLooksCheaply(t *testing.T) {
+	long := strings.Repeat("a long prompt with words in it ", 7000)
+	plain := []byte(`{"model":"m","input":"` + long + `"}`)
+	if n := testing.AllocsPerRun(20, func() { searchAsked(provider.Responses, plain) }); n != 0 {
+		t.Errorf("a %dKB body with no search in it: %v allocations, want 0", len(plain)/1024, n)
+	}
+	asks := []byte(`{"model":"gpt-5","input":"` + long + `","tools":[{"type":"web_search"}]}`)
+	codex := provider.Provider{ID: "codex", Responses: provider.CodexBase, Account: &provider.Account{Agent: "codex"}}
+	if searchedForIt(context.Background(), codex, provider.Responses, "gpt-5", asks) {
+		t.Error("Codex searches by itself, and magpie searched for it")
+	}
+	if n := testing.AllocsPerRun(20, func() { searchedForIt(context.Background(), codex, provider.Responses, "gpt-5", asks) }); n > 20 {
+		t.Errorf("a provider that searches by itself: %v allocations, the body parsed", n)
+	}
+	other := provider.Provider{ID: "x", Responses: "https://example.test/v1"}
+	if !searchedForIt(context.Background(), other, provider.Responses, "gpt-5", asks) {
+		t.Error("a provider that doesn't search: magpie didn't search for it")
+	}
+	if searchedForIt(context.Background(), other, provider.Responses, "gpt-5", plain) {
+		t.Error("a body offering no search: magpie searched for it")
+	}
+}
+
+func BenchmarkSearchedForIt(b *testing.B) {
+	long := strings.Repeat("a long prompt with words in it ", 7000)
+	asks := []byte(`{"model":"gpt-5","input":"` + long + `","tools":[{"type":"web_search"}]}`)
+	plain := []byte(`{"model":"gpt-5","input":"` + long + `"}`)
+	codex := provider.Provider{ID: "codex", Responses: provider.CodexBase, Account: &provider.Account{Agent: "codex"}}
+	other := provider.Provider{ID: "x", Responses: "https://example.test/v1"}
+	b.Run("codex-asks", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			searchedForIt(context.Background(), codex, provider.Responses, "gpt-5", asks)
+		}
+	})
+	b.Run("other-plain", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			searchedForIt(context.Background(), other, provider.Responses, "gpt-5", plain)
+		}
+	})
 }

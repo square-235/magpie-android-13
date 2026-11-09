@@ -149,16 +149,15 @@ func TestImageByURLIsFetchedForB64Caller(t *testing.T) {
 // #1576's 502s at 300 s said only "context deadline exceeded". A vendor
 // that began answering but didn't finish in drawTimeout is said to have.
 func TestVendorThatStopsMidAnswerIsSaid(t *testing.T) {
-	was := drawTimeout
-	drawTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { drawTimeout = was })
+	was := drawUnit
+	drawUnit = 60 * time.Millisecond // the 5 minutes, 300ms
+	t.Cleanup(func() { drawUnit = was })
 	s, _ := relayed(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"created":1,"data":[`)
 		w.(http.Flusher).Flush()
-		select {
-		case <-r.Context().Done():
-		case <-time.After(5 * time.Second):
-		}
+		// only the gateway's deadline may end the answer: a timer of the
+		// fake's could end it first under load and be read as a 502 (#4245)
+		<-r.Context().Done()
 	})
 	code, _, raw := postImages(t, s, "/v1/images/generations", "application/json", `{"model":"relay/gpt-image-2.5-sunburst","prompt":"a 4K city"}`)
 	if code != 504 || !strings.Contains(raw, "Relay began answering after 0s (200 OK) but hadn't sent all of its answer in 300ms: what came doesn't yet say whether the image was coming as a url or as b64_json; 21 B had come") {
@@ -170,9 +169,9 @@ func TestVendorThatStopsMidAnswerIsSaid(t *testing.T) {
 // b64_json body that took 380 s, and on another with a 416 B url. Which of
 // the two stalled is said, with how much had come.
 func TestStalledAnswerSaysUrlOrB64(t *testing.T) {
-	was := drawTimeout
-	drawTimeout = 500 * time.Millisecond
-	t.Cleanup(func() { drawTimeout = was })
+	was := drawUnit
+	drawUnit = 100 * time.Millisecond // the 5 minutes, 500ms
+	t.Cleanup(func() { drawUnit = was })
 	for _, c := range []struct {
 		name, sent, want string
 	}{
@@ -183,10 +182,8 @@ func TestStalledAnswerSaysUrlOrB64(t *testing.T) {
 			s, _ := relayed(t, func(w http.ResponseWriter, r *http.Request) {
 				io.WriteString(w, c.sent)
 				w.(http.Flusher).Flush()
-				select {
-				case <-r.Context().Done():
-				case <-time.After(5 * time.Second):
-				}
+				// only the gateway's deadline may end the answer (#4245)
+				<-r.Context().Done()
 			})
 			code, _, raw := postImages(t, s, "/v1/images/generations", "application/json", `{"model":"relay/gpt-image-2.5-sunburst","prompt":"a 2K city","size":"2048x1152"}`)
 			if code != 504 || !strings.Contains(raw, c.want) {

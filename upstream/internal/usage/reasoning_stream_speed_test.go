@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 func TestVisibleReasoningSpeed(t *testing.T) {
@@ -23,10 +24,10 @@ func TestVisibleReasoningSpeed(t *testing.T) {
 		{"held reasoning just below quarter", func() Record { r := visible; r.Flow = 3499; return r }(), 0, 0},
 		{"held reasoning", func() Record { r := visible; r.Flow = 1000; return r }(), 0, 0},
 		{"invalid count", func() Record { r := visible; r.Reasoning = 1600; return r }(), 0, 0},
-		{"below decode minimum", Record{Output: 10, Reasoning: 5, Millis: 1099, TTFT: 1000, FirstReasoning: 1000, Flow: 99}, 0, 0},
-		{"at decode minimum", Record{Output: 10, Reasoning: 5, Millis: 1100, TTFT: 1000, FirstReasoning: 1000, Flow: 100}, 10, 100},
-		{"above max speed", Record{Output: 1001, Reasoning: 5, Millis: 1100, TTFT: 1000, FirstReasoning: 1000, Flow: 100}, 0, 0},
-		{"at max speed", Record{Output: 1000, Reasoning: 5, Millis: 1100, TTFT: 1000, FirstReasoning: 1000, Flow: 100}, 1000, 100},
+		{"below decode minimum", Record{Output: 10, Reasoning: 5, Millis: 119, TTFT: 20, FirstReasoning: 20, Flow: 99}, 0, 0},
+		{"at decode minimum", Record{Output: 10, Reasoning: 5, Millis: 120, TTFT: 20, FirstReasoning: 20, Flow: 100}, 10, 100},
+		{"above max speed", Record{Output: 1001, Reasoning: 5, Millis: 120, TTFT: 20, FirstReasoning: 20, Flow: 100}, 0, 0},
+		{"at max speed", Record{Output: 1000, Reasoning: 5, Millis: 120, TTFT: 20, FirstReasoning: 20, Flow: 100}, 1000, 100},
 		{"redacted with no reasoning count", Record{Output: 120, Millis: 9000, TTFT: 1000, Flow: 7000, ReasoningHidden: true}, 0, 0},
 		{"late hidden think", Record{Output: 1500, Reasoning: 1400, Millis: 9000, TTFT: 8000, Flow: 900}, 0, 0},
 	} {
@@ -97,7 +98,7 @@ func TestPricedRowKeepsReasoningEvidence(t *testing.T) {
 			for i := 0; i < 80; i++ {
 				chunk.add(Row{Record: c.r}, "", int64(i), false)
 			}
-			b := newBlockPricer(nil, nil, func(Record) *catalog.Price { return nil })
+			b := newBlockPricer(provider.Renames{}, nil, func(Record) *catalog.Price { return nil })
 			defer b.release()
 			for _, from := range []*rowChunk{&chunk, chunk.pack()} {
 				priced := b.block(from)
@@ -139,7 +140,7 @@ func TestRowFlagsApart(t *testing.T) {
 				}
 				return &chunk
 			}
-			b := newBlockPricer(nil, nil, func(Record) *catalog.Price { return nil })
+			b := newBlockPricer(provider.Renames{}, nil, func(Record) *catalog.Price { return nil })
 			defer b.release()
 			raw := made()
 			for _, row := range []Row{raw.row(0), b.block(raw).row(0), b.block(made().pack()).row(0)} {
@@ -149,7 +150,7 @@ func TestRowFlagsApart(t *testing.T) {
 			}
 		})
 	}
-	bits := []uint16{1, 2, 4, 8, 16, 32, swapKnown, rowHandedOn, rowReasoningHidden, rowOwnCost, rowCompactionKnown, rowCompaction, rowCredits}
+	bits := []uint16{1, 2, 4, 8, 16, 32, swapKnown, rowHandedOn, rowReasoningHidden, rowOwnCost, rowCompactionKnown, rowCompaction, rowCredits, rowCacheUnknown}
 	var all uint16
 	for _, b := range bits {
 		if all&b != 0 {

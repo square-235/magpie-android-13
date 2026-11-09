@@ -1,6 +1,8 @@
 package gui
 
 import (
+	"cmp"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +28,9 @@ import (
 
 // A community plugin's own page in magpie's window (P4 of
 // docs/subsystems/plugin-runtime.md): package.json's magpie.page, shown in
-// a sandboxed frame (pluginpages.js). Its files are served under
+// a sandboxed frame (pluginpages.js), and its panels in magpie's own pages
+// (magpie.panels, P5), each in a frame of its own shut in the same way.
+// Their files are served under
 // pluginPagePrefix and a token only this run of magpie hands out, with a
 // policy that lets the page load nothing but its own files and reach
 // nothing over the network; it has no way to magpie's /api (apiFramed),
@@ -61,31 +67,76 @@ func pageToken(spec string) string {
 
 // pluginPage is a plugin's page, of a plugin that is on.
 type pluginPage struct {
-	Spec  string   `json:"spec"`
-	Name  string   `json:"name"`  // its package's
-	Key   string   `json:"key"`   // the window's page key
-	Title string   `json:"title"` // the page's, or the package's short name
-	URL   string   `json:"url"`   // the page, under pluginPagePrefix
-	Icon  string   `json:"icon,omitempty"`
-	Reads []string `json:"reads"` // what it may read, of plugin.PageReads
-	token string
-	spec  *plugin.PageSpec
+	Spec  string `json:"spec"`
+	Name  string `json:"name"`  // its package's
+	Key   string `json:"key"`   // the window's page key
+	Title string `json:"title"` // the page's, or the package's magpie.name or short name
+	// Titles are its title by the window's language (plugin.PageSpec)
+	Titles map[string]string `json:"titles,omitempty"`
+	URL    string            `json:"url"` // the page, under pluginPagePrefix
+	Icon   string            `json:"icon,omitempty"`
+	// Replaces is the built-in page whose place it takes: the first
+	// plugin's in plugins.json's order to ask for it
+	Replaces string   `json:"replaces,omitempty"`
+	Reads    []string `json:"reads"` // what it may read, of plugin.PageReads
+	// Actions are its items in magpie's menus (plugin.ActionSpec); each
+	// opens this page
+	Actions []pluginAction `json:"actions,omitempty"`
+	// Service is where a browser reaches the page's local service
+	// (plugin.ServiceSpec) through this server, relative to the page's own
+	// address: only on a page served to a browser (servePageService)
+	Service string `json:"service,omitempty"`
+	// KeepAlive keeps its frame while the reader is on another page
+	// (plugin.PageSpec); else the window lets it go after a while hidden
+	KeepAlive bool `json:"keepAlive,omitempty"`
+	token     string
+	dir       string
+	file      string // its HTML, relative to dir, with forward slashes
+	hosted    bool   // its plugin has a part for the host too (pageHost)
+	service   *plugin.ServiceSpec
+	options   map[string]any // its plugin's, as plugins.json keeps them
+}
+
+// pluginAction is an item a plugin's page adds to one of magpie's menus.
+type pluginAction struct {
+	ID     string            `json:"id"`
+	Menu   string            `json:"menu"`  // of plugin.ActionMenus
+	Title  string            `json:"title"` // its own, or its page's
+	Titles map[string]string `json:"titles,omitempty"`
+}
+
+// pluginPanel is a panel a plugin that is on adds to one of magpie's own
+// pages (plugin.PanelSlots).
+type pluginPanel struct {
+	Spec   string            `json:"spec"`
+	Name   string            `json:"name"`  // its package's
+	Key    string            `json:"key"`   // the panel's, among every plugin's
+	Slot   string            `json:"slot"`  // the page it is in
+	Title  string            `json:"title"` // the panel's, or the package's magpie.name or short name
+	Titles map[string]string `json:"titles,omitempty"`
+	URL    string            `json:"url"`   // the panel, under pluginPagePrefix
+	Reads  []string          `json:"reads"` // what it may read, of plugin.PageReads
+	token  string
+	dir    string
+	file   string
+	hosted bool
 }
 
 // pageKeyChars are what a window page's key can't have
 var pageKeyChars = strings.NewReplacer("@", "", "/", "-", ".", "-", "_", "-", " ", "-")
 
-// pluginPages are the pages of the plugins that are on, in plugins.json's
-// order. A plugin switched off has none: its files aren't served.
-func pluginPages() []pluginPage {
-	var out []pluginPage
+// windowParts are the pages and the panels of the plugins that are on, in
+// plugins.json's order. A plugin switched off has none: its files aren't
+// served.
+func windowParts() (pages []pluginPage, panels []pluginPanel) {
 	seen := map[string]bool{}
+	replaced := map[string]bool{}
 	for _, e := range plugin.Load().Plugins {
 		if e.Off {
 			continue
 		}
-		spec, _ := plugin.WindowPage(plugin.Target(e.Spec))
-		if spec == nil {
+		w, only := plugin.Window(plugin.Target(e.Spec))
+		if w == nil {
 			continue
 		}
 		name := plugin.PackageName(e.Spec)
@@ -100,31 +151,73 @@ func pluginPages() []pluginPage {
 			key = fmt.Sprintf("%s-%d", k, n)
 		}
 		seen[key] = true
-		tok := pageToken(e.Spec)
-		rel, _ := filepath.Rel(spec.Dir, spec.File)
-		p := pluginPage{Spec: e.Spec, Name: name, Key: key, Title: spec.Title, Reads: spec.Reads, token: tok, spec: spec,
-			URL: pluginPagePrefix + tok + "/" + filepath.ToSlash(rel)}
-		if p.Title == "" {
-			p.Title = plugin.ShortName(name)
+		reads := w.Reads
+		if reads == nil {
+			reads = []string{}
 		}
-		if p.Reads == nil {
-			p.Reads = []string{}
+		if spec := w.Page; spec != nil {
+			tok := pageToken(e.Spec)
+			rel, _ := filepath.Rel(spec.Dir, spec.File)
+			p := pluginPage{Spec: e.Spec, Name: name, Key: key, Title: spec.Title, Titles: spec.Titles, Reads: reads, token: tok, dir: spec.Dir,
+				URL: pluginPagePrefix + tok + "/" + filepath.ToSlash(rel), file: filepath.ToSlash(rel), hosted: !only, options: e.Options, KeepAlive: spec.KeepAlive}
+			if !only {
+				p.service = spec.Service
+			}
+			if p.Title == "" {
+				p.Title = cmp.Or(plugin.InstalledName(e.Spec), plugin.ShortName(name))
+			}
+			if spec.Icon != "" {
+				p.Icon = pluginPagePrefix + tok + "/" + spec.Icon
+			}
+			if r := spec.Replaces; r != "" && !replaced[r] {
+				replaced[r] = true
+				p.Replaces = r
+			}
+			for _, a := range w.Actions {
+				act := pluginAction{ID: a.ID, Menu: a.Menu, Title: a.Title, Titles: a.Titles}
+				// one that names no title is the page's own, in each language
+				if act.Title == "" {
+					act.Title, act.Titles = p.Title, p.Titles
+				}
+				p.Actions = append(p.Actions, act)
+			}
+			pages = append(pages, p)
 		}
-		if spec.Icon != "" {
-			p.Icon = pluginPagePrefix + tok + "/" + spec.Icon
+		for i, spec := range w.Panels {
+			tok := pageToken(e.Spec + "\x00panel\x00" + strconv.Itoa(i))
+			rel, _ := filepath.Rel(spec.Dir, spec.File)
+			p := pluginPanel{Spec: e.Spec, Name: name, Key: fmt.Sprintf("%s-%d", key, i), Slot: spec.Slot, Title: spec.Title, Titles: spec.Titles, Reads: reads,
+				token: tok, dir: spec.Dir, URL: pluginPagePrefix + tok + "/" + filepath.ToSlash(rel), file: filepath.ToSlash(rel), hosted: !only}
+			if p.Title == "" {
+				p.Title = cmp.Or(plugin.InstalledName(e.Spec), plugin.ShortName(name))
+			}
+			panels = append(panels, p)
 		}
-		out = append(out, p)
 	}
-	return out
+	return pages, panels
 }
 
-func pageOf(spec string) (pluginPage, bool) {
-	for _, p := range pluginPages() {
+// pluginPages are the pages of the plugins that are on.
+func pluginPages() []pluginPage {
+	pages, _ := windowParts()
+	return pages
+}
+
+// windowOf is a plugin that is on and adds a page or a panel to the
+// window: its package's name and the reads it declared.
+func windowOf(spec string) (name string, reads []string, ok bool) {
+	pages, panels := windowParts()
+	for _, p := range pages {
 		if p.Spec == spec {
-			return p, true
+			return p.Name, p.Reads, true
 		}
 	}
-	return pluginPage{}, false
+	for _, p := range panels {
+		if p.Spec == spec {
+			return p.Name, p.Reads, true
+		}
+	}
+	return "", nil, false
 }
 
 // pagePolicy is what a plugin's page may load and reach: its own files,
@@ -135,13 +228,7 @@ func pagePolicy(r *http.Request, tok string) string {
 	own := "'self'"
 	if r.Host != "" {
 		// the page's own folder: not the window's files, nor /api
-		own = r.Host + pluginPagePrefix + tok + "/"
-		// WebKit does not match a scheme-less host source under wails://.
-		// Only the native handler supplies this scheme; web keeps its
-		// relative source so HTTP, HTTPS and reverse proxies still work.
-		if scheme, _ := r.Context().Value(windowSchemeKey{}).(string); scheme != "" {
-			own = scheme + "://" + own
-		}
+		own = strings.Join(ownSources(r, pluginPagePrefix+tok+"/"), " ")
 	}
 	return strings.Join([]string{
 		"sandbox allow-scripts",
@@ -161,28 +248,111 @@ func pagePolicy(r *http.Request, tok string) string {
 	}, "; ")
 }
 
-// servePluginPage serves a file of a plugin's page, by its token.
-func servePluginPage(rw http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
-		return
+// ownSources are the sources, with their scheme, that name path on the
+// address r came to. A sandboxed frame's origin is opaque, and a source
+// with no scheme takes its scheme from that origin: iOS Safari (iOS 18.7)
+// matched the scheme-less host/path to nothing and never asked for a
+// page's scripts, so the page was broken at 10s (#4198, orinsid and
+// YangHonghang). Chromium, and the newer WebKit Playwright runs, take
+// the scheme from the URL loaded, which is why only the iPhone failed.
+//
+// The desktop window names its own transport (ownWindow): wails://, or
+// http:// on Windows (#2501). A browser's page (magpie web) can come over
+// http or https, directly or through a proxy that ends TLS before magpie
+// (nginx, Cloudflare), and nothing magpie trusts says which, so both are
+// named: the same host, port and folder either way, and an https page
+// can't load http:// files anyway (mixed content).
+func ownSources(r *http.Request, path string) []string {
+	if scheme, _ := r.Context().Value(windowSchemeKey{}).(string); scheme != "" {
+		return []string{scheme + "://" + r.Host + path}
 	}
+	return []string{"https://" + r.Host + path, "http://" + r.Host + path}
+}
+
+// pageHostWait is how long a page's HTML waits for its plugin's host,
+// short of the window's 10 seconds for the page to say hello
+// (pluginpages.js's HELLO_MS).
+var pageHostWait = 7 * time.Second
+
+// warmHost starts the plugin host if it isn't up; tests replace it.
+var warmHost = plugin.Warm
+
+// pageHost has the plugin host up for a page whose plugin has a part for
+// it too, waiting pageHostWait at most. Such a page can be the way into
+// a service that part runs: Magiczerowxy/magpie-chat's page sends its
+// frame to the chat server its host part starts. The host starts only on
+// a call, and every Restart (a plugin installed, updated or set, a Bun
+// update) stops it until the next one, so with no other plugin asking,
+// the page went to a server that wasn't there: Chromium shows its
+// connection error, and WebKit (the Mac's and Linux's window) leaves the
+// frame on the page's own "connecting…" for good. The host starts in the
+// background under its own two minutes, as every caller's does, so a
+// slow one isn't cut off when the page stops waiting.
+func pageHost(ctx context.Context) {
+	done := make(chan struct{})
+	warm := warmHost // read here: the start can outlive the page's wait
+	go func() {
+		defer close(done)
+		c, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := warm(c); err != nil {
+			log.Printf("plugin page: starting the plugin host: %v", err)
+		}
+	}()
+	t := time.NewTimer(pageHostWait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// servePluginPage serves a file of a plugin's page, by its token, and on
+// a page served to a browser (web) the page's local service too.
+func servePluginPage(rw http.ResponseWriter, r *http.Request, web bool) {
 	rest := strings.TrimPrefix(r.URL.Path, pluginPagePrefix)
 	tok, rel, ok := strings.Cut(rest, "/")
 	if !ok || len(tok) != 32 {
 		http.NotFound(rw, r)
 		return
 	}
+	// the page's or the panel's folder, by its token
+	dir, entry, hosted := "", "", false
 	var page *pluginPage
-	for _, p := range pluginPages() {
+	pages, panels := windowParts()
+	for i, p := range pages {
 		if hmac.Equal([]byte(p.token), []byte(tok)) {
-			page = &p
-			break
+			dir, entry, hosted = p.dir, p.file, p.hosted
+			page = &pages[i]
 		}
 	}
-	if page == nil {
+	// the service's paths are never a file of the page's
+	if strings.HasPrefix(rel, pageServicePath) {
+		if !web || page == nil || page.servicePort() == 0 {
+			http.NotFound(rw, r)
+			return
+		}
+		servePageService(rw, r, page, tok)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	for _, p := range panels {
+		if hmac.Equal([]byte(p.token), []byte(tok)) {
+			dir, entry, hosted = p.dir, p.file, p.hosted
+		}
+	}
+	if dir == "" {
 		http.NotFound(rw, r)
 		return
+	}
+	// the page itself, of a plugin with a part for the host: that part is
+	// up before the page is (pageHost)
+	if hosted && rel == entry {
+		pageHost(r.Context())
 	}
 	h := rw.Header()
 	h.Set("Content-Security-Policy", pagePolicy(r, tok))
@@ -197,7 +367,7 @@ func servePluginPage(rw http.ResponseWriter, r *http.Request) {
 		http.ServeContent(rw, r, "bridge.js", time.Time{}, strings.NewReader(string(pageBridgeJS)))
 		return
 	}
-	file, ok := page.spec.PageFile(rel)
+	file, ok := plugin.FileIn(dir, rel)
 	if !ok {
 		http.NotFound(rw, r)
 		return
@@ -237,17 +407,35 @@ func apiFramed(r *http.Request) bool {
 	return r.Header.Get("Sec-Fetch-Site") == "cross-site" && r.Header.Get("Sec-Fetch-Dest") != "document"
 }
 
-func pluginPageRoutes(mux *http.ServeMux) {
-	mux.HandleFunc(pluginPagePrefix, servePluginPage)
+// pluginPageRoutes are the routes of the plugins' pages and panels. web is
+// whether the window is a browser's (isWeb): only there is a page's local
+// service served through this server (servePageService), since only there
+// can 127.0.0.1 be another computer than this one.
+func pluginPageRoutes(mux *http.ServeMux, web bool) {
+	mux.HandleFunc(pluginPagePrefix, func(rw http.ResponseWriter, r *http.Request) { servePluginPage(rw, r, web) })
+	// a picture a page drew, to the clipboard or to Downloads (pageimage.go)
+	pageImageRoutes(mux)
 	mux.HandleFunc("GET /api/plugin-pages", func(rw http.ResponseWriter, r *http.Request) {
 		out := pluginPages()
 		if out == nil {
 			out = []pluginPage{}
 		}
+		for i := range out {
+			if web && out[i].servicePort() > 0 {
+				out[i].Service = strings.Repeat("../", strings.Count(out[i].file, "/")) + pageServicePath
+			}
+		}
 		writeJSON(rw, out)
 	})
-	// what a page asked the window to read: only what its package
-	// declared, and never a secret
+	mux.HandleFunc("GET /api/plugin-panels", func(rw http.ResponseWriter, r *http.Request) {
+		_, out := windowParts()
+		if out == nil {
+			out = []pluginPanel{}
+		}
+		writeJSON(rw, out)
+	})
+	// what a page or a panel asked the window to read: only what its
+	// package declared, and never a secret
 	mux.HandleFunc("POST /api/plugin-pages/read", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Spec   string         `json:"spec"`
@@ -258,15 +446,15 @@ func pluginPageRoutes(mux *http.ServeMux) {
 			fail(rw, err)
 			return
 		}
-		p, ok := pageOf(in.Spec)
+		name, reads, ok := windowOf(in.Spec)
 		if !ok {
 			fail(rw, errors.New("no plugin page "+in.Spec))
 			return
 		}
-		if !slices.Contains(p.Reads, in.Read) {
+		if !slices.Contains(reads, in.Read) {
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(http.StatusForbidden)
-			_ = json.NewEncoder(rw).Encode(map[string]string{"error": fmt.Sprintf("%s's package doesn't ask to read %q", p.Name, in.Read)})
+			_ = json.NewEncoder(rw).Encode(map[string]string{"error": fmt.Sprintf("%s's package doesn't ask to read %q", name, in.Read)})
 			return
 		}
 		v, err := pageRead(in.Read, in.Params)
@@ -276,7 +464,8 @@ func pluginPageRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(rw, v)
 	})
-	// a page's own options, as plugins.json keeps them: no other plugin's
+	// a page's or a panel's own options, as plugins.json keeps them: no
+	// other plugin's
 	mux.HandleFunc("POST /api/plugin-pages/options", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Spec    string          `json:"spec"`
@@ -286,7 +475,7 @@ func pluginPageRoutes(mux *http.ServeMux) {
 			fail(rw, err)
 			return
 		}
-		if _, ok := pageOf(in.Spec); !ok {
+		if _, _, ok := windowOf(in.Spec); !ok {
 			fail(rw, errors.New("no plugin page "+in.Spec))
 			return
 		}
@@ -352,6 +541,9 @@ func pageRead(read string, params map[string]any) (any, error) {
 			out = append(out, prov{ID: p.ID, Name: p.Name})
 		}
 		return out, nil
+	case "usage:day":
+		// one day, by agent and model (pageday.go)
+		return pageDay(params)
 	case "usage:summary":
 		period := usage.Today
 		if s, _ := params["period"].(string); s != "" {

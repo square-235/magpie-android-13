@@ -13,6 +13,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
+const { reach } = require("./reader.cjs");
 const { PNG } = require("playwright-core/lib/utilsBundle");
 
 const assets = path.resolve(__dirname, "../assets");
@@ -117,6 +118,7 @@ function server(lang, original = false, opened = []) {
 async function open(browser, lang, width, { original = false, touch = true, opened = [] } = {}) {
   const page = await browser.newPage({ viewport: { width, height: 900 }, hasTouch: touch, reducedMotion: "reduce", colorScheme: "light" });
   page.setDefaultTimeout(5000);
+  page.setDefaultNavigationTimeout(60000);
   await page.addInitScript(at => {
     const RealDate = Date;
     window.Date = class extends RealDate {
@@ -183,7 +185,10 @@ async function agentsFit(page) {
   for (const agent of agentRows) {
     const row = page.locator(`.row.agent[data-id="${agent.id}"]`);
     await row.waitFor();
-    // opened, its pickers in the row
+    // opened, its pickers in the row; the last row opened can push this one
+    // out of sight, so it is wheeled to once that one has slid open
+    await page.waitForFunction(() => !document.getAnimations().length);
+    await reach(page, row.locator(".ag-link"));
     await row.locator(".ag-link").click();
     await row.locator(".ag-exp").waitFor();
     const bad = await row.evaluate(row => {
@@ -201,11 +206,21 @@ async function agentsFit(page) {
     // Code's tiers do (#1397, fc5dfa3c): it opens their menu
     const keys = [...new Set(agent.fields.map((f) => agent.id === "omp" && OMP_ROLES.includes(f.label) ? "tiers" : f.key))];
     for (const key of keys) {
-      await row.locator(`.field[data-key="${key}"]`).click();
-      await page.locator("#pop").waitFor();
+      try {
+        const field = row.locator(`.field[data-key="${key}"]`);
+        await page.waitForFunction(() => !document.getAnimations().length);
+        await reach(page, field);
+        await field.click();
+        await page.locator("#pop").waitFor();
+      } catch (e) { throw new Error(`${agent.id} ${key} open: ${e.message.split("\n")[0]}`); }
       assert.equal(await page.locator("#pop").isVisible(), true, agent.name + ": " + key + " opens");
-      await page.locator('#nav [data-view="agents"]').click();
-      await page.locator("#pop").waitFor({ state: "hidden" });
+      // shut by a tap on the header's name: a picker opened low in a tall
+      // row (Codex's holds its own settings) can cover the phone's tab bar,
+      // and the page's lead line can be scrolled under the header's tabs
+      const brand = await page.locator("header.top .brand").boundingBox();
+      await page.mouse.click(brand.x + brand.width / 2, brand.y + brand.height / 2);
+      try { await page.locator("#pop").waitFor({ state: "hidden" }); }
+      catch (e) { throw new Error(`${agent.id} ${key} shut: ${e.message.split("\n")[0]}`); }
     }
   }
 }
@@ -354,6 +369,37 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
               // claude-lean-prompt-setting.test.cjs covers the row.
               if (view === "settings" && !baselineFile("app.js").includes("claudeLeanRow")) {
                 await current.locator("#claudeLeanRow").evaluate((r) => r.remove());
+                await current.waitForTimeout(350);
+              }
+              // Replies' Claude Code's interactive mode row is new: until
+              // BASE_REF has it, the page is compared with the row taken
+              // out; claude-tui-setting.test.cjs covers the row.
+              if (view === "settings" && !baselineFile("app.js").includes("claudeTuiRow")) {
+                await current.locator("#claudeTuiRow").evaluate((r) => r.remove());
+                await current.waitForTimeout(350);
+              }
+              // The Routing page's Settings › button is new: until BASE_REF
+              // has it, the page is compared with the button taken out;
+              // settings-places.test.cjs covers it.
+              if (view === "routing" && !baselineFile("plugins/routing/client.js").toString().includes("rtToSet")) {
+                await current.locator("#rtToSet").evaluate((b) => b.remove());
+                await current.waitForTimeout(350);
+              }
+              // A setting row's line wraps whole (arculongus on Discord):
+              // until BASE_REF has that, the page is compared with the lines
+              // held to one line as they were; settings-lines-wrap.test.cjs
+              // covers the wrapping.
+              if (view === "settings" && !baselineFile("app.css").includes("arculongus")) {
+                await current.addStyleTag({ content: ".row.pref .sub { white-space: nowrap; overflow-wrap: normal; }" });
+                await current.waitForTimeout(350);
+              }
+              // The sidebar's button sits ahead of the magpie in both layouts
+              // (ztf4080 on X), so the header beside the sidebar no longer
+              // starts with it: until BASE_REF has it, the button, the magpie
+              // and the header beside the sidebar are left out of both pictures and the rest
+              // compared as ever; side-toggle.test.cjs covers where they are.
+              if (!baselineFile("app.js").includes("append(btn, brand)")) {
+                for (const p of [current, original]) await p.addStyleTag({ content: "#sideToggle, .brand, body.side-nav .top { visibility: hidden !important; }" });
                 await current.waitForTimeout(350);
               }
               const before = PNG.sync.read(await still(original));

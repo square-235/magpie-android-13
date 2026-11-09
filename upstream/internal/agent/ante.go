@@ -81,7 +81,7 @@ func anteDir(at place) string {
 	if d := strings.TrimSpace(at.getenv("ANTE_HOME")); d != "" {
 		return d
 	}
-	return filepath.Join(at.home, ".ante")
+	return at.join(".ante")
 }
 
 func ante(home string) *Agent { return anteAt(here(home)) }
@@ -318,7 +318,7 @@ func anteAt(at place) *Agent {
 // (provider.Described). No other agent magpie wires declares this either.
 func anteProviderJSON(gw string) map[string]any {
 	ms := []map[string]any{}
-	for _, m := range magpieModels("ante") {
+	for _, m := range sharedModels("ante") {
 		ms = append(ms, anteModelJSON(m))
 	}
 	p := map[string]any{
@@ -339,7 +339,7 @@ func anteProviderJSON(gw string) map[string]any {
 // what it reasons at (anteProviderJSON says why), so its levels are left out
 // with the rest of its capabilities.
 func anteModelJSON(m catalog.Model) map[string]any {
-	group := strings.HasPrefix(m.ID, provider.GroupPrefix)
+	group := provider.IsGroupRef(m.ID)
 	e := map[string]any{"id": m.ID}
 	if m.Name != "" && m.Name != m.ID {
 		e["display_name"] = m.Name

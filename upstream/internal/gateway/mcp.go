@@ -34,6 +34,32 @@ var mcpHop = map[string]bool{
 	"Transfer-Encoding": true, "Upgrade": true, "Content-Length": true, "Accept-Encoding": true,
 }
 
+// RunMCP serves /mcp/run/<server>: a server magpie runs by its command,
+// for an agent on this computer given it that way (library's ServeRun);
+// nil until the library sets it.
+var RunMCP func(w http.ResponseWriter, r *http.Request, name string)
+
+// runMCP is RunMCP, for this computer's agents alone: it starts a command
+// the user gave their agents, and no other machine, and no web page (one
+// posting a form, or of a name pointed at 127.0.0.1), may have it started.
+func runMCP(w http.ResponseWriter, r *http.Request) {
+	if !local(r) || r.Header.Get("Origin") != "" || !loopbackHost(r.Host) {
+		http.Error(w, "magpie runs the Library's MCP servers for the agents on this computer alone", http.StatusForbidden)
+		return
+	}
+	if RunMCP == nil {
+		http.Error(w, "magpie runs no MCP server here", http.StatusNotFound)
+		return
+	}
+	// a gateway key held to some MCP servers or tools (access.Key.MCP)
+	w, r, done, ok := mcpKeyGuard(w, r, r.PathValue("name"))
+	if !ok {
+		return
+	}
+	defer done()
+	RunMCP(w, r, r.PathValue("name"))
+}
+
 // mcpProxy is /mcp/<server>: a remote MCP server magpie signed in to once,
 // for every agent the Library gives it to (#615). The agent speaks to it as
 // to the server itself (streamable HTTP: a POST answered with JSON or an
@@ -54,6 +80,12 @@ func (s *Server) mcpProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "magpie lends its MCP sign-ins to agents, not to web pages", http.StatusForbidden)
 		return
 	}
+	// a gateway key held to some MCP servers or tools (access.Key.MCP)
+	w, r, done, held := mcpKeyGuard(w, r, name)
+	if !held {
+		return
+	}
+	defer done()
 	rec, ok := mcpauth.Get(name)
 	if !ok {
 		http.Error(w, "magpie isn't signed in to an MCP server called "+name+": sign in to it in magpie's Library", http.StatusNotFound)
@@ -87,7 +119,8 @@ func (s *Server) mcpProxy(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		for k, v := range r.Header {
-			if mcpHop[http.CanonicalHeaderKey(k)] {
+			// nor what a proxy in front of magpie says of the caller
+			if mcpHop[http.CanonicalHeaderKey(k)] || proxyIdentity(k) {
 				continue
 			}
 			// the gateway's own key, which the caller check put there

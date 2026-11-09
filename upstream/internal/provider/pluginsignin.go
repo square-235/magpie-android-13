@@ -77,7 +77,7 @@ var pluginRunsCLI = map[string]bool{"grok": true}
 // through and this machine lacks: a moved built-in's, or one in
 // pluginRunsCLI.
 func pluginCLI(id string) (agentCLI, bool) {
-	if Moved(PluginID(id)) {
+	if PluginServes(PluginID(id)) {
 		return missingCLI(PluginID(id))
 	}
 	if pluginRunsCLI[id] {
@@ -132,7 +132,7 @@ func (s *signInFlow) pluginBegin(id string, method int, inputs map[string]string
 		return nil
 	}
 	s.st.State, s.st.Installing = "waiting", ""
-	s.st.URL, s.st.Instructions, s.st.Code = a.URL, a.Instructions, codeIn(a.Instructions)
+	s.st.URL, s.st.Instructions, s.st.Code, s.st.Opened = a.URL, a.Instructions, codeIn(a.Instructions), a.Opened
 	s.stop = stop
 	if a.Method == "code" {
 		s.st.PasteCode, s.plugin = true, a.Session
@@ -214,8 +214,19 @@ func (s *signInFlow) pluginDone(saved plugin.Saved, err error) {
 // method does, beside the accounts signed in already; it gives the
 // provider's magpie id.
 func PluginAPIKey(ctx context.Context, id string, method int, inputs map[string]string, key string) (string, error) {
+	// with subscription accounts off, a key is refused as a browser
+	// sign-in is (StartPluginSignInWith), but for a public plugin's: one
+	// saved would be signed in and listed nowhere
+	if settings.AccountDiscoveryOff() {
+		if pp, ok := PluginOf(PluginID(id)); !ok || !publicPlugin(pp) {
+			return "", errAccountDiscoveryOff
+		}
+	}
 	if strings.TrimSpace(key) == "" {
-		return "", errors.New("enter the key")
+		pp, ok := PluginOf(PluginID(id))
+		if !ok || method < 0 || method >= len(pp.Methods) || pp.Methods[method].Type != "api" || !pp.Methods[method].Keyless {
+			return "", errors.New("enter the key")
+		}
 	}
 	// through the proxy the provider's requests go through (#1663)
 	saved, err := plugin.APIKey(Via(ctx, PluginID(id)), id, method, inputs, strings.TrimSpace(key), plugin.NewAccount)
@@ -252,7 +263,7 @@ func pluginUsing(saved plugin.Saved, user string) bool {
 func pluginUser(saved plugin.Saved) string {
 	for _, pp := range plugin.Cached() {
 		if pp.ID == saved.Provider {
-			return pluginLabels(pp)[saved.Account]
+			return pluginNames(pp)[saved.Account]
 		}
 	}
 	return ""

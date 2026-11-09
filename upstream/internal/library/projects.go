@@ -37,6 +37,10 @@ type Project struct {
 	// Wrote are, by the project's file (.mcp.json), the servers magpie
 	// wrote in it, the only entries it ever takes out
 	Wrote map[string][]string `json:"wrote,omitempty"`
+	// Startup are, by the project's file, the startup timeout magpie
+	// wrote in each server's entry there (Codex's startup_timeout_sec):
+	// one other than this is the user's
+	Startup map[string]map[string]float64 `json:"startup,omitempty"`
 	// MadeFiles are the files magpie made to write servers in, listed in
 	// the .gitignore and taken away again once nothing's left in them
 	MadeFiles []string `json:"madeFiles,omitempty"`
@@ -53,9 +57,16 @@ type Project struct {
 // (getProjectSkillsDir, @qoder-ai/qodercli 1.1.69, whose .agents/skills
 // a setting can turn off), CodeBuddy Code .codebuddy/skills
 // (getProjectSkillsDir, @tencent-ai/codebuddy-code 2.164.0) and Command
-// Code .commandcode/skills (commandcode.ai/docs/skills). MiMo Code, Crush,
-// ZCode, DeepSeek Harness and oh-my-pi say of no project folder magpie can
-// rely on.
+// Code .commandcode/skills (commandcode.ai/docs/skills). DeepSeek Harness
+// reads <projectRoot>/.dsh/skills and <projectRoot>/.agents/skills, the
+// project root being the nearest folder up from where it runs with a .git
+// in it, else that folder itself (the provider's roots and findProjectRoot,
+// @deepseek-ai/dsh-skill-filesystem 0.2.1-rc.5, mounted by dsh-base's
+// cordis.patch.yml in every profile; the same since 0.0.1-rc.3), so it is
+// given the shared one. A project folder inside a repository but not at
+// its root isn't read by dsh: run there, it looks in the repository's
+// root (#5172). MiMo Code, Crush,
+// ZCode and oh-my-pi say of no project folder magpie can rely on.
 var projectSkillsDirs = map[string]string{
 	"claude":      ".claude/skills",
 	"codex":       ".agents/skills",
@@ -70,6 +81,7 @@ var projectSkillsDirs = map[string]string{
 	"grok":        ".agents/skills",
 	"droid":       ".agents/skills",
 	"cline":       ".agents/skills",
+	"dsh":         ".agents/skills",
 	"qoder":       ".qoder/skills",
 	"qoder-cn":    ".qoder/skills",
 	"codebuddy":   ".codebuddy/skills",
@@ -386,6 +398,16 @@ func RemoveProject(dir string, keep bool) (*Result, error) {
 			return fmt.Errorf("no project %s", dir)
 		}
 		if keep {
+			l.Projects = slices.DeleteFunc(l.Projects, func(x *Project) bool { return x == p })
+			return nil
+		}
+		// a folder that's gone has nothing of magpie's on disk to take
+		// back: the records of what it placed and wrote go with the
+		// entry, as a skill's do when its folder is gone already (#3510).
+		// A folder that couldn't be looked at (no permission, a drive
+		// that answers with an error) isn't known to be gone: its records
+		// stay, and the removal goes as before.
+		if fi, err := os.Stat(p.Dir); errors.Is(err, os.ErrNotExist) || err == nil && !fi.IsDir() {
 			l.Projects = slices.DeleteFunc(l.Projects, func(x *Project) bool { return x == p })
 			return nil
 		}
