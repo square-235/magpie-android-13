@@ -23,7 +23,7 @@ Termux 那套路径），外面套一层很小的安卓壳子：一个前台服�
 | `upstream/` | magpie 上游源码，完全没有改动；当前版本记录在 `UPSTREAM_VERSION` |
 | `android/` | 安卓工程，壳子代码在 `app/src/main/java/com/magpie/android/` |
 | `scripts/` | 构建脚本：`build-magpie-android.*` 编译网关，`build-apk.*` 打 APK；`.sh` 另含上游同步和兼容检查 |
-| `.github/workflows/` | GitHub Actions：PR 构建、自动发版、每周上游同步 |
+| `.github/workflows/` | GitHub Actions：PR 校验、自动发版、每天上游同步 |
 
 ## 需要什么
 
@@ -202,7 +202,7 @@ magpie 优先用它，所以不需要改上游代码。
 **想只编一个架构、或者加 32 位** — `-Abis` 支持 `arm64-v8a`、`armeabi-v7a`、`x86_64`、
 `x86`，改完记得同步 `app/build.gradle.kts` 里的 `abiFilters`。
 
-**换上游新版 magpie** — 平时交给每周的 `upstream-sync` workflow 自动做；本地也可以手动：
+**换上游新版 magpie** — 平时交给每天的 `upstream-sync` workflow 自动做；本地也可以手动：
 
 ```bash
 ./scripts/sync-upstream.sh                 # 拉最新 release
@@ -221,13 +221,14 @@ magpie 优先用它，所以不需要改上游代码。
 
 | 文件 | 触发 | 做什么 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | PR、push `master`、手动 | 调用可复用的 `build.yml`；PR 构建 debug，`master` push 构建 release 变体，**只验证，不发 Release** |
+| `.github/workflows/ci.yml` | PR、push `master`、手动 | **只做静态校验**：上游兼容性 + 版本接线；不构建 APK，不发 Release |
 | `.github/workflows/release.yml` | 由 `upstream-sync` 成功后调用、手动 | 构建 release APK 并创建 GitHub Release |
-| `.github/workflows/upstream-sync.yml` | 每周一 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并并发版，失败发通知 |
+| `.github/workflows/upstream-sync.yml` | 每天 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并并发版，失败发通知 |
 
-构建全部在 GitHub 的 `ubuntu-latest` 上跑，本机不参与：JDK 21、Go（版本读
-`upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，Gradle 用仓库自带的
-wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact 形式上传。
+真正的 APK 构建只在上游同步分支和 Release 里跑，在 GitHub 的 `ubuntu-latest` 上完成：
+JDK 21、Go（版本读 `upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，
+Gradle 用仓库自带的 wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact
+形式上传。`ci.yml` 不再占用构建时间。
 
 **版本规则**
 
@@ -242,7 +243,7 @@ wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact 形式
 | 网关 `--version` | `0.1.3532` |
 | APK 文件名 | `magpie-android-0.1.3532-arm64-v8a.apk` |
 
-CI、PR 构建、上游同步分支构建和最终 Release 都从同一个 `UPSTREAM_VERSION` 取值，不再
+CI 校验、上游同步分支构建和最终 Release 都从同一个 `UPSTREAM_VERSION` 取值，不再
 写死 `1.0`，也不再用日期或 run number 当版本号。`versionCode` 只取前三段数字，后缀
 （如 `-beta`）只保留在 `versionName` / tag 中。
 
@@ -257,11 +258,11 @@ CI、PR 构建、上游同步分支构建和最终 Release 都从同一个 `UPST
 7. 任一环节失败（含发版失败）：分支保留，自动开/更新带 `upstream-sync-failed` 标签的
    issue，并 @ 仓库 owner
 
-定时任务统一是 **7 天一次**；GitHub 的 cron 可能因负载延迟几分钟到几十分钟。
+定时任务统一是 **1 天一次**（每天 03:17 UTC）；GitHub 的 cron 可能因负载延迟几分钟到几十分钟。
 
 **发版规则**
 
-- push `master`：只构建和校验，**不创建 Release**
+- push `master`：只做静态校验，**不构建、不创建 Release**
 - `upstream-sync` 成功合并后：自动创建 `v<上游版本>` 的 Release，例如 `v0.1.3532`
 - 如果该 tag 的 Release 已存在，会覆盖上传 APK 和 `.sha256`，不再静默跳过
 - 也可以在 Actions 里手动跑 `release` workflow 发一次版（取消 `release` 复选框则只构建）

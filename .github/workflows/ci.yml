@@ -9,8 +9,8 @@ on:
       - master
     # upstream-sync creates a PR after it already built the same branch, then
     # merges and deletes that branch immediately. Letting the PR trigger a
-    # second build only produces a startup failure once the branch is gone.
-    # A PR that changes Android/scripts still runs the normal CI.
+    # second run only produces a startup failure once the branch is gone.
+    # A PR that changes Android/scripts still runs the normal validation.
     paths-ignore:
       - "upstream/**"
       - "UPSTREAM_VERSION"
@@ -24,11 +24,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build
-    uses: ./.github/workflows/build.yml
-    with:
-      abis: arm64-v8a
-      # master pushes validate the release variant too; PRs use debug for speed.
-      release: ${{ github.event_name == 'push' }}
-      version: auto
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Check upstream compatibility
+        run: bash scripts/check-upstream-compat.sh
+
+      - name: Check version wiring
+        run: |
+          set -euo pipefail
+          tag="$(sed -n 's/^tag=//p' UPSTREAM_VERSION | head -n 1)"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "UPSTREAM_VERSION tag is not vX.Y.Z: $tag" >&2
+            exit 1
+          fi
+          grep -q 'MAGPIE_VERSION_NAME' android/app/build.gradle.kts
+          grep -q 'MAGPIE_VERSION_CODE' android/app/build.gradle.kts
+          echo "version wiring for $tag is present"

@@ -2,8 +2,8 @@ name: upstream-sync
 
 on:
   schedule:
-    # Every 7 days: Mondays 03:17 UTC.
-    - cron: "17 3 * * 1"
+    # Every day at 03:17 UTC.
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
