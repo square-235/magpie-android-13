@@ -279,11 +279,21 @@ jobs:
             echo "apksigner not found under $SDK/build-tools" >&2
             exit 1
           fi
-          CERT="$("$APKSIGNER" verify --print-certs "dist/$APK_NAME" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          if [[ -z "$CERT" ]]; then
-            echo "apksigner could not read the signing certificate" >&2
+          "$APKSIGNER" --version || true
+          # Parse defensively: the digest line varies between build-tools
+          # versions, and an anchored match produced an empty value for a
+          # correctly signed APK. The raw output also lands in the log.
+          if ! SIGNER_OUT="$("$APKSIGNER" verify --print-certs "dist/$APK_NAME" 2>&1)"; then
+            printf '%s\n' "$SIGNER_OUT" >&2
+            echo "apksigner verify failed" >&2
             exit 1
+          fi
+          printf '%s\n' "$SIGNER_OUT"
+          CERT="$(printf '%s\n' "$SIGNER_OUT" \
+            | sed -n 's/.*SHA-256 digest: *//p' \
+            | head -n 1 | tr -d '[:space:]')"
+          if [[ -z "$CERT" ]]; then
+            echo "warning: apksigner printed no SHA-256 digest" >&2
           fi
           echo "certificate=$CERT" >> "$GITHUB_OUTPUT"
           echo "name=$APK_NAME" >> "$GITHUB_OUTPUT"
