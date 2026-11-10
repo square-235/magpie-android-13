@@ -229,6 +229,23 @@ magpie 优先用它，所以不需要改上游代码。
 `upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，Gradle 用仓库自带的
 wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact 形式上传。
 
+**版本规则**
+
+版本唯一来源是 `UPSTREAM_VERSION` 里的 `tag=`，例如 `v0.1.3532`。`v` 只是 tag 的符号
+前缀，不进入数值版本字段：
+
+| 位置 | 值 |
+| --- | --- |
+| Release tag | `v0.1.3532` |
+| APK `versionName` | `0.1.3532` |
+| APK `versionCode` | `major * 10000000 + minor * 1000000 + patch`，即 `1003532` |
+| 网关 `--version` | `0.1.3532` |
+| APK 文件名 | `magpie-android-0.1.3532-arm64-v8a.apk` |
+
+CI、PR 构建、上游同步分支构建和最终 Release 都从同一个 `UPSTREAM_VERSION` 取值，不再
+写死 `1.0`，也不再用日期或 run number 当版本号。`versionCode` 只取前三段数字，后缀
+（如 `-beta`）只保留在 `versionName` / tag 中。
+
 **上游同步的流程**
 
 1. 查询 `yetone/magpie` 最新 release，和 `UPSTREAM_VERSION` 比较
@@ -245,9 +262,10 @@ wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact 形式
 **发版规则**
 
 - push `master`：只构建和校验，**不创建 Release**
-- `upstream-sync` 成功合并后：自动创建 `vYYYYMMDD-<run_number>` 的 Release
+- `upstream-sync` 成功合并后：自动创建 `v<上游版本>` 的 Release，例如 `v0.1.3532`
+- 如果该 tag 的 Release 已存在，会覆盖上传 APK 和 `.sha256`，不再静默跳过
 - 也可以在 Actions 里手动跑 `release` workflow 发一次版（取消 `release` 复选框则只构建）
-- 资产里是 `magpie-android-<version>-arm64-v8a.apk` 和同名 `.sha256`
+- 资产里是 `magpie-android-<version>-arm64-v8a.apk`（version 不含 `v`）和同名 `.sha256`
 - 目前仍是 **debug key 签名**，和 `build-apk.sh --release` 的行为一致；要正式签名，得在
   Gradle 里换 signingConfig，再加 keystore secrets
 

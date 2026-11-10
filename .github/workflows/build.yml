@@ -19,10 +19,10 @@ on:
         type: boolean
         default: false
       version:
-        description: Version stamped into the gateway.
+        description: Version to build; "auto" reads the tag from UPSTREAM_VERSION.
         required: false
         type: string
-        default: android-port
+        default: auto
       upload_artifact:
         description: Upload the APK as a workflow artifact.
         required: false
@@ -33,8 +33,11 @@ on:
         description: File name of the packaged APK.
         value: ${{ jobs.build.outputs.apk_name }}
       version:
-        description: Version the gateway was stamped with.
+        description: Numeric version the gateway and APK were stamped with.
         value: ${{ jobs.build.outputs.version }}
+      tag:
+        description: Tag form of the version, with the leading v.
+        value: ${{ jobs.build.outputs.tag }}
       sha:
         description: Commit the APK was built from.
         value: ${{ jobs.build.outputs.sha }}
@@ -49,7 +52,8 @@ jobs:
     timeout-minutes: 60
     outputs:
       apk_name: ${{ steps.package.outputs.name }}
-      version: ${{ steps.package.outputs.version }}
+      version: ${{ steps.version.outputs.numeric }}
+      tag: ${{ steps.version.outputs.tag }}
       sha: ${{ steps.package.outputs.sha }}
     steps:
       - name: Check out
@@ -109,9 +113,37 @@ jobs:
       - name: Check upstream compatibility
         run: bash scripts/check-upstream-compat.sh
 
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          raw="${{ inputs.version }}"
+          if [[ -z "$raw" || "$raw" == "auto" ]]; then
+            raw="$(sed -n 's/^tag=//p' UPSTREAM_VERSION 2>/dev/null | head -n 1)"
+          fi
+          if [[ -z "$raw" ]]; then
+            echo "no version: UPSTREAM_VERSION has no tag" >&2
+            exit 1
+          fi
+          numeric="${raw#v}"
+          tag="v${numeric}"
+          code="$(python3 -c 'import re,sys; m=re.match(r"^(\d+)\.(\d+)\.(\d+)", sys.argv[1]); a,b,c=map(int,m.groups()) if m else (0,0,1); print(min(a*10000000+b*1000000+c,2000000000))' "$numeric")"
+          echo "numeric=$numeric" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Version"
+            echo ""
+            echo "- Tag: \`$tag\`"
+            echo "- versionName: \`$numeric\`"
+            echo "- versionCode: \`$code\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build APK
         env:
           GOPROXY: https://proxy.golang.org,direct
+          MAGPIE_VERSION_NAME: ${{ steps.version.outputs.numeric }}
+          MAGPIE_VERSION_CODE: ${{ steps.version.outputs.code }}
         run: |
           set -euo pipefail
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
@@ -122,7 +154,7 @@ jobs:
             echo "NDK r28c is missing at $ANDROID_NDK_HOME" >&2
             exit 1
           fi
-          args=(--abis "${{ inputs.abis }}" --version "${{ inputs.version }}")
+          args=(--abis "${{ inputs.abis }}" --version "${{ steps.version.outputs.numeric }}")
           if [[ "${{ inputs.release }}" == "true" ]]; then
             args+=(--release)
           fi
@@ -168,7 +200,7 @@ jobs:
             done
           done
 
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ steps.version.outputs.numeric }}"
           SAFE_VERSION="$(printf '%s' "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')"
           ABI_LABEL="$(printf '%s' "${{ inputs.abis }}" | tr ' ' '_')"
           APK_NAME="magpie-android-${SAFE_VERSION}-${ABI_LABEL}.apk"

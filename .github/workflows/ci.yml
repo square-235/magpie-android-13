@@ -24,4 +24,4 @@ jobs:
       abis: arm64-v8a
       # master pushes validate the release variant too; PRs use debug for speed.
       release: ${{ github.event_name == 'push' }}
-      version: ci-${{ github.run_number }}
+      version: auto

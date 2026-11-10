@@ -21,13 +21,14 @@ Options:
       --sdk PATH       Android SDK (default: ANDROID_HOME or local.properties)
       --ndk PATH       Android NDK (default: ANDROID_NDK_HOME or the SDK's ndk/)
       --api-level N    NDK API for the gateway; 0 = newest (default: minSdk)
-      --version STR    version stamped into the gateway (default: android-port)
+      --version STR    version stamped into the gateway (default: upstream tag without v)
       --goproxy URL    Go module proxy (default: GOPROXY or goproxy.cn)
       --no-verify      skip the aapt2/unzip checks
   -h, --help           this help
 
 Environment: ANDROID_HOME, ANDROID_SDK_ROOT, ANDROID_NDK_HOME,
-MAGPIE_ABIS, MAGPIE_API_LEVEL, MAGPIE_BUN_MIRROR, JAVA_HOME, GOPROXY,
+MAGPIE_ABIS, MAGPIE_API_LEVEL, MAGPIE_BUN_MIRROR, MAGPIE_VERSION_NAME,
+MAGPIE_VERSION_CODE, JAVA_HOME, GOPROXY,
 GRADLE_BIN (use a system gradle instead of ./gradlew).
 EOF
 }
@@ -38,7 +39,9 @@ NO_BUN=0
 NO_VERIFY=0
 ABIS="${MAGPIE_ABIS:-arm64-v8a x86_64}"
 API_LEVEL="${MAGPIE_API_LEVEL:-$(api_from_gradle)}"
-VERSION="android-port"
+UPSTREAM_TAG="$(sed -n 's/^tag=//p' "$ROOT/UPSTREAM_VERSION" 2>/dev/null | head -n 1 || true)"
+UPSTREAM_NUMERIC="${UPSTREAM_TAG#v}"
+VERSION="${UPSTREAM_NUMERIC:-android-port}"
 BUN_MIRROR="${MAGPIE_BUN_MIRROR:-}"
 SDK_ARG=""
 NDK_ARG=""
@@ -106,6 +109,18 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Keep Gradle's APK fields aligned with the gateway version. CI also sets these
+# explicitly, so an override from the environment always wins.
+if [[ -z "${MAGPIE_VERSION_NAME:-}" ]]; then
+  export MAGPIE_VERSION_NAME="$VERSION"
+fi
+if [[ -z "${MAGPIE_VERSION_CODE:-}" ]]; then
+  MAGPIE_VERSION_CODE="$(printf '%s\n' "$VERSION" | awk -F. '
+    { code = ($1 + 0) * 10000000 + ($2 + 0) * 1000000 + ($3 + 0); if (code < 1) code = 1; printf "%d", code }
+  ')"
+  export MAGPIE_VERSION_CODE
+fi
 
 ABIS="$(normalize_abis "$ABIS")"
 [[ -n "$ABIS" ]] || die "no ABI to build"

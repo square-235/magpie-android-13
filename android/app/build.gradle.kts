@@ -2,6 +2,33 @@ plugins {
     id("com.android.application")
 }
 
+// CI and scripts/build-apk.sh set these explicitly. Direct Gradle/Android
+// Studio builds fall back to the tag in UPSTREAM_VERSION so the APK never
+// silently reports a hard-coded 1.0. The tag keeps its leading "v"; Android's
+// numeric fields use the version without it.
+val upstreamVersion = rootProject.file("../UPSTREAM_VERSION")
+    .takeIf { it.isFile }
+    ?.readLines()
+    ?.firstOrNull { it.startsWith("tag=") }
+    ?.substringAfter("tag=")
+    ?.trim()
+    ?.removePrefix("v")
+    ?.takeIf { it.isNotEmpty() }
+val magpieVersionName = System.getenv("MAGPIE_VERSION_NAME")
+    ?.takeIf { it.isNotBlank() }
+    ?: upstreamVersion
+    ?: "1.0"
+val fallbackVersionCode = Regex("""^(\d+)\.(\d+)\.(\d+)""")
+    .find(magpieVersionName)
+    ?.groupValues
+    ?.drop(1)
+    ?.map { it.toInt() }
+    ?.let { (major, minor, patch) -> major * 10_000_000 + minor * 1_000_000 + patch }
+    ?: 1
+val magpieVersionCode = System.getenv("MAGPIE_VERSION_CODE")
+    ?.toIntOrNull()
+    ?: fallbackVersionCode
+
 android {
     namespace = "com.magpie.android"
     compileSdk = 36
@@ -13,8 +40,8 @@ android {
         // for a symbol an Android 13 device doesn't have.
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = magpieVersionCode
+        versionName = magpieVersionName
         // The Go gateway is built by scripts/build-magpie-android.ps1 into
         // src/main/jniLibs/<abi>/libmagpie.so; Gradle only packages it, the
         // NDK is used by that script and not by this build.
