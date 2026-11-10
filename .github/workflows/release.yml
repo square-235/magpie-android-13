@@ -52,6 +52,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # gh release create --generate-notes shells out to git; without a
+      # checkout this job is not a repository and fails with
+      # "fatal: not a git repository".
+      - name: Check out (for generated release notes)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          fetch-tags: true
+
       - name: Download APK
         uses: actions/download-artifact@v4
         with:
