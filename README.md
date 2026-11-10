@@ -15,6 +15,76 @@ Termux 那套路径），外面套一层很小的安卓壳子：一个前台服�
 （荣耀 RMO-AN00）上安装验证：网关、网页界面、前台服务和内置 Bun 都能正常运行。真机上
 如果遇到问题，先看菜单里的日志。
 
+## 安装和使用
+
+从 [Releases](https://github.com/square-235/magpie-android-13/releases) 下载
+`magpie-android-<版本>-arm64-v8a.apk`，安装即可
+
+打开 magpie 应用，它会自己把网关拉起来，界面就是 magpie 的网页：
+
+1. 顶部一行是状态：绿点 + 端口，右边 `⋮` 是菜单。
+2. 在网页里加好要用的供应商和账号，和桌面版完全一样。
+3. 菜单里 **复制网关地址** 会得到 `http://127.0.0.1:3425/v1`，把它填给手机上的 agent 当
+   base URL（Claude Code、Codex、Gemini CLI 这些在 Termux 或别的终端里跑的都能用）。
+4. 菜单里 **设置** 可以改端口、开局域网访问、开开机自启；改完点“保存并重启”立即生效。
+5. 菜单里 **查看日志** 是 magpie 自己的输出，出问题先看它。
+
+网关和网页界面是同一个进程。进程意外退出会自动重启（逐次退避），界面重连上之后也会
+自己把网页加载出来。
+
+## 后台运行(重要！！！不开启后台运行可能导致软件不会响应对话请求)
+
+网关跑在前台服务里，通知栏有一条常驻通知（带“打开 / 停止”按钮），这是 Android 允许应用
+长期在后台的正规方式。想在息屏后长时间稳定运行，建议在菜单里点一次 **忽略电池优化**；
+想开机自动起来，就在设置里打开 **开机自动启动**。部分国产 ROM 还会额外清后台，需要在系统
+的电池/自启动白名单里再放行一次。
+
+### 登录和外部链接
+
+插件登录（ZCode、Factory 之类）是网页用 `window.open(url, "_blank")` 打开厂商页面的。
+安卓 WebView 默认没有“新窗口”，这个请求会被直接丢掉，按钮看着像没反应。壳子处理了
+`onCreateWindow`：把新窗口的地址交给手机上的浏览器，magpie 自己的页面原地不动，登录完
+切回来就行。页面里其它离开 magpie 的链接（下载、厂商主页）也一样走浏览器。
+
+ZCode 的登录是**轮询式**的：浏览器里登录完，magpie 在后台问 Z.ai“好了没”，不需要本地
+回调端口，所以手机上这条路是通的。`ZCode app's sign-in` 那种要读桌面 ZCode 客户端凭据的
+方式在手机上自然没有东西可读，用 Z.ai / BigModel 或 API key 那几条即可。
+
+### 已知装不上的插件
+
+`zcode-provider` 不是给 magpie 用的 OpenCode 登录插件，而是一个要拉起 ZCode app-server 的
+pi 包。它在 Bun 1.4.2 的安卓版上解包依赖时会以 `signal: bad system call`（退出码 159）
+崩溃，这是 Bun 的安卓构建的问题，不是 magpie 或壳子的权限问题。插件页输入
+`zcode-provider` 会直接给出这条说明；其它社区插件不受影响。
+
+已经实测能装的：`@magpie-community/opencode-zen-free-auth`（免费访问，密钥填 `public`）、
+`@magpie-community/opencode-zcode-auth`、`@magpie-community/opencode-factory-auth`，以及
+Discover 列表里的其它社区插件。
+
+## 端口
+
+| 端口 | 用途 | 默认 |
+| --- | --- | --- |
+| 3425 | **网关**，agent 指向这里 | 应用默认，可在设置里改 |
+| 3430 | magpie 网页界面，**只绑本机**并带密钥 | 沿用上游默认 |
+
+3425 是 magpie 自己的默认端口，写在 `MagpiePrefs.java` 的 `DEFAULT_GATEWAY_PORT` 里，装好
+之后也能随时在设置里改（想用别的端口直接填）。传给 magpie 的是环境变量 `MAGPIE_ADDR`
+（`127.0.0.1:3425`，开局域网时是 `0.0.0.0:3425`），
+magpie 优先用它，所以不需要改上游代码。
+
+网页界面的密钥在应用首次启动时随机生成并保存（`MAGPIE_WEB_KEY`），WebView 每次都直接进
+得去，不用手动登录。想在电脑上看这个页面，用菜单里的 **用浏览器打开**。
+
+## 安全
+
+- 网页界面能看到、也能改所有账号密钥，所以它**始终只绑 127.0.0.1**，不受局域网开关影响。
+- 局域网开关打开后网关绑 `0.0.0.0`，此时**必须**在 magpie 的 Gateway 设置里配好网关密钥
+  （magpie 会拒绝没有密钥的请求）。别在公共 Wi-Fi 下开。
+- Android 16 的本地网络保护默认关闭。应用已声明 `ACCESS_LOCAL_NETWORK`，开启局域网访问时
+  会顺手申请一次，等 Android 17 强制要求时也能继续用。Android 13～15 上这个权限还不存在，
+  代码会跳过申请，局域网访问照旧。
+
 ## 本地构建
 
 ### 参考：在Archlinux下的构建依赖
@@ -43,6 +113,8 @@ Expand-Archive ndk.zip -DestinationPath $env:USERPROFILE\sdk
 “当前 NDK 支持的最高一档”，传 `-ApiLevel 0`。
 
 ### 构建
+
+Windows:
 
 ```powershell
 # 一条命令：先编两个架构的网关，再打 APK
@@ -108,76 +180,6 @@ scripts/build-magpie-android.sh          # 只编网关
 `.sh` 版本用同名长选项：`--no-bun`、`--bun-mirror`、`--abis`、`--skip-gateway`、
 `--release`；另有 `--sdk`、`--ndk`、`--api-level`、`--version`、`--no-verify`。
 
-## 安装和使用
-
-从 [Releases](https://github.com/square-235/magpie-android-13/releases) 下载
-`magpie-android-<版本>-arm64-v8a.apk`，安装即可
-
-打开 magpie 应用，它会自己把网关拉起来，界面就是 magpie 的网页：
-
-1. 顶部一行是状态：绿点 + 端口，右边 `⋮` 是菜单。
-2. 在网页里加好要用的供应商和账号，和桌面版完全一样。
-3. 菜单里 **复制网关地址** 会得到 `http://127.0.0.1:3425/v1`，把它填给手机上的 agent 当
-   base URL（Claude Code、Codex、Gemini CLI 这些在 Termux 或别的终端里跑的都能用）。
-4. 菜单里 **设置** 可以改端口、开局域网访问、开开机自启；改完点“保存并重启”立即生效。
-5. 菜单里 **查看日志** 是 magpie 自己的输出，出问题先看它。
-
-网关和网页界面是同一个进程。进程意外退出会自动重启（逐次退避），界面重连上之后也会
-自己把网页加载出来。
-
-### 登录和外部链接
-
-插件登录（ZCode、Factory 之类）是网页用 `window.open(url, "_blank")` 打开厂商页面的。
-安卓 WebView 默认没有“新窗口”，这个请求会被直接丢掉，按钮看着像没反应。壳子处理了
-`onCreateWindow`：把新窗口的地址交给手机上的浏览器，magpie 自己的页面原地不动，登录完
-切回来就行。页面里其它离开 magpie 的链接（下载、厂商主页）也一样走浏览器。
-
-ZCode 的登录是**轮询式**的：浏览器里登录完，magpie 在后台问 Z.ai“好了没”，不需要本地
-回调端口，所以手机上这条路是通的。`ZCode app's sign-in` 那种要读桌面 ZCode 客户端凭据的
-方式在手机上自然没有东西可读，用 Z.ai / BigModel 或 API key 那几条即可。
-
-### 已知装不上的插件
-
-`zcode-provider` 不是给 magpie 用的 OpenCode 登录插件，而是一个要拉起 ZCode app-server 的
-pi 包。它在 Bun 1.4.2 的安卓版上解包依赖时会以 `signal: bad system call`（退出码 159）
-崩溃，这是 Bun 的安卓构建的问题，不是 magpie 或壳子的权限问题。插件页输入
-`zcode-provider` 会直接给出这条说明；其它社区插件不受影响。
-
-已经实测能装的：`@magpie-community/opencode-zen-free-auth`（免费访问，密钥填 `public`）、
-`@magpie-community/opencode-zcode-auth`、`@magpie-community/opencode-factory-auth`，以及
-Discover 列表里的其它社区插件。
-
-## 端口
-
-| 端口 | 用途 | 默认 |
-| --- | --- | --- |
-| 3425 | **网关**，agent 指向这里 | 应用默认，可在设置里改 |
-| 3430 | magpie 网页界面，**只绑本机**并带密钥 | 沿用上游默认 |
-
-3425 是 magpie 自己的默认端口，写在 `MagpiePrefs.java` 的 `DEFAULT_GATEWAY_PORT` 里，装好
-之后也能随时在设置里改（想用别的端口直接填）。传给 magpie 的是环境变量 `MAGPIE_ADDR`
-（`127.0.0.1:3425`，开局域网时是 `0.0.0.0:3425`），
-magpie 优先用它，所以不需要改上游代码。
-
-网页界面的密钥在应用首次启动时随机生成并保存（`MAGPIE_WEB_KEY`），WebView 每次都直接进
-得去，不用手动登录。想在电脑上看这个页面，用菜单里的 **用浏览器打开**。
-
-## 安全
-
-- 网页界面能看到、也能改所有账号密钥，所以它**始终只绑 127.0.0.1**，不受局域网开关影响。
-- 局域网开关打开后网关绑 `0.0.0.0`，此时**必须**在 magpie 的 Gateway 设置里配好网关密钥
-  （magpie 会拒绝没有密钥的请求）。别在公共 Wi-Fi 下开。
-- Android 16 的本地网络保护默认关闭。应用已声明 `ACCESS_LOCAL_NETWORK`，开启局域网访问时
-  会顺手申请一次，等 Android 17 强制要求时也能继续用。Android 13～15 上这个权限还不存在，
-  代码会跳过申请，局域网访问照旧。
-
-## 后台运行
-
-网关跑在前台服务里，通知栏有一条常驻通知（带“打开 / 停止”按钮），这是 Android 允许应用
-长期在后台的正规方式。想在息屏后长时间稳定运行，建议在菜单里点一次 **忽略电池优化**；
-想开机自动起来，就在设置里打开 **开机自动启动**。部分国产 ROM 还会额外清后台，需要在系统
-的电池/自启动白名单里再放行一次。
-
 ## 不想打包 APK 的话
 
 手机上的 Termux 里也能直接跑 magpie（上游本来就支持）：
@@ -191,7 +193,6 @@ MAGPIE_ADDR=127.0.0.1:3425 ./build/magpie serve
 
 代价是要自己管前台进程和开机启动，Termux 一被杀网关就没了。打包成 APK 之后，网关有常驻
 通知、崩溃自启，网页界面也有地方点，日常用更省心。
-
 
 - 插件要用的 Bun（构建时放进来的）：`android/app/src/main/jniLibs/<abi>/libmagpiebun.so`
 
