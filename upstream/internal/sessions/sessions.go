@@ -22,7 +22,6 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -38,6 +37,7 @@ import (
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/dirent"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -520,7 +520,7 @@ type file struct {
 	key      string // agent:session id — a session may span files
 	path     string
 	size     int64
-	mod      time.Time
+	mod      modTime
 	main     bool // the session's own file, not a subagent's
 	readOnly bool
 	// cold: the WSL distro the file is in isn't running, and the file, as
@@ -528,6 +528,41 @@ type file struct {
 	cold bool
 	more *fileMore // nil for a file with none of it; shared by copies
 }
+
+// modTime is a file's modification time in unix nanoseconds, 0 for none:
+// a time.Time's 24 bytes made a file 96 bytes where it is now 80, and a
+// Sessions poll copies every session file's into several slices (#2278).
+type modTime int64
+
+func modOf(t time.Time) modTime {
+	if t.IsZero() {
+		return 0
+	}
+	return modTime(t.UnixNano())
+}
+
+// Time is s as os.Stat's ModTime has it, the zero time for none.
+func (s modTime) Time() time.Time {
+	if s == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, int64(s))
+}
+
+// UnixNano is Time().UnixNano(): what a parse kept of the time it was read at.
+func (s modTime) UnixNano() int64 {
+	if s == 0 {
+		return time.Time{}.UnixNano()
+	}
+	return int64(s)
+}
+
+func (s modTime) UnixMilli() int64      { return s.Time().UnixMilli() }
+func (s modTime) IsZero() bool          { return s == 0 }
+func (s modTime) After(t modTime) bool  { return s > t }
+func (s modTime) Before(t modTime) bool { return s < t }
+func (s modTime) Equal(t modTime) bool  { return s == t }
+func (s modTime) Compare(t modTime) int { return cmp.Compare(s, t) }
 
 // fileMore is what a file of some agents has besides.
 type fileMore struct {
@@ -609,7 +644,7 @@ func stat(f *file) bool {
 	if err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
-	f.size, f.mod = fi.Size(), fi.ModTime()
+	f.size, f.mod = fi.Size(), modOf(fi.ModTime())
 	return true
 }
 
@@ -648,12 +683,12 @@ func statFiles(files []file, follow bool) []file {
 				return
 			}
 			if s.Mode == 0 {
-				f.size, f.mod, ok[i] = s.Size, s.ModTime(), true
+				f.size, f.mod, ok[i] = s.Size, modOf(s.ModTime()), true
 				return
 			}
 		}
 		if fi, err := statOne(f.path, follow); err == nil && fi.Mode().IsRegular() {
-			f.size, f.mod, ok[i] = fi.Size(), fi.ModTime(), true
+			f.size, f.mod, ok[i] = fi.Size(), modOf(fi.ModTime()), true
 		}
 	})
 	for i, l := range listed {
@@ -963,7 +998,7 @@ func Dirs() []string {
 
 // rollout-2026-09-20T15-48-28-<thread id>[_<segment>].jsonl, and .jsonl.zst
 // once the Codex app's "compress local chat history" has packed an older one
-var rolloutName = regexp.MustCompile(`^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9A-Za-z-]+?)(?:_[0-9A-Za-z-]+)?\.jsonl(?:\.zst)?$`)
+var rolloutName = lazyre.New(`^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9A-Za-z-]+?)(?:_[0-9A-Za-z-]+)?\.jsonl(?:\.zst)?$`)
 
 // zstSuffix ends a rollout the Codex app has compressed.
 const zstSuffix = ".zst"
@@ -1087,15 +1122,18 @@ func codexFilesIn(dir string) []file {
 	}
 	// During compression, prefer the readable plain twin in the same
 	// directory: the new compressed file may not have its trailer yet.
-	plain := map[string]bool{}
+	// (a set kept from poll to poll: made new, it was ~0.4 MB of each, #2278)
+	plain := pathSet()
+	defer putPathSet(plain)
 	for _, f := range out {
 		if !strings.HasSuffix(f.path, zstSuffix) {
-			plain[f.path] = true
+			plain[f.path] = struct{}{}
 		}
 	}
 	kept := out[:0]
 	for _, f := range out {
-		if q, ok := strings.CutSuffix(f.path, zstSuffix); !ok || !plain[q] {
+		q, ok := strings.CutSuffix(f.path, zstSuffix)
+		if _, twin := plain[q]; !ok || !twin {
 			kept = append(kept, f)
 		}
 	}
@@ -1164,12 +1202,12 @@ func listedRollouts(root string) (out []file, ok bool) {
 				}
 				if len(seen) > 0 && filepath.Base(seen[0].path) == name {
 					f := seen[0]
-					f.size, f.mod = e.Size, e.ModTime()
+					f.size, f.mod = e.Size, modOf(e.ModTime())
 					out = append(out, f)
 					continue
 				}
 				if m := rolloutName.FindStringSubmatch(name); m != nil {
-					out = append(out, file{agent: "codex", key: "codex:" + m[1], path: filepath.Join(shown, name), main: true, size: e.Size, mod: e.ModTime()})
+					out = append(out, file{agent: "codex", key: "codex:" + m[1], path: filepath.Join(shown, name), main: true, size: e.Size, mod: modOf(e.ModTime())})
 					made = true
 				}
 			}
@@ -1840,8 +1878,8 @@ func listing(limit, made int) ([]Session, int, bool) {
 	groups := byKey(files, nil)
 	latest := make(map[string]time.Time, len(groups))
 	for _, f := range files {
-		if f.mod.After(latest[f.key]) {
-			latest[f.key] = f.mod
+		if f.mod.After(modOf(latest[f.key])) {
+			latest[f.key] = f.mod.Time()
 		}
 	}
 	keys := make([]string, 0, len(groups))
@@ -2043,7 +2081,7 @@ func assembleListed(fs []file, price func(string) *catalog.Price, codexTitle fun
 		return a.Model < b.Model
 	})
 	if s.Last.IsZero() {
-		s.Last = fs[0].mod
+		s.Last = fs[0].mod.Time()
 	}
 	if s.Title == "" && s.Tokens.zero() {
 		return s, false // nothing was said in it
@@ -2635,7 +2673,7 @@ func tsAt(b []byte, last bool) time.Time {
 	return t
 }
 
-var tag = regexp.MustCompile(`</?[A-Za-z][\w-]*[^<>]*>`)
+var tag = lazyre.New(`</?[A-Za-z][\w-]*[^<>]*>`)
 
 // untagged is a message the agent or a harness wrapped in tags, as words.
 func untagged(s string) string { return title(tag.ReplaceAllString(s, " ")) }
@@ -2676,7 +2714,7 @@ func titleCut(s string) (string, bool) {
 
 // ---- pricing ----------------------------------------------------------------
 
-var dated = regexp.MustCompile(`-\d{8}$`)
+var dated = lazyre.New(`-\d{8}$`)
 
 // priceOf prices a model as a session names it: one through magpie as
 // "<provider>/<model>" at the price the gateway counts it at — what the user
@@ -2748,8 +2786,8 @@ func makers(id string) []string {
 
 // ---- resuming ---------------------------------------------------------------
 
-var safeID = regexp.MustCompile(`^[0-9A-Za-z_-]+$`)
-var safeOmpProfile = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+var safeID = lazyre.New(`^[0-9A-Za-z_-]+$`)
+var safeOmpProfile = lazyre.New(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 // ResumeCommand is the shell line that picks a session up again in its
 // folder, or "" for an id that isn't plain.

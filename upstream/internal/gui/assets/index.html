@@ -63,6 +63,8 @@
     <span>magpie</span>
   </div>
   <h1 class="sr-only" id="pageTitle" data-t>Agents</h1>
+  <!-- back to the page a link into a setting came from (app.js jumpFrom) -->
+  <button type="button" class="icon nav-back" id="navBack" hidden data-tt style="--wails-draggable:no-drag"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M10 3.25 5.25 8 10 12.75" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   <div class="crumb" id="crumb" aria-hidden="true" hidden></div>
   <nav class="seg" id="nav" aria-label="Main navigation" data-ta style="--wails-draggable:no-drag">
     <span class="nav-gl" data-t>Work</span>
@@ -293,7 +295,7 @@
         <div class="who"><div class="name" data-t>Tray icon number</div><div class="sub" data-t>The first allowance's figure as magpie's tray icon, used or left as Allowance display has it, every one when pointing at it; off, magpie's icon</div></div>
         <div id="trayNumberSegs"></div>
       </div>
-      <div class="row pref">
+      <div class="row pref" id="quotaLeftRow">
         <div class="who"><div class="name" data-t>Allowance display</div><div class="sub" data-t>How much of each window is used, or how much is left, on the Usage page, the panel and the menu bar</div></div>
         <div id="quotaLeftSegs"></div>
       </div>
@@ -337,6 +339,10 @@
         <div class="who"><div class="name" data-t>Proxy</div><div class="sub" id="proxySub"></div></div>
         <div id="proxySegs" class="proxy-segs"></div>
       </div>
+      <div class="row pref" id="pluginProxyRow">
+        <div class="who"><div class="name" data-t>Plugin downloads</div><div class="sub" id="pluginProxySub"></div></div>
+        <div id="pluginProxySegs" class="proxy-segs"></div>
+      </div>
     </div>
     <div class="row-head"><span class="label">GitHub</span></div>
     <div class="list prefs" id="githubList"></div>
@@ -351,6 +357,7 @@
     <div class="row-head"><span class="label" data-t>Local network</span></div>
     <div class="list prefs" id="lanList"></div>
     <div class="list prefs" id="allowList"></div>
+    <div class="list prefs" id="mtlsList"></div>
     <div class="row-head"><span class="label" data-t>Web pages</span></div>
     <div class="list prefs" id="corsList"></div>
     <div class="row-head" id="webPageHead"><span class="label" data-t>Browser access</span></div>

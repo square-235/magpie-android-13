@@ -104,6 +104,9 @@ function renderGatewayOwn() {
   const box = $("#gwOwn");
   if (!box) return; // the page isn't drawn (yet, or any more)
   const f = prefs?.builtins?.find((x) => x.id === "gateway");
+  // a section of its own, not a second card against the calls' (the
+  // owner, 11-09)
+  $("#gwOwnHead").hidden = !f;
   if (!f) {
     box.replaceChildren();
     if (!prefs) loadSettings().then(() => view === "gateway" && providers && box.isConnected && renderGatewayView(), () => {});
@@ -322,7 +325,7 @@ function renderGatewayLan() {
     // (the host's Docker bridge address), then one on the internet (an
     // ISP's static one); a name said once for the lines it heads
     const said = [addrWho(g, shown, others)], rest = urls.filter((u) => u !== shown);
-    const order = [t("Local network"), t("Public address"), t("Other containers on this host"), t("On the internet")];
+    const order = [t("Local network"), t("Public address"), t("LazyCat client"), t("Other containers on this host"), t("On the internet")];
     rest.map((u) => [addrWho(g, u, others), u]).sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
       .forEach(([who, u]) => { line(said.at(-1) === who ? "" : who, u); said.push(who); });
     if (!urls.length) list.append(el("div", "gw-url-none", t("This computer has no local network address right now")));
@@ -834,7 +837,7 @@ magpie.plugin("gateway", (ctx) => {
   <div id="gatewayLan"></div>
 </div>
 <section id="gatewayKeysBlock" hidden>
-  <div class="row-head"><span class="label" data-t>Gateway keys</span><span class="grow"></span><button class="text" id="addGatewayKey" data-t>Add gateway key</button></div>
+  <div class="row-head"><span class="label" data-t>Gateway keys</span><span class="grow"></span><button class="text" id="accountGroups" data-t>Account groups</button><button class="text" id="addGatewayKey" data-t>Add gateway key</button></div>
   <p class="usage-note" data-t>Create a gateway key for each client. Usage is counted separately for each key.</p>
   <section id="gatewayKeys"></section>
 </section>
@@ -845,6 +848,7 @@ magpie.plugin("gateway", (ctx) => {
 <div class="list" id="gwModels"></div>
 <div class="row-head"><span class="label" data-t>Recent calls</span><span class="grow"></span><span class="note" id="callsNote"></span></div>
 <div class="list activity" id="activity"></div>
+<div class="row-head" id="gwOwnHead" hidden><span class="label" data-t>Settings</span></div>
 <div class="list prefs gw-own" id="gwOwn"></div>
 `,
     mount() {

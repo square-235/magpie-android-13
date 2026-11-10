@@ -192,12 +192,19 @@ var cliForRoute = map[string]string{
 	"GET /api/davsync":                     "magpie webdav",
 	"POST /api/backup/export":              "magpie backup",
 	"POST /api/backup/import":              "magpie restore",
+	"GET /api/datafolder":                  "magpie data",
+	"POST /api/datafolder/{action}":        "magpie data move",
 	"POST /api/davsync/{action}":           "magpie webdav",
 	"GET /api/caller-keys":                 "magpie gateway-key list",
 	"POST /api/caller-keys/{action}":       "magpie gateway-key",
+	"GET /api/account-groups":              "magpie gateway-key groups",
+	"POST /api/account-groups/{action}":    "magpie gateway-key groups",
 	"GET /api/groups":                      "magpie groups",
 	"POST /api/groups/{action}":            "magpie group",
 	"GET /api/import/{id}":                 "magpie import",
+	"POST /api/settings/mtls":              "magpie mtls on",
+	"POST /api/settings/mtls/issue":        "magpie mtls issue",
+	"POST /api/settings/mtls/revoke":       "magpie mtls revoke",
 	"GET /api/library":                     "magpie library",
 	"POST /api/library/{what}/{action}":    "magpie library",
 	"GET /api/plugins":                     "magpie plugin",
@@ -338,6 +345,7 @@ var notYet = map[string]string{
 	"POST /api/masking/clear":                    U,  // masking.go
 	"POST /api/masking/preview":                  U,  // masking.go
 	"POST /api/masking/values":                   U,  // masking.go
+	"GET /api/library/bili":                      L,  // library.go
 	"GET /api/library/icon":                      W,  // library.go
 	"GET /api/library/market/servers":            L,  // library.go
 	"GET /api/library/market/skills":             L,  // library.go
@@ -345,6 +353,8 @@ var notYet = map[string]string{
 	"GET /api/library/pi":                        L,  // library.go
 	"GET /api/library/rtk":                       L,  // library.go
 	"GET /api/library/skill":                     L,  // library.go
+	"POST /api/library/bili":                     L,  // library.go
+	"POST /api/library/bili/install":             L,  // library.go
 	"POST /api/library/market/about":             L,  // library.go
 	"POST /api/library/mcp-signin":               L,  // library.go
 	"POST /api/library/mcp-signin/{id}/cancel":   L,  // library.go
@@ -361,6 +371,17 @@ var notYet = map[string]string{
 	"POST /api/library/rtk/upgrade":              L,  // library.go
 	"POST /api/library/skills/check":             L,  // library.go
 	"POST /api/library/skills/probe":             L,  // library.go
+	"GET /api/memory":                            L,  // memory.go
+	"POST /api/memory":                           L,  // memory.go
+	"POST /api/memory/digest":                    L,  // memory.go
+	"POST /api/memory/remove":                    L,  // memory.go
+	"GET /api/memory/distill":                    L,  // memory_distill.go
+	"POST /api/memory/distill":                   L,  // memory_distill.go
+	"POST /api/memory/distill/run":               L,  // memory_distill.go
+	"POST /api/memory/distill/stop":              L,  // memory_distill.go
+	"POST /api/memory/dream":                     L,  // memory_distill.go
+	"POST /api/memory/dream/run":                 L,  // memory_distill.go
+	"POST /api/memory/dream/undo":                L,  // memory_distill.go
 	"POST /api/library/skills/regroup":           W,  // library.go
 	"GET /api/omarchy/widget":                    W,  // omarchy.go
 	"POST /api/omarchy/widget":                   W,  // omarchy.go
@@ -445,6 +466,7 @@ var notYet = map[string]string{
 	"GET /api/usage/quotas/history/holds":        U,  // usage.go
 	"GET /api/usage/requests":                    U,  // usage.go
 	"GET /api/usage/requests/content":            U,  // usage.go
+	"GET /api/usage/traffic":                     U,  // usage.go: the live rate
 	"POST /api/usage/checkin-account":            U,  // usage.go: one account now; `magpie accounts checkin` does every account
 	"POST /api/usage/clear":                      U,  // usage.go
 	"POST /api/usage/codex-reset":                U,  // usage.go

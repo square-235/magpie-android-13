@@ -17,7 +17,6 @@ import (
 	"net/url"
 	"os"
 	"reflect"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -32,6 +31,7 @@ import (
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/fonts"
 	"github.com/yetone/magpie/internal/lastgood"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/steady"
 )
@@ -118,7 +118,19 @@ type Settings struct {
 	// Save sets it from Proxy, and it is stored as Proxy is. This
 	// computer's own (KeepOwn), as Proxy is.
 	ProxyCustom string `json:"proxyCustom,omitempty"`
-	OTel        OTel   `json:"otel,omitempty"`
+	// PluginProxy is the proxy magpie downloads plugins through: the
+	// plugins list, npm's registry, GitHub, the plugins repo's dist
+	// branch, Bun's own download, and bun add, update and git clone
+	// (JonahFu on X: GitHub needs a proxy where the vendors don't). ""
+	// follows Proxy, as every download did before; "direct" uses none;
+	// anything else is the proxy, as Proxy takes it. A plugin's requests
+	// to its vendor are API requests and follow Proxy (and the
+	// provider's or account's own), never this. This computer's own
+	// (KeepOwn), as Proxy is.
+	PluginProxy string `json:"pluginProxy,omitempty"`
+	// PluginProxyCustom is PluginProxy's ProxyCustom.
+	PluginProxyCustom string `json:"pluginProxyCustom,omitempty"`
+	OTel              OTel   `json:"otel,omitempty"`
 	// GitHubToken is a GitHub token the library's requests to GitHub's
 	// API carry, raising its rate limit from 60 requests an hour to 5,000.
 	// It is a secret: the Settings page is told only a masked one, and a
@@ -208,6 +220,13 @@ type Settings struct {
 	// its place (gateway.AllowIPs). This computer's own (KeepOwn), as LAN
 	// is: the addresses are of the network this computer is on.
 	AllowIPs []string `json:"allowIPs,omitempty"`
+	// MTLS has other computers show a client certificate magpie issued
+	// (`magpie mtls`, Settings → Network and sharing) before anything is
+	// answered (hhdaxia on X, #5596): the gateway and magpie web's page
+	// are served over TLS with magpie's own CA, and a remote request
+	// without a good certificate is refused. This computer's own
+	// (KeepOwn), as LAN is.
+	MTLS bool `json:"mtls,omitempty"`
 	// FetchPrivate are the private hosts and ranges (a name, name:port, an
 	// IP or a CIDR range) magpie may download a URL from that it didn't
 	// choose itself: an image or video a request names or a vendor answers
@@ -366,6 +385,13 @@ type Settings struct {
 	// "<provider>|<display name>", which provider.adoptLegacyPluginCheckins
 	// carries over).
 	CheckinOff []string `json:"checkinOff,omitempty"`
+	// CheckinAt is the local time of day ("15:04") every daily check-in,
+	// built-in and plugin, waits for before it asks for the vendor's day
+	// (times_ang on X: 可以调整自动签到的时间吗); "" asks as the day turns,
+	// as before. It holds the day's first ask only: the vendor's own turn
+	// (a plugin's until) and the tries after it are kept, so no day is
+	// skipped (provider.checkinGate).
+	CheckinAt string `json:"checkinAt,omitempty"`
 	// ReplyModel is what a reply's model name says when the request went
 	// out under another name than the one asked for (a group's member, a
 	// model's own id, a provider/model id): "" the model the agent asked
@@ -746,6 +772,12 @@ type Settings struct {
 	// DesktopSubagentEffort fixes Desktop's subagent tool turns at this
 	// reasoning level. Empty keeps the effort each request asks for.
 	DesktopSubagentEffort string `json:"desktopSubagentEffort,omitempty"`
+	// DshCompactModel is the model the gateway puts DeepSeek Harness's
+	// compaction of its context on, whatever model the session is on:
+	// a switch away from a model whose provider has run out of its limit
+	// compacts on the old model first, and failed with it (#5395). ""
+	// leaves each compaction on the model it asks for.
+	DshCompactModel string `json:"dshCompactModel,omitempty"`
 	// FullContext has Codex, Claude Code and Grok Build told a model's whole context
 	// window. Off, a window above WorkingWindow is told as WorkingWindow,
 	// so they compact a long conversation there instead of sending ever
@@ -1010,6 +1042,12 @@ type Settings struct {
 	// provider has too, in any case, is the model's (axelburks on
 	// Discord). Absent is the provider's alone (provider.SetModelHeaders).
 	ModelHeaders map[string]map[string]string `json:"modelHeaders,omitempty"`
+	// ModelSystemPrompts are the system prompts the user gave one model,
+	// by "<provider id>/<model id>": the gateway adds the text after the
+	// agent's own system prompt on every request for that model, whatever
+	// agent sends it (liucl on X). Absent is the agent's prompt as sent
+	// (provider.ModelSystemPrompt).
+	ModelSystemPrompts map[string]string `json:"modelSystemPrompts,omitempty"`
 	// ModelKinds is what the user said a model makes, by "<provider
 	// id>/<model id>": "image" or "video", for a provider set up with a
 	// base URL whose own model list doesn't say so (shen-joe, #1399).
@@ -1321,7 +1359,7 @@ var validTerminalBundleID = capre.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`, 255
 // providerID is how a provider's id is spelled: lower-case letters, digits
 // and dashes, as provider.Slug derives it (a custom provider's id is the
 // same, the site it is on when its name has none).
-var providerID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+var providerID = lazyre.New(`^[a-z0-9][a-z0-9-]*$`)
 
 // CheckModelKey is whether a key of one of the per-model maps names a model
 // the way all of them do: "<provider id>/<model id>" — or "<provider id>/*"
@@ -1443,7 +1481,7 @@ func (s Settings) Compact() int {
 
 // KeepOwn puts back cur's settings that are this computer's own, which a
 // sync or a restored backup never brings from another: the window's size,
-// place and whether it was maximised, the proxy, the gateway's port, whether it
+// place and whether it was maximised, the proxy (and plugin downloads'), the gateway's port, whether it
 // is shared on the local network and the addresses let in to it, what
 // its MCP router says of itself, the Dock, gateway mode, whether WSL is
 // looked in, whether agents' sign-ins are read, when allowances are read, the terminal app a session resumes
@@ -1459,6 +1497,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.Window, s.Proxy, s.Port, s.Dock, s.DockWindow, s.Lightweight = cur.Window, cur.Proxy, cur.Port, cur.Dock, cur.DockWindow, cur.Lightweight
 	s.DockNever, s.DockSettled = cur.DockNever, cur.DockSettled
 	s.ProxyCustom = cur.ProxyCustom
+	s.PluginProxy, s.PluginProxyCustom = cur.PluginProxy, cur.PluginProxyCustom
 	s.WindowMaximised, s.KeepAwake, s.KeepAwakeDisplay = cur.WindowMaximised, cur.KeepAwake, cur.KeepAwakeDisplay
 	s.WindowAt = cur.WindowAt
 	s.TrayUsages, s.TrayUsage, s.TrayUsageEvery, s.TrayNoLogos, s.TrayNoBird, s.TrayPace, s.TrayNoCost = cur.TrayUsages, cur.TrayUsage, cur.TrayUsageEvery, cur.TrayNoLogos, cur.TrayNoBird, cur.TrayPace, cur.TrayNoCost
@@ -1467,7 +1506,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.NoWSLAgents = cur.NoWSLAgents
 	s.QuotaReads = cur.QuotaReads
 	s.NoAccountDiscovery = cur.NoAccountDiscovery
-	s.LAN, s.AllowIPs = cur.LAN, cur.AllowIPs
+	s.LAN, s.AllowIPs, s.MTLS = cur.LAN, cur.AllowIPs, cur.MTLS
 	s.RouterNote, s.RouterAllTools = cur.RouterNote, cur.RouterAllTools
 	s.FetchPrivate = cur.FetchPrivate
 	s.SessionTerminal = cur.SessionTerminal
@@ -1655,6 +1694,24 @@ func Shared() Settings {
 		return s
 	}
 	return s
+}
+
+// SharedChecked is Shared with LoadChecked's error: the settings without
+// a copy of their own while settings.json parses whole, and LoadChecked's
+// copy (or its error) otherwise. Read only, as Shared is: the gateway's
+// allow list asks on every request the GUI and gateway serve, and a copy
+// each time was most of what a state poll's Settings cost.
+func SharedChecked() (Settings, error) {
+	fileMu.RLock()
+	defer fileMu.RUnlock()
+	if !writing {
+		if b, err := filememo.Read("settings", pathNow(), func(b []byte) ([]byte, error) { return b, nil }); err == nil {
+			if s, ok := sharedFor(b); ok {
+				return s, nil
+			}
+		}
+	}
+	return loadChecked()
 }
 
 // SharedModelIDs is Shared().ModelIDs, read for each model a list is
@@ -1940,6 +1997,18 @@ func SetGatewayConversations(on bool) error {
 	return save(s, true)
 }
 
+// SetMTLS sets MTLS alone, from what the file holds now. A settings file
+// that can't be read is left as it is, with the error.
+func SetMTLS(on bool) error {
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	s.MTLS = on
+	return save(s, false)
+}
+
 // SetQuitNoAsk sets QuitNoAsk alone, from what the file holds now (the
 // Quit question's "Don't ask again"). A settings file that can't be read
 // is left as it is, with the error.
@@ -2184,6 +2253,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 			return fmt.Errorf("%s's warm-up time of day must look like 06:00 or be off, not %q", user, at)
 		}
 	}
+	if _, _, ok := Clock(s.CheckinAt); s.CheckinAt != "" && !ok {
+		return fmt.Errorf("the check-in's time of day must look like 09:00, not %q", s.CheckinAt)
+	}
 	if !slices.Contains(TrayEvery, s.TrayUsageEvery) {
 		return fmt.Errorf("the menu bar's usage is refreshed every %v minutes, not %d", TrayEvery, s.TrayUsageEvery)
 	}
@@ -2253,6 +2325,13 @@ func saveOwn(s Settings, recording, reads bool) error {
 	if s.Proxy != "" && s.Proxy != "direct" {
 		s.ProxyCustom = s.Proxy
 	}
+	s.PluginProxy = strings.TrimSpace(s.PluginProxy)
+	if err := CheckProxy(s.PluginProxy); err != nil {
+		return fmt.Errorf("plugin downloads: %w", err)
+	}
+	if s.PluginProxy != "" && s.PluginProxy != "direct" {
+		s.PluginProxyCustom = s.PluginProxy
+	}
 	s.Vision = strings.TrimSpace(s.Vision)
 	if s.Vision != "" && s.Vision != "off" && !strings.Contains(s.Vision, "/") {
 		return fmt.Errorf("the vision model must be a model's id such as openai/gpt-5-mini, or off, not %q", s.Vision)
@@ -2284,6 +2363,10 @@ func saveOwn(s Settings, recording, reads bool) error {
 	s.DesktopSubagentModel = strings.TrimSpace(s.DesktopSubagentModel)
 	if s.DesktopSubagentModel != "" && !strings.Contains(s.DesktopSubagentModel, "/") {
 		return fmt.Errorf("the model for Claude Desktop's subagents must be a model's id such as deepseek/deepseek-v4, not %q", s.DesktopSubagentModel)
+	}
+	s.DshCompactModel = strings.TrimSpace(s.DshCompactModel)
+	if s.DshCompactModel != "" && !strings.Contains(s.DshCompactModel, "/") {
+		return fmt.Errorf("the model for DeepSeek Harness's compaction must be a model's id such as deepseek/deepseek-v4, not %q", s.DshCompactModel)
 	}
 	s.DesktopSubagentEffort = strings.ToLower(strings.TrimSpace(s.DesktopSubagentEffort))
 	if e := s.DesktopSubagentEffort; e != "" && (!slices.Contains(catalog.EffortRank, e) || e == "ultra") {
@@ -2483,6 +2566,11 @@ func (s Settings) normal() Settings {
 		if len(*w.ats) > 0 {
 			*w.at = (*w.ats)[0]
 		}
+	}
+	// the check-in's time of day, as 09:00 whichever way it came
+	s.CheckinAt = strings.TrimSpace(s.CheckinAt)
+	if h, m, ok := Clock(s.CheckinAt); ok {
+		s.CheckinAt = fmt.Sprintf("%02d:%02d", h, m)
 	}
 	// a reply's model name: memberModel, as a magpie before replyModel
 	// kept it, when replyModel isn't set, and kept beside it for that

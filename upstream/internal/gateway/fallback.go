@@ -25,7 +25,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -34,6 +33,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -178,7 +178,7 @@ func (c candidate) seat() string {
 }
 
 func (c candidate) isOpenRouterFree() bool {
-	return c.p.Preset == "openrouter" && strings.HasSuffix(c.model, ":free")
+	return c.p.VendorPreset() == "openrouter" && strings.HasSuffix(c.model, ":free")
 }
 
 // restID is the candidate's model's own rest key: a free OpenRouter
@@ -705,15 +705,18 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 		// a group the member is reached through that is held to some
 		// accounts (Group.Accounts) holds it to them: one it leaves out
 		// is said on the plan's left, held, as a gateway key's are
-		if by := append(slices.Clip(hold), m.Via...); slices.ContainsFunc(by, func(h provider.Group) bool { return len(h.Accounts) > 0 }) {
+		// and a member on one account of its own (EastonXvii on X) is
+		// sent on it alone, never on its provider's others
+		if by := append(slices.Clip(hold), m.Via...); m.Account != "" || slices.ContainsFunc(by, func(h provider.Group) bool { return len(h.Accounts) > 0 }) {
 			out := func(l []candidate) []candidate {
 				return slices.DeleteFunc(l, func(c candidate) bool {
-					name := groupHeld(c, by)
+					own := memberHeld(c, m, g)
+					name := cmp.Or(own, groupHeld(c, by))
 					if name == "" {
 						return false
 					}
 					w := weighed(c, m.Provider, weighing{}, false, from)
-					w.Held, w.HeldBy, w.Via = true, name, m.Groups()
+					w.Held, w.HeldBy, w.HeldOwn, w.Via = true, name, own != "", m.Groups()
 					pl.left = append(pl.left, w)
 					return true
 				})
@@ -1380,6 +1383,56 @@ func quotaHeld(cs []candidate) (Rest, time.Time, bool) {
 	return first, back, len(cs) > 0
 }
 
+// timedHeld is, when every candidate of cs rests on a 429 for as long as
+// its vendor said (vendorTimed), the rest of the first, and when the first
+// of them is back. Asked before then, each is refused the same, and asked
+// every time the agent tries again it is the vendor's to judge: hsjzg58958
+// on X, two accounts each limited for 300 seconds were asked again about
+// every half a second, as the agent retried, until the vendor flagged them
+// both. A key or an account alike, out of its rate or its allowance: the
+// time is the vendor's own, not one magpie guessed (quotaHeld's first
+// refusal asked again). Not a subscription account that spends its resets
+// by itself (autoReset), nor another computer's model (Rest.there).
+func timedHeld(cs []candidate) (Rest, time.Time, bool) {
+	var first Rest
+	var back time.Time
+	now := time.Now()
+	for i, c := range cs {
+		r, ok := restingOf(c)
+		if !ok || !vendorTimed(c, r) {
+			return Rest{}, time.Time{}, false
+		}
+		at := r.asksAt(now)
+		if !now.Before(at) {
+			return Rest{}, time.Time{}, false
+		}
+		if i == 0 {
+			first = r
+		}
+		if back.IsZero() || at.Before(back) {
+			back = at
+		}
+	}
+	return first, back, len(cs) > 0
+}
+
+// vendorTimed says whether r, c's rest, is a 429's for the time its vendor
+// named: its Retry-After or rate-limit reset headers, or the reset its
+// refusal gave (rateRest, Rest.By "retry-after" or "resets").
+func vendorTimed(c candidate, r Rest) bool {
+	if r.there || r.Status != http.StatusTooManyRequests || r.By != "retry-after" && r.By != "resets" {
+		return false
+	}
+	switch r.Why {
+	case failRate:
+		return true
+	case failQuota, failCredit:
+		a := c.p.Account
+		return a == nil || !provider.AutoResetsWeek(a.Agent, a.User)
+	}
+	return false
+}
+
 // quotaStatus is a status a vendor says a key is out of its allowance with.
 func quotaStatus(status int) bool {
 	return status == http.StatusTooManyRequests || status == http.StatusPaymentRequired
@@ -1512,7 +1565,7 @@ func restOf(id string) (Rest, bool) {
 
 // quotaWords are how vendors say "out of quota" or "slow down" when their
 // status code doesn't: some answer 400 or 403 with it.
-var quotaWords = regexp.MustCompile(`(?i)quota|insufficient|balance|credit|billing|out of budget|budget (exceeded|exhausted)|exceeded|rate.?limit|usage.?limit|limit.?reached|hit your .*limit|limit.{0,24}resets|too many requests|overloaded|余额|额度|欠费|限流|频率|频繁|速率|套餐|用量|上限`)
+var quotaWords = lazyre.New(`(?i)quota|insufficient|balance|credit|billing|out of budget|budget (exceeded|exhausted)|exceeded|rate.?limit|usage.?limit|limit.?reached|hit your .*limit|limit.{0,24}resets|too many requests|overloaded|余额|额度|欠费|限流|频率|频繁|速率|套餐|用量|上限`)
 
 // quotaSaid is whether an error's words, with no status to go by, say
 // out of quota or slow down: quotaWords, unless they say the conversation
@@ -1571,7 +1624,7 @@ func codeAssistModelMissing(p provider.Provider, status int, body []byte) bool {
 // {"type":"ModelDeprecated","message":"Model exo-free has been
 // deprecated."}} (MOMO on Discord), OpenAI's "The model … has been
 // deprecated".
-var retiredWords = regexp.MustCompile(`(?i)"ModelDeprecated"|model_deprecated|model.{0,80}(has been|was|is now|is) (deprecated|retired|discontinued|decommissioned|sunset)`)
+var retiredWords = lazyre.New(`(?i)"ModelDeprecated"|model_deprecated|model.{0,80}(has been|was|is now|is) (deprecated|retired|discontinued|decommissioned|sunset)`)
 
 // modelRetired says the vendor turned the request away because the model
 // is retired there: it leaves that provider's place in the lists
@@ -1605,13 +1658,13 @@ func modelRetired(status int, body []byte) bool {
 // glm-5-free is not supported"). Not its "is not supported for format
 // anthropic", a model served on another API (wrongEndpoint), and not its
 // AuthError "Invalid API key." for a key it doesn't take.
-var zenModelGone = regexp.MustCompile(`(^|[\s:"])Model [^"\s]+ is not supported("|\s*$)`)
+var zenModelGone = lazyre.New(`(^|[\s:"])Model [^"\s]+ is not supported("|\s*$)`)
 
 // refusedWords are how a vendor says it won't take requests from this
 // client at all — WorkBuddy's "Illegal API invocation from an unapproved
 // channel" to a chat opening with another agent's own system prompt — a
 // refusal of the provider, not of the request, another member may serve.
-var refusedWords = regexp.MustCompile(`(?i)unapproved channel|illegal api invocation`)
+var refusedWords = lazyre.New(`(?i)unapproved channel|illegal api invocation`)
 
 // promptRefused says a vendor answered with that refusal: the agent's
 // prompt, not the account, is at fault.
@@ -1641,7 +1694,7 @@ func promptRefused(status int, body []byte) bool {
 // the only field set." (#5374, worksyang) — a description beside an
 // anyOf, which Google's Schema takes alone, the reporter's same tools
 // another member took.
-var shapeWords = regexp.MustCompile(`(?i)failed to deserialize|unknown (item |content |input )?(type|variant|field|parameter)|unknown_parameter|unrecognized (request argument|field|parameter)|extra (inputs|fields) are not permitted|additional properties are not allowed|schema exceeds the maximum (nesting )?depth|schema[^"]{0,60}\bnesting depth\b|function_declarations\[\d+\]\.parameters\b|schema specified other fields alongside any_?of`)
+var shapeWords = lazyre.New(`(?i)failed to deserialize|unknown (item |content |input )?(type|variant|field|parameter)|unknown_parameter|unrecognized (request argument|field|parameter)|extra (inputs|fields) are not permitted|additional properties are not allowed|schema exceeds the maximum (nesting )?depth|schema[^"]{0,60}\bnesting depth\b|function_declarations\[\d+\]\.parameters\b|schema specified other fields alongside any_?of`)
 
 // unsaidWords are Command Code's Provider API turning a request away with
 // nothing but a trace id: {"message":"invalid request error trace_id:
@@ -1658,7 +1711,7 @@ var shapeWords = regexp.MustCompile(`(?i)failed to deserialize|unknown (item |co
 // that says so names the model's context length before the trace id, and
 // isn't one. The message may come after a provider's name ("Command Code:
 // "), as magpie tells it on.
-var unsaidWords = regexp.MustCompile(`(?i)(^|"|\\"|: )invalid request error trace_id: [0-9a-f]{16,}(\\?"|\s*$)`)
+var unsaidWords = lazyre.New(`(?i)(^|"|\\"|: )invalid request error trace_id: [0-9a-f]{16,}(\\?"|\s*$)`)
 
 // shapeRefused says a request failed over its shape alone: the next
 // member is asked, and this one doesn't rest, as nothing is wrong with it.
@@ -1703,7 +1756,7 @@ func shapeRefused(status int, body []byte) bool {
 // again (regionFresh).
 // A request's own field named location ("location field is not
 // supported") isn't one.
-var regionWords = regexp.MustCompile(`(?i)\buser location is not supported for the api use\b|unsupported_country_region_territory|country, region,? or territory not supported`)
+var regionWords = lazyre.New(`(?i)\buser location is not supported for the api use\b|unsupported_country_region_territory|country, region,? or territory not supported`)
 
 // regionRefused says the vendor refused the request for where it came
 // from, with regionWords.
@@ -1713,7 +1766,7 @@ func regionRefused(status int, body []byte) bool {
 
 // googleRegionWords is Google's wording of the refusal (Gemini, Code
 // Assist, Antigravity), which names the vendor in regionNote.
-var googleRegionWords = regexp.MustCompile(`(?i)\buser location is not supported for the api use\b`)
+var googleRegionWords = lazyre.New(`(?i)\buser location is not supported for the api use\b`)
 
 // regionNote is what the agent is told beside a refusal of where the
 // request came from (regionRefused), or "" for any other reply: the
@@ -1749,7 +1802,7 @@ func explained(p provider.Provider, model string, res *http.Response, b []byte) 
 // same history on every account and model the backend serves, and the
 // history as plain text is answered, so it is about the request, not the
 // account: asked again there, it only drains the accounts' allowances.
-var protectionWords = regexp.MustCompile(`(?i)response protection is unavailable`)
+var protectionWords = lazyre.New(`(?i)response protection is unavailable`)
 
 // protectionRefused says the vendor turned the request's content away
 // with protectionWords: the account is not at fault, and none of its
@@ -1769,7 +1822,7 @@ func protectionRefused(status int, body []byte) bool {
 // where the error names its code, not in its words: "…a different
 // model.","type":"invalid_request_error" reads as a model unserved
 // (unservedWords) otherwise.
-var zdrCoded = regexp.MustCompile(`\\?"(type|code)\\?"\s*:\s*\\?"cmd_zdr_no_providers\\?"`)
+var zdrCoded = lazyre.New(`\\?"(type|code)\\?"\s*:\s*\\?"cmd_zdr_no_providers\\?"`)
 
 // zdrRefused says Command Code turned the request away for its Zero Data
 // Retention setting: a choice the user made for every request to the
@@ -1924,11 +1977,11 @@ const lengthMargin = 0.5
 
 // lengthWords say the request is too long, or to make it shorter or start
 // over, without naming what overflowed.
-var lengthWords = regexp.MustCompile(`(?i)太长|过长|超长|精简|缩短|删减|(开启|新建|开始|重新开启)(一个)?新的?(对话|会话|聊天)|too (long|large|big)|shorten|reduce (the )?(length|size)|start a new (conversation|chat|session)`)
+var lengthWords = lazyre.New(`(?i)太长|过长|超长|精简|缩短|删减|(开启|新建|开始|重新开启)(一个)?新的?(对话|会话|聊天)|too (long|large|big)|shorten|reduce (the )?(length|size)|start a new (conversation|chat|session)`)
 
 // partWords name a part of the request whose length isn't the
 // conversation's: a picture, a file, the reply, a field, a name.
-var partWords = regexp.MustCompile(`(?i)图片|图像|文件|附件|输出|回复|名称|字段|参数|标题|image|picture|file|attachment|output|max_tokens|max_completion|completion|title|description`)
+var partWords = lazyre.New(`(?i)图片|图像|文件|附件|输出|回复|名称|字段|参数|标题|image|picture|file|attachment|output|max_tokens|max_completion|completion|title|description`)
 
 // saysLength says a request error's message speaks of the request's length
 // and of nothing else: not a pace, a quota, a part of the request.
@@ -2042,7 +2095,7 @@ func unsaidOverflows(p provider.Provider, status int) bool {
 // transportWords are a failure that never reached a vendor's answer, as Go,
 // Bun or Windows say it, or magpie's own words for a reply that broke off:
 // a request that met one may well fit, and is asked again.
-var transportWords = regexp.MustCompile(`(?i)dial (tcp|udp)|connectex|wsarecv|wsasend|i/o timeout|TLS handshake timeout|context deadline exceeded|Client\.Timeout|timeout awaiting response headers|connection (was )?(reset|refused|aborted|closed)|forcibly closed|broken pipe|unexpected EOF|no such host|network is unreachable|no route to host|server closed idle connection|Unable to connect|ConnectionRefused|ConnectionClosed|FailedToOpenSocket|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE`)
+var transportWords = lazyre.New(`(?i)dial (tcp|udp)|connectex|wsarecv|wsasend|i/o timeout|TLS handshake timeout|context deadline exceeded|Client\.Timeout|timeout awaiting response headers|connection (was )?(reset|refused|aborted|closed)|forcibly closed|broken pipe|unexpected EOF|no such host|network is unreachable|no route to host|server closed idle connection|Unable to connect|ConnectionRefused|ConnectionClosed|FailedToOpenSocket|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EPIPE`)
 
 // transportFailed says an error body is a transport failure rather than a
 // vendor's answer (transportWords), or one magpie made of a reply that
@@ -2147,6 +2200,9 @@ var retryPause = time.Second
 // An upstream that answered a stream request with a whole reply
 // (didNotStream) isn't one: it fails the same every time it is asked.
 func passing(status int, header http.Header, body []byte, again int) (time.Duration, bool) {
+	if routedThere(header) {
+		return 0, false
+	}
 	wait := retryPause << again
 	if d := retryAfter(header, time.Now()); d > 0 {
 		wait = d
@@ -2199,7 +2255,7 @@ var wallCodes = map[string]bool{"user_model_rate_limited": true}
 // with no label), which a moment does clear, and a GLM key asked again
 // in place stays so. The words and the id together are the label's own,
 // not words anywhere in the body a prompt may quote.
-var zcodeRateWall = regexp.MustCompile(`\[1302\]\[您的账户已达到速率限制[^\]]*\]\[[0-9a-fA-F]{16,}\]`)
+var zcodeRateWall = lazyre.New(`\[1302\]\[您的账户已达到速率限制[^\]]*\]\[[0-9a-fA-F]{16,}\]`)
 
 // walled says whether body is a refusal whose error.code is one of
 // wallCodes: the code where the vendor puts it, not the words anywhere in
@@ -4208,17 +4264,17 @@ func errorCode(raw json.RawMessage) string {
 // policyCode is an error code that names the vendor's usage policy:
 // OpenAI's bio_policy ("This content was flagged for possible biological
 // risk"), cyber_policy and the like (#248).
-var policyCode = regexp.MustCompile(`^[a-z]+_policy$`)
+var policyCode = lazyre.New(`^[a-z]+_policy$`)
 
 // sensitiveCode is how Volcengine Ark's errors say its filter refused the
 // input or the reply: InputTextSensitiveContentDetected,
 // OutputTextSensitiveContentDetected, SensitiveContentDetected and the
 // image and video kinds of them.
-var sensitiveCode = regexp.MustCompile(`SensitiveContentDetected$`)
+var sensitiveCode = lazyre.New(`SensitiveContentDetected$`)
 
 // flaggedWords are how OpenAI's invalid_prompt says the prompt was held to
 // its usage policy, rather than malformed.
-var flaggedWords = regexp.MustCompile(`(?i)flagged|usage polic`)
+var flaggedWords = lazyre.New(`(?i)flagged|usage polic`)
 
 // policyRefusal tells whether an error — an error object, a body holding
 // one, or a stream's error event — is the vendor's safety filter refusing
@@ -4517,7 +4573,7 @@ func namedStatusOf(errRaw []byte) int {
 // "（HTTP 503）": a plugin that can't fail its 200 any more puts its
 // upstream's status in its message (mycf_711's wps-lingxi rows,
 // "灵犀上游返回 AIError：AI服务异常（上游暂时不可用，可重试）（HTTP 503）").
-var httpSaid = regexp.MustCompile(`[(（]\s*HTTP\s*(429|5\d\d)\s*[)）]`)
+var httpSaid = lazyre.New(`[(（]\s*HTTP\s*(429|5\d\d)\s*[)）]`)
 
 // textStatus is the status an error's words name (httpSaid), 0 when they
 // name none, or say the request is too long, or are magpie's own. Only a
