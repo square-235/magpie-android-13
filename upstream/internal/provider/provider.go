@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -29,6 +28,8 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/lastgood"
+	"github.com/yetone/magpie/internal/lazyre"
+	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
 )
@@ -461,6 +462,19 @@ type Provider struct {
 	// (UncheckedHosts); see Via.
 	HTTP1 bool `json:"http1,omitempty"`
 
+	// ClientCert and ClientKey are the PEM files of a client certificate
+	// magpie shows the provider's own HTTPS hosts when they ask for one,
+	// and ServerCA a PEM CA their certificate may be signed by beside the
+	// system's roots (#5596, clxsh, and hhdaxia on X: Remote magpie to a
+	// magpie at home behind an Nginx that requires a client certificate,
+	// or one with `magpie mtls` on). Only a provider the user added, and
+	// Remote magpie, takes them (TakesClientCert), for the hosts of its
+	// own base URLs (UncheckedHosts), on every request made for it:
+	// models, the connection test, requests, quotas; see Via.
+	ClientCert string `json:"clientCert,omitempty"`
+	ClientKey  string `json:"clientKey,omitempty"`
+	ServerCA   string `json:"serverCA,omitempty"`
+
 	// Proxy is the proxy magpie's requests to this provider go through
 	// (#237: Codex through one, a vendor at home without): "" follows
 	// the global one (Settings' Proxy, the environment's, the system's),
@@ -760,7 +774,12 @@ func (e *unreadableError) Unwrap() []error { return []error{ErrUnreadable, e.err
 
 // Reads used for an edit must keep errors: a broken file is not an empty
 // catalog to write over. Only a missing file is a first use.
+// fileReads counts read, for the test that a page's look at whether the
+// file parses doesn't parse it again.
+var fileReads atomic.Int64
+
 func read() (file, error) {
+	fileReads.Add(1)
 	var f file
 	b, err := steady.ReadFile(Path())
 	if errors.Is(err, os.ErrNotExist) {
@@ -798,6 +817,11 @@ var utf8BOM = []byte("\xef\xbb\xbf")
 // FileError is why providers.json can't be read, nil when it can or isn't
 // there: for what lists the providers to say so, not "none yet".
 func FileError() error {
+	// a file that parses, parsed once until it changes (storedFile): each
+	// Providers page parsed the whole of it again only to see it does
+	if _, err := filememo.Read("providers", Path(), parseProviders); err == nil {
+		return nil
+	}
 	_, err := read()
 	return err
 }
@@ -1075,6 +1099,12 @@ func accountSettings(a, pk Provider) Provider {
 func Hidden() []Provider {
 	var out []Provider
 	saved := storedFile().Providers
+	// most users removed none: then no account is made at all (Accounts
+	// reads every sign-in, ~0.6 MB each poll of the Providers page,
+	// which asks twice, here and through Excluded)
+	if !slices.ContainsFunc(saved, func(p Provider) bool { return p.Hidden }) {
+		return nil
+	}
 	for _, a := range Accounts() {
 		for _, p := range saved {
 			if p.ID == a.ID && p.Hidden {
@@ -1147,7 +1177,7 @@ func readElsewhere() string {
 	return fmt.Sprintf("\n  this magpie reads its files from %s, as XDG_CONFIG_HOME says; the app opened from the Dock or Start menu keeps them in %s. Run it with XDG_CONFIG_HOME unset (env -u XDG_CONFIG_HOME magpie …) to use those", appdir.Config(), def)
 }
 
-var idRe = regexp.MustCompile(`[^a-z0-9]+`)
+var idRe = lazyre.New(`[^a-z0-9]+`)
 
 // Slug derives an id from a name: "My Relay" → "my-relay".
 func Slug(name string) string {
@@ -1227,6 +1257,21 @@ func Save(p Provider) error {
 		}
 		if p.HTTP1 && !p.TakesInsecureTLS() {
 			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can be held to HTTP/1.1", p.Name)
+		}
+		if p.ClientCert != "" || p.ClientKey != "" || p.ServerCA != "" {
+			if !p.TakesClientCert() {
+				return fmt.Errorf("%s: a client certificate or server CA is only for a provider you added with a base URL of its own, or Remote magpie", p.ID)
+			}
+			for _, f := range []*string{&p.ClientCert, &p.ClientKey, &p.ServerCA} {
+				v, err := CertPath(*f)
+				if err != nil {
+					return fmt.Errorf("%s: %w", p.ID, err)
+				}
+				*f = v
+			}
+			if err := netproxy.CheckClientCert(p.ClientCert, p.ClientKey, p.ServerCA); err != nil {
+				return fmt.Errorf("%s: %w", p.ID, err)
+			}
 		}
 		if strings.Contains(p.Decide, WorkspaceID) {
 			return errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")

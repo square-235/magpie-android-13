@@ -698,7 +698,7 @@ function routingPage(part) {
   // from its vendor does — relays list each key its own group's models
   // or the user set the account or key to serve other models only (#474)
   // or it is held at the usage cap the user set on the account
-  const unlistedWord = (w) => w.heldBy ? t("not an account {group} may use", { group: w.heldBy }) : w.held ? t("not an account the gateway key may use") : w.noCredits ? t("held: its allowance used up, set not to spend credits") : w.capped ? t("held at its {cap}% usage cap", { cap: w.capped }) : w.barred ? t("set to serve other models, not {model}", { model: w.model }) : w.kind === "key" ? t("{name}'s list for this key has no {model}", { name: w.name, model: w.model }) : t("its plan doesn't list {model}", { model: w.model });
+  const unlistedWord = (w) => w.heldOwn ? t("another account is named for this model in {group}", { group: w.heldBy }) : w.heldBy ? t("not an account {group} may use", { group: w.heldBy }) : w.held ? t("not an account the gateway key may use") : w.noCredits ? t("held: its allowance used up, set not to spend credits") : w.capped ? t("held at its {cap}% usage cap", { cap: w.capped }) : w.barred ? t("set to serve other models, not {model}", { model: w.model }) : w.kind === "key" ? t("{name}'s list for this key has no {model}", { name: w.name, model: w.model }) : t("its plan doesn't list {model}", { model: w.model });
   // noURLWord: its keys are all set to a protocol its provider has no URL
   // for, so it went out on the URLs it has (#1702)
   const noURLWord = (w) => t("key set to {api} only, no {api} URL · sent on the others", { api: API[w.noURL] || w.noURL });
@@ -1032,7 +1032,9 @@ function routingPage(part) {
   }
 
   // leftWhy is why a member was skipped before it was tried (r.left)
-  const leftWhy = (x) => x.heldBy
+  const leftWhy = (x) => x.heldOwn
+    ? t("{who} is left out: {group} names another account for this model.", { who: who(x), group: x.heldBy })
+    : x.heldBy
     ? t("{who} is left out: the routing group {group} is held to other accounts of its provider.", { who: who(x), group: x.heldBy })
     : x.held
     ? t("{who} is left out: the gateway key asking may not use its account.", { who: who(x) })
@@ -1288,6 +1290,16 @@ function routingPage(part) {
   function condText(c) {
     let m;
     if ((m = intentOf(c)) != null) return t("asks for “{intent}”", { intent: m });
+    // a condition in the rule's where, as provider.Cond's Text writes it
+    if ((m = /^tokens ([><≤]) (\d+)$/.exec(c))) return whereText({ field: "tokens", op: { ">": "gt", "<": "lt", "≤": "lte" }[m[1]], value: m[2] });
+    if ((m = /^effort (is not|is|≤) (\w+)$/.exec(c))) return whereText({ field: "effort", op: { "is not": "not", is: "is", "≤": "lte" }[m[1]], value: m[2] });
+    if ((m = /^agent (is not|is) (.+)$/.exec(c))) return whereText({ field: "agent", op: m[1] === "is" ? "is" : "not", value: m[2].split("|").join(",") });
+    if (c === "subagent" || c === "not subagent") return whereText({ field: "subagent", op: c === "subagent" ? "is" : "not" });
+    if ((m = /^message (contains|doesn't contain|starts with|matches) (".*")$/.exec(c))) {
+      let v = m[2];
+      try { v = JSON.parse(v); } catch { v = v.slice(1, -1); }
+      return whereText({ field: "message", op: { contains: "contains", "doesn't contain": "excludes", "starts with": "starts", matches: "matches" }[m[1]], value: v });
+    }
     if ((m = /^tokens ≥ (\d+)$/.exec(c))) return t("≥ {n} tokens", { n: Number(m[1]).toLocaleString(intlLang()) });
     if (c === "images") return t("has an image");
     if (c === "reasoning") return t("reasoning on");
@@ -3710,6 +3722,8 @@ function routingPage(part) {
       case "stand-in": return t("{agent} asked for {model}, which magpie doesn't serve; magpie served it on {to}, the model its config names.", v);
       case "codex-turn": return t("{agent} asked for {model} for a call of its own, which magpie doesn't serve; magpie served it on {to}, the model its last turn was answered on.", v);
       case "codex-follow": return t("{agent} asked for {model}, one of its own default models, for its memories, and its config names no model for them; magpie served it on {to}, the model of its conversation.", v);
+      case "dsh-compact": return t("{agent} asked for {model} to compact its conversation; magpie served it on {to}, the model set for its compaction.", v);
+      case "dsh-compact-rested": return t("{agent} asked for {model} to compact its conversation, and its provider is out of its limit; magpie served it on {to}, the same model from another provider.", v);
       case "privacy": return t("Masking would have changed this request, so magpie sent it as written to {to}, the model set for that in Settings › Privacy.", v);
       default: return t("magpie served it on {to} in place of {model}.", v);
     }
@@ -5965,7 +5979,38 @@ function routingPage(part) {
     if (r.time) bits.push(timeText(r.time));
     if (r.folders?.length) bits.push(t("in {folders}", { folders: r.folders.join(" / ") }));
     if (r.exceptFolders?.length) bits.push(t("not in {folders}", { folders: r.exceptFolders.join(" / ") }));
+    for (const c of r.where || []) bits.push(whereText(c));
     return bits.join(" · ");
+  }
+  // a rule's conditions as a field, a way to compare and a value
+  // (aipha2025 on X: provider.Cond), beside the rule's own fields, which
+  // keep meaning what they did. The editor shows a field's first in its
+  // pill; any more (typed in the CLI) in pills of their own
+  const whereOf = (r, f) => (r.where || []).find((c) => c.field === f);
+  const setWhere = (r, f, c) => {
+    const w = [...(r.where || [])], at = w.findIndex((x) => x.field === f);
+    if (!c) { if (at >= 0) w.splice(at, 1); } else if (at >= 0) w[at] = { field: f, ...c }; else w.push({ field: f, ...c });
+    r.where = w;
+  };
+  const TOKEN_OPS = { gte: "≥", gt: ">", lt: "<", lte: "≤" };
+  const MESSAGE_OPS = { contains: "has the words", excludes: "doesn't have the words", starts: "starts with the words", matches: "matches the expression" };
+  function whereText(c) {
+    const v = String(c.value ?? "");
+    switch (c.field) {
+      case "tokens": return t("{op} {n} tokens", { op: TOKEN_OPS[c.op] || c.op, n: (+v || 0).toLocaleString(intlLang()) });
+      case "effort":
+        if (c.op === "gte") return t("reasoning ≥ {level}", { level: v });
+        if (c.op === "lte") return t("reasoning ≤ {level}", { level: v });
+        if (v === "off" || v === "on") return (c.op === "not") === (v === "on") ? t("reasoning is off") : t("reasoning on");
+        return t(c.op === "not" ? "reasoning is not {level}" : "reasoning is {level}", { level: v });
+      case "agent": {
+        const agents = v.split(",").filter(Boolean).map(agentName).join(" / ");
+        return c.op === "not" ? t("not {agents}", { agents }) : agents;
+      }
+      case "subagent": return c.op === "not" ? t("not sent by a subagent") : t("sent by a subagent");
+      case "message": return t("message {op} “{text}”", { op: t(MESSAGE_OPS[c.op] || c.op), text: v });
+    }
+    return [c.field, c.op, v].filter(Boolean).join(" ");
   }
   const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   let groups = null, gEdit = null; // gEdit: { id: "" for a new one, draft }
@@ -5994,11 +6039,11 @@ function routingPage(part) {
       .map(([id, m]) => [id, Object.fromEntries(Object.entries(m).filter(([a, b]) => words.includes(a) && words.includes(b)))]));
     const group = (g) => ({ ...g, id: String(g.id ?? ""), name: typeof g.name === "string" && g.name ? g.name : String(g.id ?? ""),
       members: ids(g.members), memberInfo: objs(g.memberInfo), holds: ids(g.holds), offers: ids(g.offers), shared: ids(g.shared), patterns: objs(g.patterns),
-      match: opt(g.match, ids), matched: opt(g.matched, ids), off: opt(g.off, ids), fast: opt(g.fast, ids), levels: opt(g.levels, ids), weights: opt(g.weights, weightsOf), effortMaps: opt(g.effortMaps, effortMapsOf),
-      rules: opt(g.rules, (rs) => objs(rs).map((r) => ({ ...r, agents: opt(r.agents, ids), folders: opt(r.folders, ids), exceptFolders: opt(r.exceptFolders, ids) }))) });
+      match: opt(g.match, ids), matched: opt(g.matched, ids), off: opt(g.off, ids), fast: opt(g.fast, ids), levels: opt(g.levels, ids), weights: opt(g.weights, weightsOf), effortMaps: opt(g.effortMaps, effortMapsOf), keys: opt(g.keys, ids),
+      rules: opt(g.rules, (rs) => objs(rs).map((r) => ({ ...r, agents: opt(r.agents, ids), folders: opt(r.folders, ids), exceptFolders: opt(r.exceptFolders, ids), where: opt(r.where, objs) }))) });
     const refs = (v) => objs(v).filter((m) => typeof m.id === "string");
     return { ...x, groups: objs(x.groups).filter((g) => typeof g.id === "string" && g.id).map(group),
-      models: refs(x.models), deciders: refs(x.deciders), pools: objs(x.pools),
+      models: refs(x.models), deciders: refs(x.deciders), pools: objs(x.pools), gatewayKeys: x.gatewayKeys == null ? null : refs(x.gatewayKeys),
       templates: objs(x.templates).filter((tp) => tp.group && typeof tp.group === "object").map((tp) => ({ ...tp, group: group(tp.group) })) };
   }
   // quiet: the window focused again; the same groups aren't drawn again
@@ -6055,14 +6100,33 @@ function routingPage(part) {
   // Garydesu on X) are those the agent picks among (provider.MemberLevels),
   // kept each once, lowest first
   const LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]; // provider.MemberEfforts
+  // and on one account or key of its provider of its own, last,
+  // "provider/model:high#<account>" (EastonXvii on X, provider.MemberAccount):
+  // the same model on two accounts is two members, tried in the group's order.
+  // splitMember's third is that account's id, "" for every account
   function splitMember(id) {
     id = id || "";
-    if (id.startsWith("group/") || groups?.models.some((m) => m.id === id) || groups?.drawers?.some((m) => m.id === id)) return [id, ""];
+    let acct = "";
+    const a = id.startsWith("group/") ? null : /^(.+)#([^#/]+)$/.exec(id);
+    if (a && a[2].trim()) { id = a[1]; acct = a[2].trim(); }
+    if (id.startsWith("group/") || groups?.models.some((m) => m.id === id) || groups?.drawers?.some((m) => m.id === id)) return [id, "", acct];
     const m = /^(.+):((?:none|minimal|low|medium|high|xhigh|max)(?:\+(?:none|minimal|low|medium|high|xhigh|max))*)$/i.exec(id);
-    if (!m) return [id, ""];
+    if (!m) return [id, "", acct];
     const parts = m[2].toLowerCase().split("+");
-    return [m[1], LEVELS.filter((v) => parts.includes(v)).join("+")];
+    return [m[1], LEVELS.filter((v) => parts.includes(v)).join("+"), acct];
   }
+  // a member's id from its model, reasoning and account
+  const memberId = (model, level, acct) => (level ? `${model}:${level}` : model) + (acct ? "#" + acct : "");
+  // the account a member is sent on: {id: "provider/<id>", name}, or null
+  // for any the group allows
+  const memberAccount = (id) => {
+    const [model, , acct] = splitMember(id);
+    if (!acct || subOf(id)) return null;
+    const pid = modelOf(id)?.provider || model.split("/")[0];
+    const full = pid + "/" + acct;
+    const a = (groups?.accounts?.[pid] || []).find((x) => x.id === full);
+    return { id: full, name: a?.name || acct, plan: a?.plan || "" };
+  };
   // a decision model (Jev) is a member of a group of decision models only,
   // asked at /v1/systemone (provider/decide_group.go): it is in
   // groups.deciders, not groups.models
@@ -6122,7 +6186,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], where: (r.where || []).map((c) => ({ ...c })), time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -6152,7 +6216,7 @@ function routingPage(part) {
   };
   const modelName = (m) => { const tell = tellOf(m); return (m.name || m.id) + (tell ? " · " + tell : ""); };
   const memberName = (id) => { const s = subOf(id), m = modelOf(id), o = !m && offOf(id); return s ? s.name : m ? modelName(m) : o ? o.model : id; };
-  const memberNote = (id) => { const o = !subOf(id) && !modelOf(id) && offOf(id); return subOf(id) ? t("routing group") : [modelOf(id)?.providerName || o && `${o.name} · ${t("switched off")}`, drawerOf(id) && t("Image model"), fixedOf(id) && fixedWords(fixedOf(id))].filter(Boolean).join(" · "); };
+  const memberNote = (id) => { const o = !subOf(id) && !modelOf(id) && offOf(id); return subOf(id) ? t("routing group") : [modelOf(id)?.providerName || o && `${o.name} · ${t("switched off")}`, memberAccount(id)?.name, drawerOf(id) && t("Image model"), fixedOf(id) && fixedWords(fixedOf(id))].filter(Boolean).join(" · "); };
   // a member the group sends in its vendor's fast mode (Group.Fast)
   const fastIn = (g, id) => !!g?.fast?.includes(id) && !subOf(id);
   // a member Free first and Cheapest first count as costing nothing: its
@@ -6163,7 +6227,8 @@ function routingPage(part) {
   function memberLabel(g, id) {
     const i = g.memberInfo?.find((x) => x.id === id), m = modelOf(id), s = subOf(id), f = fixedOf(id);
     if (s) return `${t("routing group")} · ${s.name}`;
-    const at = (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${t("fast")}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
+    const acct = memberAccount(id);
+    const at = (acct ? ` · ${acct.name}` : "") + (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${t("fast")}` : "") + (freeIn(g, id) ? ` · ${t("free")}` : "");
     if (m) return `${m.providerName} · ${modelName(m)}${at}`;
     if (i?.providerOff) return `${i.name} · ${i.model}${at} (${t("switched off")})`;
     return i?.name ? `${i.name} · ${i.model}${at}` : id;
@@ -6565,7 +6630,7 @@ function routingPage(part) {
     if (groupDirty() && !(await confirmDiscard())) return;
     const g = tp.group;
     gSel = null;
-    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
+    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], where: (r.where || []).map((c) => ({ ...c })), time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
     renderGroups();
     const ed = gList.querySelector(".rt-gedit");
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -7065,7 +7130,7 @@ function routingPage(part) {
     // whoever opened it, a draft has what the editor and Add read: a group
     // made from a model (newGroupWith) had no fast, and Add threw on it
     // and did nothing (悠悠哥 on Discord)
-    for (const k of ["members", "match", "matched", "fast", "off", "rules", "accounts"]) if (!Array.isArray(d[k])) d[k] = [];
+    for (const k of ["members", "match", "matched", "fast", "off", "rules", "accounts", "keys"]) if (!Array.isArray(d[k])) d[k] = [];
     if (!d.weights || typeof d.weights !== "object") d.weights = {};
     if (!d.effortMaps || typeof d.effortMaps !== "object") d.effortMaps = {};
     const ed = el("div", "editor rt-gedit");
@@ -7251,7 +7316,7 @@ function routingPage(part) {
         const nm = el("span", "", memberName(id));
         nm.title = memberName(id);
         n.append(nm);
-        if (m || s) n.append(el("small", "", subOf(id) || drawerOf(id) ? memberNote(id) : m.providerName));
+        if (m || s) n.append(el("small", "", subOf(id) || drawerOf(id) ? memberNote(id) : [m.providerName, memberAccount(id)?.name].filter(Boolean).join(" · ")));
         else if (info?.providerOff) n.append(el("small", "", `${info.name} · ${t("switched off")}`));
         if (info?.free && !s) {
           const fr = el("small", "rt-free", t("free"));
@@ -7288,7 +7353,10 @@ function routingPage(part) {
         // it reasons as it says.
         // a decision model reasons at no level of the group's or its own
         if (!s && !deciderOf(id) && !drawerOf(id)) {
-          const [base, fixed] = splitMember(id);
+          const [model, fixed, acct] = splitMember(id);
+          // the member at a level ("" the group's), on its own account still
+          const at = (v) => memberId(model, v, acct);
+          const base = at("");
           const several = fixed.includes("+");
           // the levels it sends in place of those asked (LuckymanJC on
           // Discord: one vendor's high is another's xhigh), for one that
@@ -7305,7 +7373,7 @@ function routingPage(part) {
           const moveTo = (to) => {
             const from = d.members[i];
             if (to === from) return true;
-            if (d.members.includes(to)) { status(t("{name} at that reasoning is in the group already", { name: memberName(from) }), "err"); return false; }
+            if (d.members.includes(to)) { status(t(splitMember(to)[2] !== splitMember(from)[2] ? "{name} on that account is in the group already" : "{name} at that reasoning is in the group already", { name: memberName(from) }), "err"); return false; }
             d.members[i] = to;
             d.matched = d.matched.filter((x) => x !== from); // named now, at its own reasoning
             for (const r of d.rules) setUses(r, rUses(r).map((x) => x === from ? to : x));
@@ -7326,8 +7394,7 @@ function routingPage(part) {
             openPicker({ id: "", name: "", fields: [] }, { key: "rule", label: "reasoning", value: "", menu: true, multi: true,
               options: levels.map((v) => ({ value: v, label: v })), picked: (v) => have.includes(v), onPick: (v) => {
                 const next = have.includes(v) ? have.filter((x) => x !== v) : LEVELS.filter((x) => x === v || have.includes(x));
-                const at = next.join("+");
-                if (!moveTo(at ? `${base}:${at}` : base)) return;
+                if (!moveTo(at(next.join("+")))) return;
                 have = next;
                 draw(); drawRules();
               } }, fx, ev);
@@ -7357,7 +7424,7 @@ function routingPage(part) {
             if (v === "+") { pickSeveral(ev); return; }
             if (v === "=") { pickMap(ev); return; }
             if (!v && !fixed) { delete d.effortMaps[id]; draw(); return; } // the group's, as asked
-            if (moveTo(v ? `${base}:${v}` : base)) { draw(); drawRules(); }
+            if (moveTo(at(v))) { draw(); drawRules(); }
           }, several ? "+" : map ? "=" : fixed);
           row.append(fx);
           // its vendor's fast mode, where the model has one: priority
@@ -7374,6 +7441,39 @@ function routingPage(part) {
               : (on ? t("Sent in its vendor's fast mode whatever the agent asks: quicker, at a higher price") : t("Sent at its vendor's usual speed; click to send it in fast mode"));
             fb.onclick = () => { d.fast = on ? d.fast.filter((x) => x !== id) : [...d.fast, id]; draw(); };
             row.append(fb);
+          }
+          // the one account or key it is sent on (EastonXvii on X: account
+          // A, then B, then another model on C), for a provider with more
+          // than one: the same model on another account is a member of its
+          // own, added after this one and tried in the group's order
+          const accts = groups.accounts?.[m?.provider] || [];
+          if (accts.length) {
+            const mine = memberAccount(id);
+            const ab = el("button", "rt-cond rt-fixed rt-macct" + (mine ? " on" : ""));
+            ab.type = "button";
+            ab.append(el("span", "", mine ? mine.name : t("Any account")));
+            ab.title = mine ? t("Sent on {account} alone; when it can't answer, the next model in the group is tried", { account: mine.name }) : t("Sent on any account the group allows");
+            ab.setAttribute("aria-label", `${memberName(id)}: ${ab.textContent}`);
+            const bare = (a) => a.slice(m.provider.length + 1);
+            const used = (a) => d.members.some((x) => x !== id && splitMember(x)[0] === model && splitMember(x)[2] === bare(a));
+            // the accounts it isn't on yet, here or in another row
+            const free = accts.filter((a) => !used(a.id) && a.id !== mine?.id);
+            ab.onclick = (ev) => pickFrom("account", ab, ev, [
+              { value: "", label: t("Any account"), note: t("any the group allows") },
+              ...accts.map((a) => ({ value: a.id, label: a.name, note: [a.plan, used(a.id) && t("in the group already")].filter(Boolean).join(" · ") })),
+              ...(free.length ? [{ value: "+", label: t("Also on another account…"), note: t("a member of its own, tried after this one") }] : []),
+            ], (v) => {
+              if (v === "+") {
+                pickFrom("account", ab, ev, free.map((a) => ({ value: a.id, label: a.name, note: a.plan || "" })), (a) => {
+                  if (!a) return;
+                  d.members.splice(i + 1, 0, memberId(model, fixed, bare(a)));
+                  rematch(); draw(); drawRules();
+                });
+                return;
+              }
+              if (moveTo(memberId(model, fixed, v && bare(v)))) { draw(); drawRules(); }
+            }, mine?.id || "");
+            row.append(ab);
           }
         } else if (s) {
           // a group in the group takes no reasoning of its own: its models
@@ -7501,6 +7601,49 @@ function routingPage(part) {
       }
     };
     drawAccounts();
+
+    // how a part works, said under an ⓘ beside it rather than in a
+    // paragraph under it: on hover, and read out with focus
+    const infoTip = (text) => {
+      const s = el("span", "rt-info");
+      s.tabIndex = 0;
+      s.setAttribute("role", "img");
+      const set = (v) => { s.title = v; s.setAttribute("aria-label", v); };
+      set(text);
+      s.set = set;
+      s.append(svg(INFO_I, 14, 1.5));
+      return s;
+    };
+
+    // gateway keys (Xerxes754 on X): a group bound to some keys is theirs
+    // alone; any other key neither lists it nor reaches it (Group.Keys,
+    // groupBarred). Left on any key, every key may use it, as before. The
+    // row shows once there is a key to bind, or the group is bound already
+    const keysLabel = el("label", "rt-gkeys", t("Gateway keys")), keysBox = el("div", "rt-gkeys");
+    ed.append(keysLabel, keysBox);
+    const drawKeys = () => {
+      const all = groups.gatewayKeys || [];
+      keysLabel.hidden = keysBox.hidden = !all.length && !d.keys.length;
+      const nameOf = (id) => all.find((k) => k.id === id)?.name || id;
+      const b = el("button", "rt-cond rt-gkey" + (d.keys.length ? " on" : ""));
+      b.type = "button";
+      b.append(el("span", "", d.keys.length === 1 ? nameOf(d.keys[0]) : d.keys.length ? t("{n} gateway keys", { n: d.keys.length }) : t("Any gateway key")));
+      b.title = d.keys.length ? t("Only {keys} may see and use this group", { keys: d.keys.map(nameOf).join(", ") }) : t("Every gateway key may use this group");
+      b.setAttribute("aria-label", `${t("Gateway keys")}: ${b.textContent}`);
+      // a key bound, then deleted, stays listed until it is unpicked; when
+      // the keys couldn't be read (null), it is only not known
+      const gone = d.keys.filter((id) => !all.some((k) => k.id === id)).map((id) => ({ value: id, label: id, note: groups.gatewayKeys ? t("key deleted") : "" }));
+      b.onclick = (ev) => openPicker({ id: "", name: "", fields: [] }, { key: "gatewayKey", label: "gateway key", value: "", menu: true, multi: true,
+        options: [...all.map((k) => ({ value: k.id, label: k.name, note: k.off ? t("off") : k.masked || "" })), ...gone], picked: (v) => d.keys.includes(v), onPick: (v) => {
+          if (!v) return;
+          d.keys = d.keys.includes(v) ? d.keys.filter((x) => x !== v) : [...d.keys, v];
+          drawKeys();
+        } }, b, ev);
+      const row = el("div", "rt-pickrow");
+      row.append(b, infoTip(t("Bound to some keys, the group is theirs alone: any other gateway key neither sees it in its model list nor can use it. A request from this computer without a key still can.")));
+      keysBox.replaceChildren(row);
+    };
+    drawKeys();
 
     // patterns: models found by their ids, now and as providers list new
     // ones (#766): after the models named, in the catalog's order, until
@@ -7706,18 +7849,6 @@ function routingPage(part) {
     // "用户要输入、填写这么多东西，太恐怖了"; CherryL1quor on X took Jev for
     // the effort alone while the intent sat among the others).
     const RULE_PAUSE = "M6 4.5v7M10 4.5v7", RULE_SEND = "M3 8h9M8.5 4.5 12 8l-3.5 3.5", RULE_EFFORT = "M3 11.5a5 5 0 0 1 10 0M8 11.5l2.5-3.5";
-    // how a part works, said under an ⓘ beside it rather than in a
-    // paragraph under it: on hover, and read out with focus
-    const infoTip = (text) => {
-      const s = el("span", "rt-info");
-      s.tabIndex = 0;
-      s.setAttribute("role", "img");
-      const set = (v) => { s.title = v; s.setAttribute("aria-label", v); };
-      set(text);
-      s.set = set;
-      s.append(svg(INFO_I, 14, 1.5));
-      return s;
-    };
     const rbox = el("div", "fallback rt-rules");
     const rlist = el("div", "fbl");
     const rAdd = el("button", "rt-gadd");
@@ -7741,7 +7872,7 @@ function routingPage(part) {
     // a rule with nothing to match by can't be saved (provider.cleanRules
     // refuses it too): one Save refused for it says so under it, with the
     // way out, until it has a condition or is removed
-    const bareRule = (r) => r.pause ? !condSet(r, "time") && !r.agents.length && !r.folders?.length && !r.exceptFolders?.length
+    const bareRule = (r) => r.pause ? !condSet(r, "time") && !condSet(r, "agents") && !r.folders?.length && !r.exceptFolders?.length
       : !COND_KINDS.some(([k]) => condSet(r, k));
     const refused = new WeakSet();
     // what a rule can hold, in the order a rule reads: [kind, its name in
@@ -7750,29 +7881,43 @@ function routingPage(part) {
     // keeps the model out of every one.
     const COND_KINDS = [
       ["intent", "asks for", false],
+      ["message", "Message text", false],
       ["tokens", "Conversation length", false],
       ["images", "has an image", false],
       ["effort", "Reasoning level", false],
       ["compact", "compacting", false],
       ["agents", "Agents", true],
+      ["subagent", "Subagent", false],
       ["folders", "in folder", true],
       ["exceptFolders", "not in folder", true],
       ["time", "Hours and days", true],
     ];
-    const condSet = (r, k) => k === "time" ? !!(r.time && (r.time.from || r.time.to || r.time.days?.length))
-      : Array.isArray(r[k]) ? r[k].length > 0 : !!r[k];
+    // the field of a kind's conditions in the rule's where
+    const KIND_FIELD = { tokens: "tokens", effort: "effort", agents: "agent", subagent: "subagent", message: "message" };
+    const condSet = (r, k) => {
+      const c = KIND_FIELD[k] && whereOf(r, KIND_FIELD[k]);
+      if (c && (k === "subagent" || String(c.value ?? "").trim())) return true;
+      return k === "time" ? !!(r.time && (r.time.from || r.time.to || r.time.days?.length))
+        : !(k in condNone) ? false : Array.isArray(r[k]) ? r[k].length > 0 : !!r[k];
+    };
     // a condition taken off is the value saved for none, as before
     const condNone = { intent: "", tokens: 0, images: false, effort: "", compact: false, agents: [], folders: [], exceptFolders: [], time: null };
     const addCond = (r, k) => {
       openedOf(r).add(k);
       if (k === "images" || k === "compact") r[k] = true;
+      if (k === "subagent") setWhere(r, "subagent", { op: "is" });
+      if (k === "message" && !whereOf(r, "message")) setWhere(r, "message", { op: "contains", value: "" });
       if (k === "intent" && !d.classifier && deciders.length) d.classifier = deciders[0].id;
       focusCond = { r, k };
       drawRules();
     };
     const dropCond = (r, k) => {
       openedOf(r).delete(k);
-      r[k] = Array.isArray(condNone[k]) ? [] : condNone[k];
+      // the pill's own: the rule's field when it is set, else the field's
+      // first condition (one more, from the CLI, keeps its own pill)
+      const own = k in condNone && (Array.isArray(r[k]) ? r[k].length > 0 : !!r[k]);
+      if (k in condNone) r[k] = Array.isArray(condNone[k]) ? [] : condNone[k];
+      if (KIND_FIELD[k] && !own) setWhere(r, KIND_FIELD[k], null);
       focusCond = { r, k: "+" };
       drawRules();
     };
@@ -7859,6 +8004,16 @@ function routingPage(part) {
         const shown = (k, pauses) => (pauses || !r.pause) && (condSet(r, k) || openedOf(r).has(k));
         const kinds = COND_KINDS.filter(([k, , p]) => shown(k, p)).map(([k]) => k);
         const mine = focusCond?.r === r ? focusCond.k : null;
+        // the where conditions a pill shows; any other is drawn on its own
+        const inPill = new Set();
+        // how a pill compares (aipha2025 on X), picked in the app's menu
+        const opBtn = (text, options, value, onPick) => {
+          const b = el("button", "rt-op", text);
+          b.type = "button";
+          b.setAttribute("aria-haspopup", "menu");
+          b.onclick = (ev) => { ev.stopPropagation(); pickFrom("rule-op", b, ev, options, onPick, value()); };
+          return b;
+        };
         // a set condition in its pill, and the × that takes it off
         const wrap = (k, ...els) => {
           openedOf(r).add(k); // emptied, it stays until its × takes it off
@@ -7908,15 +8063,58 @@ function routingPage(part) {
           wrap("intent", it);
           if (mine === "intent") focus = () => ii.focus({ preventScroll: true });
         }
+        // the message's own words, as the user wrote them when the turn
+        // began: contains, doesn't contain, starts with, or a pattern
+        if (kinds.includes("message")) {
+          const mc = whereOf(r, "message") || (setWhere(r, "message", { op: "contains", value: "" }), whereOf(r, "message"));
+          inPill.add(mc);
+          const ms = el("span", "rt-cond ms");
+          ms.onclick = (e) => { if (e.target === ms || e.target.tagName === "SPAN") mi.focus(); };
+          ms.title = t("The words the user wrote as the turn began, without what the agent adds to them; not case-sensitive");
+          const mi = input(mc.value || "", "");
+          mi.maxLength = 500; // provider.MaxCondText
+          const bad = () => { if (mc.op !== "matches") return false; try { new RegExp(mc.value); return false; } catch { return true; } };
+          const look = () => {
+            ms.classList.toggle("on", !!mc.value.trim());
+            ms.classList.toggle("bad", bad());
+            mi.placeholder = mc.op === "matches" ? "^translate\\b" : t("e.g. run the tests");
+            fitBox(mi);
+          };
+          const mo = opBtn(t(MESSAGE_OPS[mc.op] || mc.op), Object.entries(MESSAGE_OPS).map(([v, w]) => ({ value: v, label: t(w), note: v === "matches" ? t("regular expression, any case") : "" })), () => mc.op,
+            (v) => { mc.op = v; mo.textContent = t(MESSAGE_OPS[v]); look(); warn(); });
+          mi.oninput = () => { mc.value = mi.value; look(); warn(); };
+          mi.onkeydown = (e) => e.stopPropagation();
+          ms.append(el("span", "", t("Message text")), mo, mi);
+          look();
+          wrap("message", ms);
+          if (mine === "message") focus = () => mi.focus({ preventScroll: true });
+        }
         // tokens: at least this long
         if (kinds.includes("tokens")) {
-          const tk = el("span", "rt-cond tk" + (r.tokens ? " on" : ""));
+          // ≥ is the rule's own tokens, as before; >, < and ≤ a condition
+          let tw = !r.tokens ? whereOf(r, "tokens") || null : null;
+          if (tw) inPill.add(tw);
+          const n = () => tw ? +tw.value || 0 : r.tokens;
+          const tk = el("span", "rt-cond tk" + (n() ? " on" : ""));
           tk.onclick = (e) => { if (e.target === tk || e.target.tagName === "SPAN") ti.focus(); };
-          const ti = input(r.tokens ? String(r.tokens) : "", "", "number");
+          const ti = input(n() ? String(n()) : "", "", "number");
           ti.min = "0"; ti.step = "1000";
-          ti.oninput = () => { r.tokens = Math.max(0, parseInt(ti.value, 10) || 0); tk.classList.toggle("on", !!r.tokens); warn(); };
+          const setN = (v) => { if (tw) tw.value = v ? String(v) : ""; else r.tokens = v; tk.classList.toggle("on", !!v); };
+          ti.oninput = () => { setN(Math.max(0, parseInt(ti.value, 10) || 0)); warn(); };
           ti.onkeydown = (e) => e.stopPropagation();
-          tk.append(el("span", "", "≥"), ti, el("span", "", t("tokens")));
+          const to = opBtn(TOKEN_OPS[tw?.op || "gte"], [
+            { value: "gte", label: "≥" }, { value: "gt", label: ">" }, { value: "lt", label: "<" }, { value: "lte", label: "≤" },
+          ], () => tw?.op || "gte", (op) => {
+            const v = n();
+            if (tw) r.where = r.where.filter((c) => c !== tw);
+            tw = null;
+            r.tokens = 0;
+            if (op === "gte") r.tokens = v;
+            else { tw = { field: "tokens", op, value: v ? String(v) : "" }; r.where = [...(r.where || []), tw]; inPill.add(tw); }
+            to.textContent = TOKEN_OPS[op];
+            warn();
+          });
+          tk.append(to, ti, el("span", "", t("tokens")));
           wrap("tokens", tk);
           if (mine === "tokens") focus = () => ti.focus({ preventScroll: true });
         }
@@ -7929,15 +8127,43 @@ function routingPage(part) {
         }
         // reasoning
         if (kinds.includes("effort")) {
-          const effortName = (v) => v === "on" ? t("reasoning on") : v ? t("reasoning ≥ {level}", { level: v }) : t("any reasoning");
-          const ef = el("button", "rt-cond" + (r.effort ? " on" : ""), effortName(r.effort));
-          ef.onclick = (ev) => pickFrom("reasoning", ef, ev, [
-            { value: "", label: t("any reasoning"), note: t("not a condition") },
-            { value: "on", label: t("reasoning on"), note: t("thinking or any effort level") },
-            ...EFFORTS.map((v) => ({ value: v, label: t("reasoning ≥ {level}", { level: v }) })),
-          ], (v) => { r.effort = v; ef.textContent = effortName(v); ef.classList.toggle("on", !!v); warn(); });
+          // ≥ a level and "is on" are the rule's own effort, as before;
+          // ≤, is and is not (off, on or a level) a condition
+          let ew = !r.effort ? whereOf(r, "effort") || null : null;
+          if (ew) inPill.add(ew);
+          const cur = () => ew ? [ew.op, ew.value || ""] : r.effort === "on" ? ["is", "on"] : ["gte", r.effort || ""];
+          const OPS = { gte: "≥", lte: "≤", is: "=", not: "≠" };
+          const valName = (v) => v === "off" ? t("off") : v === "on" ? t("on") : v || t("any reasoning");
+          const ef = el("span", "rt-cond ef");
+          const set = (op, v) => {
+            if (ew) r.where = r.where.filter((c) => c !== ew);
+            ew = null;
+            r.effort = "";
+            if (v && op === "gte") r.effort = v;
+            else if (v === "on" && op === "is") r.effort = "on";
+            else if (v) { ew = { field: "effort", op, value: v }; r.where = [...(r.where || []), ew]; inPill.add(ew); }
+            eo.textContent = OPS[op];
+            ev.textContent = valName(v);
+            ef.classList.toggle("on", !!v);
+            warn();
+          };
+          const eo = opBtn(OPS[cur()[0]], [
+            { value: "gte", label: "≥" }, { value: "lte", label: "≤" }, { value: "is", label: "=" }, { value: "not", label: "≠" },
+          ], () => cur()[0], (op) => { const v = cur()[1]; set(op, (op === "gte" || op === "lte") && !EFFORTS.includes(v) ? "" : v); });
+          const ev = opBtn(valName(cur()[1]), [], () => cur()[1], () => {});
+          ev.onclick = (e) => {
+            e.stopPropagation();
+            const [op, v] = cur();
+            pickFrom("reasoning", ev, e, [
+              { value: "", label: t("any reasoning"), note: t("not a condition") },
+              ...(op === "is" || op === "not" ? [{ value: "off", label: t("off"), note: t("reasoning off, or not asked for") }, { value: "on", label: t("on"), note: t("thinking or any effort level") }] : []),
+              ...EFFORTS.map((x) => ({ value: x, label: x })),
+            ], (x) => set(op, x), v);
+          };
+          ef.classList.toggle("on", !!cur()[1]);
+          ef.append(el("span", "", t("reasoning")), eo, ev);
           wrap("effort", ef);
-          if (mine === "effort") focus = () => { ef.focus({ preventScroll: true }); ef.onclick({ stopPropagation() {} }); };
+          if (mine === "effort") focus = () => { ev.focus({ preventScroll: true }); ev.onclick({ stopPropagation() {} }); };
         }
         // compacting: the agent summarizing its conversation (/compact),
         // which a cheaper, faster model can do
@@ -7953,14 +8179,36 @@ function routingPage(part) {
         // (raikyou on Discord: SillyTavern, one's own app)
         if (kinds.includes("agents")) {
           const clients = state.clients || state.agents || [];
-          const agentsName = () => r.agents.length ? r.agents.map((id) => clients.find((a) => a.id === id)?.name || id).join(", ") : t("any agent");
-          const ag = el("button", "rt-cond" + (r.agents.length ? " on" : ""), agentsName());
+          // is one of them: the rule's own agents, as before; is none of
+          // them: a condition, which a pause takes too
+          let aw = !r.agents.length ? whereOf(r, "agent") || null : null;
+          if (aw) inPill.add(aw);
+          const listed = () => aw ? String(aw.value || "").split(",").filter(Boolean) : r.agents;
+          const setListed = (xs) => { if (aw) aw.value = xs.join(","); else r.agents = xs; };
+          const agentsName = () => listed().length ? listed().map((id) => clients.find((a) => a.id === id)?.name || id).join(", ") : t("any agent");
+          const ag = el("button", "rt-cond" + (listed().length ? " on" : ""), agentsName());
+          const notOf = () => aw?.op === "not" ? "not" : "is";
+          const ao = el("button", "rt-cond on rt-aop", t(notOf() === "not" ? "agent is none of" : "agent is one of"));
+          ao.type = "button";
+          ao.setAttribute("aria-haspopup", "menu");
+          ao.onclick = (ev) => { ev.stopPropagation(); pickFrom("rule-op", ao, ev, [
+            { value: "is", label: t("agent is one of") }, { value: "not", label: t("agent is none of") },
+          ], (op) => {
+            const xs = [...listed()];
+            if (aw) r.where = r.where.filter((c) => c !== aw);
+            aw = null;
+            r.agents = [];
+            if (op === "is") r.agents = xs;
+            else { aw = { field: "agent", op: "not", value: xs.join(",") }; r.where = [...(r.where || []), aw]; inPill.add(aw); }
+            ao.textContent = t(op === "not" ? "agent is none of" : "agent is one of");
+            warn();
+          }, notOf()); };
           heard();
           ag.onclick = async (ev) => {
             ev.stopPropagation();
             const known = new Set(clients.map((a) => a.id));
-            const others = [...(await heard()), ...r.agents].filter((id, i, all) => !known.has(id) && all.indexOf(id) === i);
-            const tick = (id) => r.agents.includes(id) ? "✓" : "";
+            const others = [...(await heard()), ...listed()].filter((id, i, all) => !known.has(id) && all.indexOf(id) === i);
+            const tick = (id) => listed().includes(id) ? "✓" : "";
             openPicker({ id: "", name: "", fields: [] }, { key: "rule", label: "agent", value: "", menu: true,
               placeholder: t("Filter, or type an agent's name…"),
               typed: (s) => { const id = uaName(s); return id && { value: id, label: id, note: t("the name its User-Agent begins with") }; },
@@ -7969,12 +8217,31 @@ function routingPage(part) {
                 ...clients.map((a) => ({ value: a.id, label: a.name, icon: a.icon, note: tick(a.id) })),
                 ...others.map((id) => ({ value: id, label: id, icon: "generic", note: tick(id) || t("heard from in the last 30 days") })),
               ], onPick: (v) => {
-                r.agents = !v ? [] : r.agents.includes(v) ? r.agents.filter((x) => x !== v) : [...r.agents, v];
-                ag.textContent = agentsName(); ag.classList.toggle("on", r.agents.length > 0); warn();
+                const xs = listed();
+                setListed(!v ? [] : xs.includes(v) ? xs.filter((x) => x !== v) : [...xs, v]);
+                ag.textContent = agentsName(); ag.classList.toggle("on", listed().length > 0); warn();
               } }, ag, ev);
           };
-          wrap("agents", ag);
+          // the way to compare sits apart from the agents' own button
+          const aoBox = el("span", "rt-aopw");
+          aoBox.append(ao);
+          wrap("agents", aoBox, ag);
           if (mine === "agents") focus = () => { ag.focus({ preventScroll: true }); ag.onclick({ stopPropagation() {} }); };
+        }
+        // a subagent's turn, or the lead's: Claude Code and Codex say which
+        // their requests are; any other agent's count as not a subagent's
+        if (kinds.includes("subagent")) {
+          const sc = whereOf(r, "subagent") || (setWhere(r, "subagent", { op: "is" }), whereOf(r, "subagent"));
+          inPill.add(sc);
+          const name = () => sc.op === "not" ? t("not sent by a subagent") : t("sent by a subagent");
+          const sb = el("button", "rt-cond on rt-sub", name());
+          sb.type = "button";
+          sb.title = t("Claude Code and Codex say when a subagent sends a turn; any other agent's turns count as not a subagent's");
+          sb.onclick = (ev) => pickFrom("rule-op", sb, ev, [
+            { value: "is", label: t("sent by a subagent") }, { value: "not", label: t("not sent by a subagent"), note: t("the lead, or an agent that doesn't say") },
+          ], (v) => { sc.op = v; sb.textContent = name(); warn(); }, sc.op);
+          wrap("subagent", sb);
+          if (mine === "subagent") focus = () => sb.focus({ preventScroll: true });
         }
         // folders: the project the agent works in, as it tells its model
         // (Cario0x on X), typed comma separated; a folder inside one counts
@@ -8055,6 +8322,19 @@ function routingPage(part) {
           drawTime();
           wrap("time", tm, dayBtn, zoneTag);
           if (mine === "time") focus = () => tFrom.focus({ preventScroll: true });
+        }
+        // a condition no pill shows (a second on one field, typed in the
+        // CLI): said in words, and taken off by its ×
+        for (const c of (r.where || []).filter((c) => !inPill.has(c) && (c.field === "subagent" || String(c.value ?? "").trim()))) {
+          const w = el("span", "rt-c");
+          const x = el("button", "rt-cx");
+          x.type = "button";
+          x.title = t("Remove condition");
+          x.setAttribute("aria-label", x.title);
+          x.append(svg(CROSS, 8, 2));
+          x.onclick = (e) => { e.stopPropagation(); r.where = r.where.filter((o) => o !== c); focusCond = { r, k: "+" }; drawRules(); };
+          w.append(el("span", "rt-cond on rt-more", whereText(c)), x);
+          line.append(w);
         }
         // the quiet + that adds a condition: what the rule doesn't show yet,
         // in the app's menu; said in words while the rule has none
@@ -8149,6 +8429,7 @@ function routingPage(part) {
           if (r.pause) {
             delete r.more;
             Object.assign(r, { tokens: 0, images: false, effort: "", intent: "", compact: false, useEffort: "" });
+            r.where = (r.where || []).filter((c) => c.field === "agent");
             for (const [k, , p] of COND_KINDS) if (!p) openedOf(r).delete(k);
           }
           drawRules();
@@ -8209,7 +8490,7 @@ function routingPage(part) {
       focusCond = null;
       focus?.();
     };
-    const newRule = () => ({ use: d.members[d.members.length - 1], pause: false, useEffort: "", tokens: 0, images: false, effort: "", agents: [], intent: "", compact: false, folders: [], exceptFolders: [], time: null });
+    const newRule = () => ({ use: d.members[d.members.length - 1], pause: false, useEffort: "", tokens: 0, images: false, effort: "", agents: [], intent: "", compact: false, folders: [], exceptFolders: [], where: [], time: null });
     // a new rule asks for an intent first, its box focused and the
     // classifier shown (Jev picked when there is one); any other condition
     // is a + away, and the intent an × away
@@ -8389,6 +8670,10 @@ function routingPage(part) {
           ? t("Rule {n}: its hours are the whole day — pick days, or other hours", { n: badTime + 1 })
           : t("Rule {n}: the hours are two times like 09:00 and 18:00", { n: badTime + 1 }), "warn");
       }
+      // a condition left without its value is none (an emptied box)
+      for (const r of d.rules) if (r.where) { r.where = r.where.filter((c) => c.field === "subagent" || String(c.value ?? "").trim() && !(c.field === "tokens" && !(+c.value > 0))); if (!r.where.length) delete r.where; }
+      const badRe = d.rules.findIndex((r) => (r.where || []).some((c) => { if (c.field !== "message" || c.op !== "matches") return false; try { new RegExp(c.value); return false; } catch { return true; } }));
+      if (badRe >= 0) return status(t("Rule {n}: what the message matches isn't a regular expression", { n: badRe + 1 }), "warn");
       // a folder is a whole path (provider.cleanFolder)
       const badDir = d.rules.findIndex((r) => [...(r.folders || []), ...(r.exceptFolders || [])].some((f) => !/^(~$|~[\\/]|\/|\\\\|[A-Za-z]:([\\/]|$))/.test(f)));
       if (badDir >= 0) return status(t("Rule {n}: a folder is a whole path, like ~/work or /Users/me/work", { n: badDir + 1 }), "warn");
@@ -8407,7 +8692,7 @@ function routingPage(part) {
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing

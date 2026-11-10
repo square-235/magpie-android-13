@@ -140,6 +140,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		UsageCleared:         []settings.UsageClear{{Provider: "p", Model: "m", At: 1761600000000}},
 		ModelKinds:           map[string]string{"p/m": "video"},
 		ModelHeaders:         map[string]map[string]string{"p/m": {"X-Endpoint": "ep-1"}},
+		ModelSystemPrompts:   map[string]string{"p/m": "Answer in Chinese."},
 		RedactRules:          []redact.Rule{{Kind: "prefix", Prefix: "oc_sk_"}},
 		RedactActions:        map[string]string{"API_KEY": "block", "EMAIL": "warn"},
 		RedactAllow:          []string{"team@kelvarn.io"},
@@ -170,6 +171,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		CodexAutoReview:      "fake/m1",
 		CodexSubagentModel:   "codex/gpt-6-astra",
 		DesktopSubagentModel: "fake/m2",
+		DshCompactModel:      "fake/m1",
 		ChinaMirror:          true,
 		NPMRegistry:          "https://npm.corp.example",
 		CodexAutoReset:       []string{"me@example.com"},
@@ -206,11 +208,13 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.ClaudeRunsMost = 3
 	was.RequestArchiveLocal, was.RequestArchiveLocalMB = true, 256
 	was.ProxyCustom = "http://me:secret@proxy.example:8080"
+	was.PluginProxyCustom = "http://me:secret@plugins.example:8080"
 	was.PanelShortcut = "Ctrl+Alt+K"
 	was.SearcherThen = []string{"fake/m1", "fake/m2"} // set in its own row
 	was.RouterNote = "Los Angeles"                    // the Library's servers/hub-note
 	was.RouterAllTools = true                         // the Library's servers/hub-tools
 	was.BusyLoad = 150                                // the Routing page's busy-load
+	was.MTLS = true                                   // Network and sharing's settings/mtls
 	// the Routing groups page's defaults for every group (groups/defaults)
 	was.GroupSink, was.GroupFirstToken, was.GroupPatience = true, 30, 120
 	if err := settings.Save(was); err != nil {

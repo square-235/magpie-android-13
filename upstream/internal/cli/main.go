@@ -76,6 +76,7 @@ const usage = `magpie — one place to pick every agent's model
                                                      --sign-ins on backup: the subscriptions' and plugins' sign-ins too, sealed (off unless given); --no-sign-ins on restore leaves them out
   magpie uninstall [--yes]                           disconnect every agent, putting back what each had, then remove magpie's service and files
                                                      --keep-data: all but deleting magpie's settings, providers and usage
+  magpie data [move <folder>|move --home]            where magpie keeps its files and cache, and moving them to another disk (a link is left where they were)
   magpie webdav [on <address>|set k=v…|now|off]      the same, kept the same on every computer through a WebDAV folder (magpie webdav help)
   magpie s3 [on s3://<bucket>[/<prefix>]|set k=v…|now|off]   the same through an S3-compatible bucket: AWS, R2, B2, MinIO… (magpie s3 help)
   magpie github [on github://<owner>/<repo>[/<folder>]|set k=v…|now|off]   the same in an encrypted GitHub repository (magpie github help)
@@ -105,6 +106,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts add copilot [--host <name>.ghe.com]   one more Copilot account, on github.com or an enterprise's GHE.com
   magpie accounts discovery [on|off]   read agents' sign-ins (default on; MAGPIE_NO_ACCOUNTS=1 disables too)
   magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]   bring in accounts from other tools' files (Codex's auth.json, Cockpit Tools, CLIProxyAPI, Sub2API, claude-swap); the tool a ChatGPT or Claude file came from is signed out of it
+  magpie accounts import codex <file>... --access-only   keep each ChatGPT account with its access token only: never renewed, so the tool it came from stays signed in
+  magpie accounts access-only codex <email> [on|off]   keep a ChatGPT account access token only, or let magpie renew its sign-in again
   magpie accounts switch <agent> <email|name>   sign the agent in to another of them, by its email or the name you gave it
   magpie accounts switch <claude|codex> next   to the next account in order with room, or the one with the most left
   magpie accounts refresh         renew the saved ChatGPT and Claude sign-ins now (the gateway does it every 8 days)
@@ -128,6 +131,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie daemon web [on|off] [--lan] [--addr host:port]
                                   the service's page: its link, or turn it on or off
   magpie healthcheck              exit 0 when the gateway answers (a container's HEALTHCHECK)
+  magpie mtls [on|off|issue <device>|list|revoke <device>]
+                                  require a client certificate magpie issued from other computers (mTLS)
   magpie heap [<file>]            a Go heap profile of the running magpie, with its memory numbers, for a report of it using too much memory
   magpie cpu [<file>] [--seconds N]   a Go CPU profile of the running magpie over 30s (5..120) while you use it, for a report of it using too much CPU
   magpie goroutines [<file>]      every goroutine of the running magpie, its stack and how long it waited, for a report of it stuck at something
@@ -135,6 +140,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie gateway-key list|add <name> [--read-only]|rotate <id> [--key -]|remove <id>   manage the keys clients use to call a shared gateway
   magpie gateway-key limit <id> [list|off|reset [n]|remove <n>|[add] day|week|month|<N>d|<N>h --tokens N --cost USD --cache-reads --model openai/*]   a key's own limits, and what it used; --model counts only those models
   magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
+  magpie gateway-key accounts <id> [all|<provider>/<account>|<provider>/!<account>|@<group>|!@<group> ...]   the accounts a key may use, or keeps out
+  magpie gateway-key groups [add <name> <account>...|set <group> <account>...|rename <group> <name>|remove <group>]   named account groups a key's accounts can name
   magpie gateway-key quotas <id> [on|off]   whether a key held to a budget, models or accounts is told the quotas of what it may use
   magpie gateway-key concurrency <id> [<n>|off]   at most n of a key's requests at once; the rest wait their turn
   magpie gateway-key mcp <id> [all|none|<server>|<server>/<tool> ...]   the MCP servers and tools a key may use
@@ -212,6 +219,8 @@ func Main(v string) {
 		fmt.Fprintln(os.Stderr, "magpie:", err)
 		os.Exit(1)
 	}
+	// moved to a disk that isn't connected: never an empty magpie in its place
+	unreachableStop(os.Args[1:])
 	slices.Sort(ignored)
 	for _, v := range ignored {
 		fmt.Fprintf(os.Stderr, "magpie: ignoring %s: not an absolute path (the programs magpie starts still get it)\n", v)
@@ -342,6 +351,11 @@ func run(args []string) error {
 		// the running magpie's heap profile: asks it, and moves nothing here
 		return heapCmd(args[1:])
 	}
+	if len(args) > 0 && args[0] == "mtls" {
+		// magpie's CA and the client certificates it issued: nothing
+		// else is read or moved
+		return mtlsCmd(args[1:])
+	}
 	if len(args) > 0 && args[0] == "cpu" {
 		// the running magpie's CPU profile: asks it, and moves nothing here
 		return cpuCmd(args[1:])
@@ -381,6 +395,9 @@ func run(args []string) error {
 			if len(args) > 1 && args[1] == "vision" {
 				return browsermcp.RunVision(args[2:])
 			}
+			if len(args) > 1 && args[1] == "memory" {
+				return browsermcp.RunMemory(args[2:])
+			}
 			return imagemcp.Run(args[1:])
 		case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
 			return claudebridge.RunMCP(args[1:])
@@ -398,6 +415,8 @@ func run(args []string) error {
 			return toolCmd(args[1:])
 		case codexrelay.Command: // internal: what a quitting magpie leaves for Codex's open threads
 			return codexrelay.Main(args[1:], gateway.CodexRelay())
+		case "data": // where magpie's files are, and moving them: before anything is made in them
+			return dataCmd(args[1:])
 		case "uninstall":
 			// what the app starts as it quits from Settings › Uninstall
 			// magpie: nothing is made again before its folders go
@@ -415,6 +434,10 @@ func run(args []string) error {
 	// a command that serves no pages starts a plugin host beside the
 	// app's, whose page services it leaves to the app (#5187)
 	plugin.ServePages(servesPages(args))
+	// the app started again to move magpie's folders (Settings › General)
+	if servesPages(args) {
+		movePending()
+	}
 	startUp()
 	// a provider added, edited or removed, or a list fetched anew, reaches
 	// the model lists agents keep in files of their own, behind the save

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/probelog"
 	"github.com/yetone/magpie/internal/settings"
@@ -2012,7 +2012,14 @@ func (p Provider) PricedFree(s settings.Settings, model string) bool {
 	if pr, ok := userPrice(s, p, model); ok {
 		return zeroPrice(pr)
 	}
-	pr, ok, from := p.listPrice(model)
+	c := p.priceCatsOf()
+	pr, ok, from := p.listPriceIn(c, model)
+	return p.listedFree(c, model, pr, ok, from)
+}
+
+// listedFree is PricedFree for a model the user set no price for, given
+// what listPriceIn found.
+func (p Provider) listedFree(c priceCats, model string, pr catalog.Price, ok bool, from int) bool {
 	switch {
 	case !ok || !zeroPrice(pr):
 		return false
@@ -2024,8 +2031,15 @@ func (p Provider) PricedFree(s settings.Settings, model string) bool {
 		// a plan's catalog (zai-coding-plan) lists what its members pay
 		// per token, nothing, not what the model costs: only a catalog
 		// that is no plan's says it is free
-		plain := slices.DeleteFunc(priceCatalogs(p.priceCatalogsOf()), func(c string) bool { return strings.Contains(c, "-plan") })
-		for _, m := range p.priceNames(model) {
+		// copied only when a plan's is among them: every $0 model of a
+		// catalog was a copy on each Providers ask
+		isPlan := func(c string) bool { return strings.Contains(c, "-plan") }
+		plain := c.priced
+		if slices.ContainsFunc(plain, isPlan) {
+			plain = slices.DeleteFunc(slices.Clone(plain), isPlan)
+		}
+		var buf [4]string
+		for _, m := range c.priceNames(buf[:0], model) {
 			if pr, ok := catalog.PricedBy(plain, m); ok {
 				return zeroPrice(pr)
 			}
@@ -2040,8 +2054,24 @@ func (p Provider) PricedFree(s settings.Settings, model string) bool {
 // from any provider (*/model), still the user's word, so before any list
 // price.
 func userPrice(s settings.Settings, p Provider, model string) (catalog.Price, bool) {
-	for _, key := range [...]string{p.ID + "/" + model, p.ID + "/*", AnyPriceKey(model)} {
-		if m, ok := s.ModelPrices[key]; ok {
+	if len(s.ModelPrices) == 0 {
+		return catalog.Price{}, false
+	}
+	// the keys made on the stack and looked up without a copy: made as
+	// strings, for every model of every provider on each Providers ask,
+	// they were most of what pricing a model allocated
+	var buf [256]byte
+	for i := range 3 {
+		k := buf[:0]
+		switch i {
+		case 0:
+			k = append(append(append(k, p.ID...), '/'), model...)
+		case 1:
+			k = append(append(k, p.ID...), "/*"...)
+		default:
+			k = append(append(k, settings.AnyProvider...), strings.ToLower(strings.TrimSpace(model))...)
+		}
+		if m, ok := s.ModelPrices[string(k)]; ok {
 			if pr, bad := m.Price(); bad == "" {
 				// a Claude model's 1-hour cache write left out: 2× input,
 				// but where Copilot bills it at the 5-minute price
@@ -2206,12 +2236,55 @@ const (
 	pricedMaker
 )
 
+// Pricer prices a provider's models as ListPrice and PricedFree do, with
+// what is the provider's alone (the catalogs it is priced from) worked
+// out once: the Providers page prices every model of every provider on
+// each ask, and worked out for each model, twice, it was 4 MB of what
+// forty asks allocated with real accounts.
+type Pricer struct {
+	p Provider
+	c priceCats
+}
+
+// Pricer is p's Pricer.
+func (p Provider) Pricer() Pricer { return Pricer{p, p.priceCatsOf()} }
+
+// Prices is model's ListPrice on the Pricer's provider, and its
+// PricedFree under s.
+func (r Pricer) Prices(s settings.Settings, model string) (list catalog.Price, listed, free bool) {
+	pr, ok, from := r.p.listPriceIn(r.c, model)
+	if up, set := userPrice(s, r.p, model); set {
+		free = zeroPrice(up)
+	} else {
+		free = r.p.listedFree(r.c, model, pr, ok, from)
+	}
+	return pr, ok, free
+}
+
+// priceCats are the catalogs listPrice prices p's models from
+// (priceCatalogsOf), and the same without the membership catalogs.
+// kimi is p.kimiCodeMember().
+type priceCats struct {
+	raw, priced []string
+	kimi        bool
+}
+
+func (p Provider) priceCatsOf() priceCats {
+	raw := p.priceCatalogsOf()
+	return priceCats{raw, priceCatalogs(raw), p.kimiCodeMember()}
+}
+
 // listPrice is ListPrice, and where it found the price.
 func (p Provider) listPrice(model string) (catalog.Price, bool, int) {
+	return p.listPriceIn(p.priceCatsOf(), model)
+}
+
+// listPriceIn is listPrice with p's catalogs given.
+func (p Provider) listPriceIn(c priceCats, model string) (catalog.Price, bool, int) {
 	if own := p.OwnModelID(model); own != model {
 		// a model listed by an id the user gave it is priced as the
 		// provider's own id of it first, then as the id it is listed by
-		if pr, ok, from := p.listPrice(own); ok {
+		if pr, ok, from := p.listPriceIn(c, own); ok {
 			return pr, true, from
 		}
 	}
@@ -2231,17 +2304,18 @@ func (p Provider) listPrice(model string) (catalog.Price, bool, int) {
 	if pr, ok := p.grokFastPrice(model); ok {
 		return pr, true, pricedOwn
 	}
-	names := p.priceNames(model)
-	cats := p.priceCatalogsOf()
-	for _, m := range names {
-		if pr, ok := catalog.PricedBy(priceCatalogs(cats), m); ok {
+	// the names on the stack: made for each model priced, they were
+	// 1.5 MB of forty Providers asks
+	var buf [4]string
+	for _, m := range c.priceNames(buf[:0], model) {
+		if pr, ok := catalog.PricedBy(c.priced, m); ok {
 			return pr, true, pricedCatalog
 		}
 		if pr, ok := makerListPrice(m); ok {
 			return pr, true, pricedMaker
 		}
 	}
-	if slices.Contains(cats, "anthropic") {
+	if slices.Contains(c.raw, "anthropic") {
 		// a gated Claude model models.dev prices nowhere (Claude Mythos
 		// 5.1): Anthropic's price, as it told Claude Code
 		if pr, ok := claudeCodePrice(model); ok {
@@ -2260,10 +2334,11 @@ func (p Provider) listPrice(model string) (catalog.Price, bool, int) {
 	return catalog.Price{}, false, pricedOwn
 }
 
-// priceNames are the ids ListPrice looks model up by in a catalog.
-func (p Provider) priceNames(model string) []string {
-	names := pricedNames(model)
-	if p.kimiCodeMember() {
+// priceNames are the ids ListPrice looks model up by in a catalog,
+// appended to dst.
+func (c priceCats) priceNames(dst []string, model string) []string {
+	names := pricedNamesTo(dst, model)
+	if c.kimi {
 		if id, ok := kimiCodeAPI[strings.ToLower(strings.TrimSpace(model))]; ok {
 			names = append(names, id)
 		}
@@ -2370,7 +2445,7 @@ func (p Provider) EndpointCatalog() string {
 // cursorFast is a Cursor id of a Grok model in its fast mode, at an effort
 // or not, at a window or not: grok-4.7-fast, grok-4.7-low-fast,
 // grok-4.7-xhigh-fast@500k. m[1] is the model it is fast of.
-var cursorFast = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*?)(?:-(?:minimal|low|medium|high|xhigh|extra-high))?-fast(?:@[0-9]+k)?$`)
+var cursorFast = lazyre.New(`^((?:.*/)?grok-[0-9][^/@]*?)(?:-(?:minimal|low|medium|high|xhigh|extra-high))?-fast(?:@[0-9]+k)?$`)
 
 // cursorFastPrices are what Cursor bills a Grok model in its fast mode
 // per million tokens, as its own model list says
@@ -2420,7 +2495,7 @@ func (p Provider) cursorFastPrice(model string) (catalog.Price, bool) {
 // grokBuildFast is Grok Build's id of a Grok model's fast variant, as its
 // own model list offers it (grok-4.7-build-fast, and at a window of its
 // own, grok-4.7-build-fast@500k). m[1] is the model it is fast of.
-var grokBuildFast = regexp.MustCompile(`^(grok-[0-9][0-9.]*)-build-fast(?:@[0-9]+k?)?$`)
+var grokBuildFast = lazyre.New(`^(grok-[0-9][0-9.]*)-build-fast(?:@[0-9]+k?)?$`)
 
 // grokFastPrice is a Grok account's (the built-in's or the Grok plugin's)
 // price for its fast variant of a Grok model: twice the model's own, every
@@ -2922,13 +2997,13 @@ func byIDOrWasIn(all []Provider, id string) (Provider, bool) {
 // words Cursor spells its ids in. A fast one ("grok-4.7-low-fast") doesn't
 // match: fast is a model of its own (cursor_models.go), and no catalog
 // prices it.
-var grokEffort = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/]*?)-(?:minimal|low|medium|high|xhigh|extra-high)$`)
+var grokEffort = lazyre.New(`^((?:.*/)?grok-[0-9][^/]*?)-(?:minimal|low|medium|high|xhigh|extra-high)$`)
 
 // grokWindow is a Grok id offered at a context window of its own
 // ("grok-4.7@500k", the grok plugin's windowsOf): the same model, asked for
 // at a longer window. A window no multiple of 1000 the id names without the
 // k.
-var grokWindow = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
+var grokWindow = lazyre.New(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
 
 // modelWindow is an id a plugin offers a model by at one context window
 // of its own, the window in thousands or millions of tokens after an @:
@@ -2937,7 +3012,7 @@ var grokWindow = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
 // plugin's grok-4.7@500k. It is the same model asked for at that window,
 // at the same price per token; a long prompt's own rate is the price's
 // tier (Price.At), read from the call's tokens, not from the window.
-var modelWindow = regexp.MustCompile(`^([^@]+)@[0-9]+[km]$`)
+var modelWindow = lazyre.New(`^([^@]+)@[0-9]+[km]$`)
 
 // pricedNames are the ids a model is priced by, in order: its own, then,
 // for an id at a window (claude-opus-5-5@300k, grok-4.7@500k), the model
@@ -2952,8 +3027,11 @@ var modelWindow = regexp.MustCompile(`^([^@]+)@[0-9]+[km]$`)
 // grok-4.7-mini, grok-4.7-fast); a Cursor account's fast ids are priced at
 // Cursor's own fast rate (Provider.cursorFastPrice), and a Grok account's
 // grok-4.7-build-fast at twice grok-4.7's (Provider.grokFastPrice).
-func pricedNames(model string) []string {
-	out := []string{model}
+func pricedNames(model string) []string { return pricedNamesTo(nil, model) }
+
+// pricedNamesTo is pricedNames appended to dst.
+func pricedNamesTo(dst []string, model string) []string {
+	out := append(dst, model)
 	if model == "codex-auto-review" {
 		out = append(out, "gpt-5.6-luna")
 	}
@@ -3159,6 +3237,23 @@ func catalogKeeping(keep func(Entry) bool) []Entry {
 	return out
 }
 
+// CatalogGroups is Catalog's routing groups, the caller's own, and how
+// many entries Catalog has, without copying the providers' models: the
+// Providers page reads only these, on every poll, and a whole Catalog
+// was ~0.3 MB of each poll's garbage with real accounts.
+func CatalogGroups() ([]Entry, int) {
+	entries := providerEntries()
+	groups := slices.Clone(groupEntries(entries))
+	n := len(groups)
+	kept := unlistedByGroups(entries)
+	for _, e := range entries {
+		if !e.Provider.Unlisted && len(kept[e.ID]) == 0 {
+			n++
+		}
+	}
+	return groups, n
+}
+
 // unlistedByGroups are the models, by "provider/model", that a group
 // keeps out of the lists (Group.Unlists), with the names of the groups
 // that do: those it names, a member fixed at an effort counting as its
@@ -3182,7 +3277,8 @@ func unlistedByGroups(entries []Entry) map[string][]string {
 // groupsKeeping is unlistedByGroups with the groups themselves, by the
 // models, "provider/model", they keep out of the lists.
 func groupsKeeping(entries []Entry) map[string][]Group {
-	if !slices.ContainsFunc(heldOf("file", load).Groups, func(g Group) bool { return g.Unlists }) {
+	// read only: the file parsed once until it changes (storedFile)
+	if !slices.ContainsFunc(storedFile().Groups, func(g Group) bool { return g.Unlists }) {
 		return nil
 	}
 	out := map[string][]Group{}
@@ -3488,6 +3584,14 @@ func Resolve(id string) (Provider, string, bool) {
 		}
 		if e, ok := entryIn(Catalog(), id); ok {
 			return e.Provider, e.Model, true
+		}
+		// a group renamed from it (Former) answers for it, as routing does
+		if gid, ok := GroupIDOf(id); ok {
+			if g, ok := routedGroupOf(sharedGroupsIn(entries), gid); ok && g.ID != gid {
+				if e, ok := entryIn(groupEntries(entries), "group/"+g.ID); ok {
+					return e.Provider, e.Model, true
+				}
+			}
 		}
 		return Provider{}, "", false
 	}

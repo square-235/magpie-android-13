@@ -56,6 +56,13 @@ func init() {
 	// but not when Codex's account is switched while its provider takes
 	// no ChatGPT account: the app-server goes by none
 	provider.CodexNoAccount = codexNoAccount
+	// and whether the takeover was turned off by the user rather than
+	// ended by the reset (Keep on ChatGPT, Always ChatGPT, a Disconnect)
+	provider.CodexTakeoverOff = func() bool {
+		home, _ := homes()
+		a := codex(home)
+		return a.AppOutOff != nil && a.AppOutOff()
+	}
 	// and when none starts in place of the one ended, the app is
 	// reopened on Windows, where its stdout was held open
 	provider.CodexAppOpen = codexAppOpen
@@ -192,9 +199,13 @@ var others = []*Agent{
 // Clients is everyone whose requests the gateway knows by name: every
 // agent, detected or not, and the others. It is what the Usage and
 // Routing views draw a request's client with.
-func Clients() []*Agent {
+func Clients() []*Agent { return ClientsIn(All()) }
+
+// ClientsIn is Clients among all, a list of All() the caller has built
+// already.
+func ClientsIn(all []*Agent) []*Agent {
 	var out []*Agent
-	for _, a := range All() {
+	for _, a := range all {
 		// a WSL agent's requests are its Windows twin's by their UA
 		if a.WSL == "" {
 			out = append(out, a)
@@ -282,6 +293,7 @@ func onMachine(home, cfg string) []*Agent {
 		qwen(home),
 		muse(cfg),
 		empryo(home),
+		nanobot(home),
 		ante(home),
 		astrbot(home),
 		qwenpaw(home),

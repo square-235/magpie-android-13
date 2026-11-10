@@ -898,7 +898,7 @@ func showProviderAsking(p provider.Provider, ask bool) error {
 	if p.Unredacted {
 		why := "  Settings' redaction leaves its requests as written"
 		if !p.SkipsRedaction() {
-			why = "  but masked: another magpie or no address"
+			why = "  but masked: no address"
 		}
 		kv("unmasked", "yes"+muted.Render(why))
 	}
@@ -1310,7 +1310,8 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			// yes: the provider gets the requests as written, unmasked by
 			// Settings' redaction (lc, AcMilan on Discord): the user's word
 			// at any address, a subscription's or a plugin's provider's too
-			// (isee1_1), never another magpie's (provider.SkipsRedaction)
+			// (isee1_1), another magpie's too, which then masks by its own
+			// settings (provider.SkipsRedaction)
 			if v != "yes" && v != "no" {
 				return fmt.Errorf("unmasked=yes|no, not %q", v)
 			}
@@ -1473,8 +1474,15 @@ func keyNote() string {
 const containerNote = "these are the container's own addresses: other machines use the host's, and MAGPIE_PUBLIC_URL=http://<host>:<port> puts it here"
 
 // containerLine is where other containers on this host reach the gateway
-// while magpie runs in one, "" when that isn't known.
+// while magpie runs in one, "" when that isn't known. In a LazyCat app on
+// the box's bridge network it says how the box's LAN address gets the
+// port, which LazyCat publishes only to its client's devices (mtoolstec
+// on X).
 func containerLine() string {
+	if gateway.LazyCatURL() != "" && !gateway.LazyCatBox() {
+		port := gateway.Port()
+		return muted.Render("  only devices with the LazyCat client reach " + gateway.LazyCatURL() + "; for the box's LAN IP on port " + port + ", forward port " + port + " to Magpie in LazyCat's LAN port forwarding app")
+	}
 	if u := gateway.ContainerHostURL(); u != "" {
 		return muted.Render("  other containers on this host ") + u
 	}

@@ -175,6 +175,8 @@ func revealable(v *library.View) []string {
 
 func libraryRoutes(mux *http.ServeMux, w Windows) {
 	browserRoutes(mux, w)
+	memoryRoutes(mux)
+	memoryDistillRoutes(mux)
 	mux.HandleFunc("GET /api/library", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := libraryRead(nil, r.URL.Query().Get("glance") == "1")
 		if err != nil {
@@ -395,6 +397,35 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		}
 		writeJSON(rw, v)
 	})
+	// billion-context: which agents have its plugin, switching one on or
+	// off, and installing bili when the page is asked to
+	mux.HandleFunc("GET /api/library/bili", func(rw http.ResponseWriter, r *http.Request) {
+		writeJSON(rw, library.ReadBili())
+	})
+	mux.HandleFunc("POST /api/library/bili", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Agent string
+			On    bool
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		v, err := library.SetBili(in.Agent, in.On)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, v)
+	})
+	mux.HandleFunc("POST /api/library/bili/install", func(rw http.ResponseWriter, r *http.Request) {
+		v, err := library.InstallBili()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, v)
+	})
 	// a project's folder, from the system's picker; "" when it's cancelled
 	mux.HandleFunc("POST /api/library/projects/choose", func(rw http.ResponseWriter, r *http.Request) {
 		dir, err := w.ChooseFolder("Choose a project")
@@ -591,6 +622,11 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// a plugin's tools off for every agent, or on again, from its
 			// row on the Plugins page (Name is the plugin's)
 			res, err = library.PluginServerOn(in.Name, in.On)
+		case "servers/on":
+			// off for every agent, project and app at the router's
+			// address, kept with its settings, or on again as it was
+			// (swang20201 on X)
+			res, err = library.ServerOn(in.Name, in.On)
 		case "servers/agents-all":
 			res, err = library.EveryServerAgents(in.Agents, in.On)
 		case "servers/agents-some":
@@ -696,6 +732,8 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.RemoveProject(in.Dir, in.Keep)
 		case "projects/skill":
 			res, err = library.ProjectSkill(in.Dir, in.Name, in.Agents)
+		case "projects/skills":
+			res, err = library.ProjectSkills(in.Dir, in.Names, in.Agents)
 		case "projects/server":
 			res, err = library.ProjectServer(in.Dir, in.Name, in.Agents)
 		case "projects/copy":
