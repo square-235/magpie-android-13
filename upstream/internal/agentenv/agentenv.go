@@ -78,6 +78,8 @@ var Vars = []string{
 	"LIVEAGENT_HOME", "K_BRAIN_HOME",
 	// OpenMausBot's data folder (its config.json), ~/.openmausbot without it
 	"OMB_DATA_DIR",
+	// Avibe's home (its config/config.json and its control socket), ~/.avibe without it
+	"AVIBE_HOME",
 	// AstrBot's root, the folder holding its data/ (else ~/.astrbot, the desktop app's)
 	"ASTRBOT_ROOT",
 	// jcode's folder, ~/.jcode without it
@@ -96,6 +98,10 @@ var Vars = []string{
 	"ALMA_DATA_DIR",
 	// miniQ's data folder, its settings.json and daemon.json in it
 	"MINIQ_DATA_DIR",
+	// Paimon's config folder, its config.json in it
+	"PAIMON_CONFIG_HOME",
+	// Craft Agents' config folder, its config.json in it
+	"CRAFT_CONFIG_DIR",
 	// Reasonix Studio and its native CLI share this config home
 	"REASONIX_HOME",
 	// Reasonix's state folder, where it reads REASONIX.md

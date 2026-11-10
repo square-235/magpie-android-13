@@ -187,7 +187,7 @@ code { font: var(--code-style, normal) var(--code-weight, 400) 11.5px var(--code
    they read a size bigger than a line logo beside them, so they are drawn at
    the size Alma's and Cindy's tiles have of their own. icon-tile.test.cjs
    measures every file in icons/ and keeps this list whole. */
-.ic:is([data-icon="aihubmix-color"], [data-icon="atomcode"], [data-icon="cherryin-color"], [data-icon="codebuddy-color"], [data-icon="codex-color"], [data-icon="crush"], [data-icon="geminicli-color"], [data-icon="hanako"], [data-icon="hunyuan-color"], [data-icon="kilo"], [data-icon="kimi-code-desktop"], [data-icon="kiro-color"], [data-icon="lody"], [data-icon="mistermorph-color"], [data-icon="mlx-serve"], [data-icon="monica-color"], [data-icon="nanobot-color"], [data-icon="openbot"], [data-icon="penguin-color"], [data-icon="phala-color"], [data-icon="pipellm-color"], [data-icon="qoder"], [data-icon="snow"], [data-icon="targon-color"], [data-icon="typesafe"], [data-icon="workbuddy-color"], [data-icon="yuanbao-color"], [data-icon="zcode"], [data-icon="zoo-code"]) > * { width: 82%; height: 82%; }
+.ic:is([data-icon="aihubmix-color"], [data-icon="atomcode"], [data-icon="avibe"], [data-icon="cherryin-color"], [data-icon="codebuddy-color"], [data-icon="codex-color"], [data-icon="crush"], [data-icon="geminicli-color"], [data-icon="hanako"], [data-icon="hunyuan-color"], [data-icon="kilo"], [data-icon="kimi-code-desktop"], [data-icon="kiro-color"], [data-icon="lody"], [data-icon="mistermorph-color"], [data-icon="mlx-serve"], [data-icon="monica-color"], [data-icon="nanobot-color"], [data-icon="openbot"], [data-icon="penguin-color"], [data-icon="phala-color"], [data-icon="pipellm-color"], [data-icon="qoder"], [data-icon="snow"], [data-icon="targon-color"], [data-icon="typesafe"], [data-icon="workbuddy-color"], [data-icon="yuanbao-color"], [data-icon="zcode"], [data-icon="zoo-code"]) > * { width: 82%; height: 82%; }
 .ic.generic { color: var(--muted); }
 /* maskSpan's shelf: a hidden user of every mask picture loaded, so a logo drawn again paints at once (#1847) */
 .mask-shelf { position: fixed; top: 0; left: 0; width: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
@@ -1004,8 +1004,8 @@ body.panel .row.pref.flash { border-radius: 10px; }
 .quota-windows.brief { row-gap: 5px; }
 .quota-windows.brief .quota-reset { display: none; }
 .quota-windows.brief .quota-labels { margin-bottom: 3px; }
-.subscription-account .plan { margin-left: auto; flex: none; font-size: 10.5px; color: var(--muted); text-transform: capitalize; }
-.subscription-head .plan { margin-left: auto; font-size: 10.5px; color: var(--muted); text-transform: capitalize; }
+/* a plan gives its room up before the account's name does (visamzh on X) */
+.subscription-account .plan, .subscription-head .plan { margin-left: auto; flex: 0 100 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--muted); text-transform: capitalize; }
 .quota-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 14px; }
 /* when one window's names wrap, the bars beside it still line up: its
    names are as tall as the tallest beside them (fitQuota). The windows
@@ -1049,6 +1049,7 @@ body.panel .row.pref.flash { border-radius: 10px; }
 /* a window's whole (WindowHolds): a line of its own under the reset */
 .quota-reset .quota-holds { flex-basis: 100%; display: flex; flex-wrap: wrap; column-gap: 4px; min-width: 0; }
 .quota-reset .quota-holds > span { white-space: normal; min-width: 0; }
+.quota-reset .quota-holds-cost { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 .quota-reset .quota-holds-why { flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 .quota-track { height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; }
 .quota-track i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
@@ -2037,7 +2038,7 @@ body.panel .profiles #save { height: 25px; } /* the field's: the line keeps its 
 .pq-pick:active { transform: scale(.97); }
 /* the account used first: ticked before its name */
 .pq-first { flex: none; display: inline-grid; place-items: center; width: 12px; height: 12px; margin-right: 3px; color: var(--accent); }
-.pq-gnote { flex: none; margin-left: auto; font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+.pq-gnote { flex: 0 100 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
 .pq-gnote.ends { color: var(--amber); }
 /* used or left: a quiet pill at the right, over the rings; lit a moment
    when it turns */
@@ -2770,6 +2771,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .badge.path.direct { background: var(--pill); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
 .badge.ctx { background: var(--pill); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); letter-spacing: .02em; }
 .badge.wsl { background: var(--pill); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); letter-spacing: .02em; text-transform: none; }
+/* how a provider bills, plan or pay as you go (EV_John_Liu on X): grey, a fact */
+.badge.bill { background: var(--pill); color: var(--muted); letter-spacing: .02em; text-transform: none; }
 /* a model's credit rate (0.5×): grey, a fact to pick by; a discount's price before it struck through */
 .badge.rate { background: var(--pill); color: var(--muted); letter-spacing: .02em; text-transform: none; font-variant-numeric: tabular-nums; display: inline-flex; gap: 3px; }
 .badge.rate s { font-weight: 500; opacity: .75; }
@@ -2814,7 +2817,7 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 :where(html[data-fonts]) .key.acct { font-style: var(--ui-style, inherit); font-weight: var(--ui-weight, inherit); font-stretch: var(--ui-stretch, 100%); }
 .acct { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 12.5px; }
 .acct .n { font-weight: 500; }
-.acct .plan { color: var(--muted); font-size: 11.5px; padding: 1px 6px; border-radius: 5px; background: var(--pill-hover); }
+.acct .plan { flex: 0 100 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; padding: 1px 6px; border-radius: 5px; background: var(--pill-hover); }
 /* a subscription's accounts: the one in use first, a way to add another */
 /* a column, not a grid: WebKit kept a grid row at its height from before its readings wrapped, so they ran under the next account (the owner, after a refresh) */
 .accts { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
@@ -3352,10 +3355,15 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .tile .nm .badge { flex: none; }
 .tile .have { flex: none; width: 6px; height: 6px; border-radius: 3px; background: var(--green); }
 .tile .cnt { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.sheet .custom-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 2px 0; border-top: 1px solid var(--line-2); }
-.sheet .custom-foot .custom { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px 0 6px; border-radius: 8px; color: var(--accent); font-size: 13px; }
-.sheet .custom-foot .custom:hover, .sheet .custom-foot .custom.on { background: var(--accent-soft); }
-.sheet .custom-foot .hint { font-size: 12px; color: var(--muted); }
+.sheet .row-head .custom { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
+.sheet .row-head .custom:hover, .sheet .row-head .custom.on { color: var(--accent); background: var(--accent-soft); }
+/* narrow: the search and Custom provider on a line of their own */
+@media (max-width: 760px) {
+  .sheet .row-head { flex-wrap: wrap; height: auto; row-gap: 8px; }
+  .sheet .row-head::after { content: ""; order: 1; flex-basis: 100%; }
+  .sheet .row-head .find { order: 2; flex: 1; width: auto; min-width: 0; }
+  .sheet .row-head .custom { order: 2; }
+}
 /* the provider editor, in a dialog */
 /* the label column is as wide as its longest label, so that label starts
    at the padding and the fields end the same way on the right (the
@@ -4030,6 +4038,8 @@ input.words.compact-num { flex: none; width: 76px; font-variant-numeric: tabular
 input.words.rule-kind { flex: none; width: 110px; }
 input.words.gateway-port { flex: none; width: 110px; font-variant-numeric: tabular-nums; }input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }
 input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; min-width: 0; }
+input.words.remote-url { width: 280px; }
+input.words.remote-key { width: 160px; }
 /* a search API that signs in as a plugin's provider, in the key's place */
 .search-signs { flex: 1 1 120px; min-width: 0; font-size: 12px; color: var(--fg-2); overflow-wrap: anywhere; }
 /* a search API's base URL (#1580): on a line of its own under the key */
@@ -4707,6 +4717,17 @@ body.window .row.agent .who.with-models { flex-wrap: wrap; row-gap: 0; }
 .am-ri .rn { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-ri .c { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .am-ri:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+/* a provider's tick beside it: every model of it on, some, or none
+   (coolAndyHe on X) */
+.am-rr { display: flex; align-items: center; gap: 2px; }
+.am-rr .am-ri { flex: 1 1 auto; min-width: 0; width: auto; }
+.am-rk { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--accent-fg); cursor: pointer; }
+.am-rk::before { content: ""; position: absolute; width: 13px; height: 13px; box-sizing: border-box; border: 1.5px solid var(--faint); border-radius: 4px; transition: background-color .12s ease, border-color .12s ease; }
+.am-rk > svg { position: relative; }
+.am-rk.on::before, .am-rk.part::before { background: var(--accent); border-color: var(--accent); }
+.am-rk:disabled { cursor: default; opacity: .45; }
+.am-rk:focus-visible { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
+@media (hover: hover) and (pointer: fine) { .am-rk:hover:not(:disabled)::before { border-color: var(--accent); } }
 .am-gh { display: flex; align-items: center; margin: 6px 2px 0; }
 .am-fold { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .am-fold > .ic, .am-fold > svg { width: 14px; height: 14px; flex: none; }

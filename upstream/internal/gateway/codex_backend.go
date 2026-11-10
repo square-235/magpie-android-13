@@ -268,6 +268,9 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			id, ok = codexSealedFor(r, model, body)
 		}
 		if ok {
+			// the codex/ in it is magpie's, not Codex's: Codex asked its
+			// own model bare (providerPicked)
+			r = providerPicked(r)
 			// through magpie's accounts, Codex's compaction is the codex
 			// provider's to decide as a magpie model's is: sealed natively
 			// only with its native compaction on, as only the account that
@@ -1075,6 +1078,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	effort := "" // the reasoning Codex asked for, which goes on as it is
 	end := func(status int, msg string, tokens, out int) {}
 	var tools *toolScan // whether the reply calls a tool, for a turn's end
+	var live *liveRow   // the reply counted as it reaches Codex (live.go)
 	if rest != "/responses" {
 		// no route of its own (a compaction, a memory): recorded alone
 		noteMasked(r, "chat", maskedHits, sentOf(maskedHits, body), 0, "openai", modelOf(body))
@@ -1111,6 +1115,8 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			s.trace.update(tr, func(t *Route) { t.Masked = m })
 		}
 		first.onFirst = s.trace.firstContent(tr)
+		live = liveBegin(inflightOf(r.Context()), model, provider.Responses)
+		live.routed("openai", model)
 		promptRead := s.inspectPrompt(tr, provider.Responses, body, body, sentWhole)
 		end = func(status int, msg string, tokens, out int) {
 			ms := time.Since(start).Milliseconds()
@@ -1523,6 +1529,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				}
 				m, werr := out.Write(buf[:n])
 				passed += int64(m)
+				live.observe(buf[:m])
 				if werr != nil {
 					writeErr = werr
 					break
@@ -1624,6 +1631,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	if line := codexEndedEarly(res, sniff, call.Model, callerOf(r).agent, began, passed, readErr, writeErr, r.Context()); line != "" {
 		log.Print(line)
 	}
+	live.finish(call.Status >= 400, uu.Output)
 	end(call.Status, call.Error, uu.Input+uu.Output+uu.CacheRead+uu.CacheWrite, uu.Output)
 	call.Route = tr.ID
 	call.Masked = s.trace.maskedOf(tr)
@@ -1781,6 +1789,25 @@ type handedOnKey struct{}
 
 // handedOnOf is what the agent of a request codexFallBack handed on was
 // sent while it waited, nil for any other request.
+// pickedKey marks a request whose model magpie put a provider on
+// (codexAccounts' codex/<model>), the client having asked it bare.
+type pickedKey struct{}
+
+func providerPicked(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), pickedKey{}, true))
+}
+
+// namedProvider is whether the client named the provider of the model it
+// asked for ("claude/claude-opus-5-5", a flat or aliased spelling of one),
+// rather than a bare model magpie put on a provider. A provider named so
+// is the one asked: past its usage cap it goes on to its own fallbacks
+// only, never to a routing group that merely has the model in it
+// (Anotiaww on X).
+func namedProvider(r *http.Request, asked string) bool {
+	picked, _ := r.Context().Value(pickedKey{}).(bool)
+	return strings.Contains(asked, "/") && !picked
+}
+
 func handedOnOf(r *http.Request) *keptAlive {
 	k, _ := r.Context().Value(handedOnKey{}).(*keptAlive)
 	return k
