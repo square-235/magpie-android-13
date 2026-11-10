@@ -11,17 +11,19 @@ Termux 那套路径），外面套一层很小的安卓壳子：一个前台服�
 应用的最低版本是 **Android 13（API 33）**，网关二进制也按 API 33 链接，所以 Android 13
 及以上的设备都能装。移植本身最初在 Android 16（API 36）的 x86_64 模拟器上实测通过：网关
 监听 `127.0.0.1:3425`、网页界面正常打开、应用进程里联网和 DNS 都正常、局域网开关会改成
-监听 `0.0.0.0:3425` 并强制要求网关密钥。arm64（手机）那份由同一套脚本和 NDK 编出，二进制
-检查过是合法的安卓 AArch64 PIE，但没有在真机上跑过——真机上如果遇到问题，先看菜单里的日志。
+监听 `0.0.0.0:3425` 并强制要求网关密钥。arm64（手机）那份也已经在 Android 13 真机
+（荣耀 RMO-AN00）上安装验证：网关、网页界面、前台服务和内置 Bun 都能正常运行。真机上
+如果遇到问题，先看菜单里的日志。
 
 
 ## 目录
 
 | 目录 | 内容 |
 | --- | --- |
-| `upstream/` | magpie 上游源码（main 分支，2026-11-09，`f37de8c` 时抓取），完全没有改动 |
+| `upstream/` | magpie 上游源码，完全没有改动；当前版本记录在 `UPSTREAM_VERSION` |
 | `android/` | 安卓工程，壳子代码在 `app/src/main/java/com/magpie/android/` |
-| `scripts/` | 构建脚本：`build-magpie-android.*` 编译网关，`build-apk.*` 打 APK；`.ps1` 给 Windows，`.sh` 给 Linux/macOS |
+| `scripts/` | 构建脚本：`build-magpie-android.*` 编译网关，`build-apk.*` 打 APK；`.sh` 另含上游同步和兼容检查 |
+| `.github/workflows/` | GitHub Actions：PR 构建、自动发版、每周上游同步 |
 
 ## 需要什么
 
@@ -200,10 +202,63 @@ magpie 优先用它，所以不需要改上游代码。
 **想只编一个架构、或者加 32 位** — `-Abis` 支持 `arm64-v8a`、`armeabi-v7a`、`x86_64`、
 `x86`，改完记得同步 `app/build.gradle.kts` 里的 `abiFilters`。
 
-**换上游新版 magpie** — 用新版覆盖 `upstream/` 里的文件（别把它的 `.git` 带进来），重跑
-`scripts/build-apk.ps1` 就行。当前跟的是 `main` 的 `f37de8c`（2026-11-09）。`upstream/`
-里没有任何改动，方便对比和跟进上游；上游的 `build/` 目录是源码的一部分（图标生成器和
-Windows/macOS 清单），要一起保留，仓库的 `.gitignore` 也不再忽略它。
+**换上游新版 magpie** — 平时交给每周的 `upstream-sync` workflow 自动做；本地也可以手动：
+
+```bash
+./scripts/sync-upstream.sh                 # 拉最新 release
+./scripts/check-upstream-compat.sh         # 静态检查集成点
+./scripts/build-apk.sh --abis arm64-v8a    # 真正构建
+```
+
+`sync-upstream.sh` 会整体替换 `upstream/` 并更新 `UPSTREAM_VERSION`，不要手动把上游的
+`.git` 带进来。`upstream/` 里没有任何本地改动，方便对比和跟进上游；上游的 `build/` 目录
+是源码的一部分（图标生成器和 Windows/macOS 清单），要一起保留，仓库的 `.gitignore` 也不
+再忽略它。
+
+## CI/CD
+
+仓库带三个 GitHub Actions workflow：
+
+| 文件 | 触发 | 做什么 |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | PR、手动 | 调用可复用的 `build.yml`，构建 arm64 debug APK，作为 PR 门禁 |
+| `.github/workflows/release.yml` | push `master`、push `v*` tag、手动 | 构建 release APK，成功后自动创建 GitHub Release |
+| `.github/workflows/upstream-sync.yml` | 每周一 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并，失败发通知 |
+
+构建全部在 GitHub 的 `ubuntu-latest` 上跑，本机不参与：JDK 21、Go（版本读
+`upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，Gradle 用仓库自带的
+wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact 形式上传。
+
+**上游同步的流程**
+
+1. 查询 `yetone/magpie` 最新 release，和 `UPSTREAM_VERSION` 比较
+2. 有新版就整体替换 `upstream/`，提交到 `upstream/<tag>` 分支并推送
+3. 跑 `scripts/check-upstream-compat.sh`，检查 CLI、环境变量、Bun 版本、手机端 CSS/JS 选择器
+4. 用 `build.yml` 在该分支上真正编译 arm64 APK
+5. 全部通过：自动开 PR 并 squash 合进 `master`
+6. 任一环节失败：分支保留，自动开/更新带 `upstream-sync-failed` 标签的 issue，并 @ 仓库 owner
+
+定时任务统一是 **7 天一次**；GitHub 的 cron 可能因负载延迟几分钟到几十分钟。
+
+**自动发版**
+
+- push `master`：每次构建成功创建一个 `vYYYYMMDD-<run_number>` 的 Release
+- push `v*` tag：直接用 tag 名创建 Release
+- 资产里是 `magpie-android-<version>-arm64-v8a.apk` 和同名 `.sha256`
+- 目前仍是 **debug key 签名**，和 `build-apk.sh --release` 的行为一致；要正式签名，得在
+  Gradle 里换 signingConfig，再加 keystore secrets
+
+**仓库需要开的设置**
+
+- `Settings → Actions → General → Workflow permissions` 选 **Read and write permissions**，
+  否则 `GITHUB_TOKEN` 不能建 Release、开 issue 或合并 PR
+- 如果 `master` 开了分支保护，要允许 GitHub Actions 创建/合并 PR，否则第 5 步会失败并转成
+  issue 通知
+- 可选的 `NOTIFY_WEBHOOK` secret：填一个 Slack 风格的 webhook，失败时会额外 POST
+  `{"text": "..."}`。不填也一定会开 GitHub issue
+
+`upstream-sync` 用 `GITHUB_TOKEN` 创建的 PR 不会触发 `ci.yml`，所以它自己在同一条
+workflow 里直接跑构建，不依赖 PR 的 check。
 
 ## 不想打包 APK 的话
 

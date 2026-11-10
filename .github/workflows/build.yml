@@ -1,0 +1,186 @@
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to check out; defaults to the caller's ref.
+        required: false
+        type: string
+        default: ""
+      abis:
+        description: Space-separated Android ABIs.
+        required: false
+        type: string
+        default: arm64-v8a
+      release:
+        description: Build the release variant instead of debug.
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: Version stamped into the gateway.
+        required: false
+        type: string
+        default: android-port
+      upload_artifact:
+        description: Upload the APK as a workflow artifact.
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      apk_name:
+        description: File name of the packaged APK.
+        value: ${{ jobs.build.outputs.apk_name }}
+      version:
+        description: Version the gateway was stamped with.
+        value: ${{ jobs.build.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Android arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      apk_name: ${{ steps.package.outputs.name }}
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/go.mod
+          cache: true
+          cache-dependency-path: upstream/go.sum
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Cache Bun
+        uses: actions/cache@v4
+        with:
+          path: android/build/bun-cache
+          key: bun-${{ runner.os }}-${{ hashFiles('upstream/internal/plugin/bun.go') }}
+
+      - name: Check upstream compatibility
+        run: bash scripts/check-upstream-compat.sh
+
+      - name: Build APK
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          export ANDROID_HOME="$SDK"
+          export ANDROID_SDK_ROOT="$SDK"
+          export ANDROID_NDK_HOME="$SDK/ndk/28.2.13676358"
+          if [[ ! -d "$ANDROID_NDK_HOME" ]]; then
+            echo "NDK r28c is missing at $ANDROID_NDK_HOME" >&2
+            exit 1
+          fi
+          args=(--abis "${{ inputs.abis }}" --version "${{ inputs.version }}")
+          if [[ "${{ inputs.release }}" == "true" ]]; then
+            args+=(--release)
+          fi
+          ./scripts/build-apk.sh "${args[@]}"
+
+      - name: Verify and package APK
+        id: package
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          APK="$(find android/app/build/outputs/apk -type f -name '*.apk' \
+            -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          if [[ ! -f "$APK" ]]; then
+            echo "Gradle finished but no APK was found" >&2
+            exit 1
+          fi
+          AAPT2="$(find "$SDK/build-tools" -type f -name aapt2 | sort -V | tail -n 1)"
+          if [[ ! -x "$AAPT2" ]]; then
+            echo "aapt2 not found under $SDK/build-tools" >&2
+            exit 1
+          fi
+          BADGING="$("$AAPT2" dump badging "$APK")"
+          grep -q "minSdkVersion:'33'" <<<"$BADGING" || {
+            echo "APK does not declare minSdkVersion 33" >&2
+            exit 1
+          }
+          grep -q "targetSdkVersion:'36'" <<<"$BADGING" || {
+            echo "APK does not declare targetSdkVersion 36" >&2
+            exit 1
+          }
+
+          ENTRIES="$(unzip -l "$APK")"
+          for abi in ${{ inputs.abis }}; do
+            case "$BADGING" in
+              *"$abi"*) ;;
+              *) echo "APK lacks native code for $abi" >&2; exit 1 ;;
+            esac
+            for so in libmagpie.so libmagpiebun.so; do
+              case "$ENTRIES" in
+                *"lib/$abi/$so"*) ;;
+                *) echo "APK lacks lib/$abi/$so" >&2; exit 1 ;;
+              esac
+            done
+          done
+
+          VERSION="${{ inputs.version }}"
+          SAFE_VERSION="$(printf '%s' "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')"
+          ABI_LABEL="$(printf '%s' "${{ inputs.abis }}" | tr ' ' '_')"
+          APK_NAME="magpie-android-${SAFE_VERSION}-${ABI_LABEL}.apk"
+          mkdir -p dist
+          cp "$APK" "dist/$APK_NAME"
+          sha256sum "dist/$APK_NAME" > "dist/$APK_NAME.sha256"
+          echo "name=$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Android build"
+            echo ""
+            echo "- APK: \`$APK_NAME\`"
+            echo "- Size: $(du -h "dist/$APK_NAME" | cut -f1)"
+            echo "- SHA-256: \`$(cut -d' ' -f1 "dist/$APK_NAME.sha256")\`"
+            echo "- ABIs: \`${{ inputs.abis }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK
+        if: inputs.upload_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: magpie-apk
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

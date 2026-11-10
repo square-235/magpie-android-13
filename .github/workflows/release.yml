@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Create a GitHub release after a successful build.
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    with:
+      abis: arm64-v8a
+      release: true
+      version: ${{ github.ref_type == 'tag' && github.ref_name || format('master-{0}', github.run_number) }}
+      upload_artifact: true
+
+  release:
+    name: Publish
+    needs: build
+    if: github.event_name == 'push' || inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: magpie-apk
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          fi
+
+          {
+            echo "### Release"
+            echo ""
+            echo "- Tag: \`$TAG\`"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Assets:"
+            ls -lh dist
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping."
+            exit 0
+          fi
+
+          gh release create "$TAG" dist/*.apk dist/*.sha256 \
+            --title "magpie Android $TAG" \
+            --generate-notes \
+            --target "$GITHUB_SHA"

@@ -1,0 +1,240 @@
+name: upstream-sync
+
+on:
+  schedule:
+    # Every 7 days: Mondays 03:17 UTC.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Vendor upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      tag: ${{ steps.sync.outputs.tag }}
+      branch: ${{ steps.sync.outputs.branch }}
+      compat_ok: ${{ steps.compat.outputs.ok }}
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch and commit upstream
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          before="$(sed -n 's/^tag=//p' UPSTREAM_VERSION 2>/dev/null | head -n 1)"
+          bash scripts/sync-upstream.sh
+          after="$(sed -n 's/^tag=//p' UPSTREAM_VERSION | head -n 1)"
+          echo "tag=$after" >> "$GITHUB_OUTPUT"
+
+          if [[ -z "$(git status --porcelain -- upstream UPSTREAM_VERSION)" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "upstream is already $after; nothing to do."
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          branch="upstream/${after//\//-}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A -- upstream UPSTREAM_VERSION
+          git commit -m "chore(upstream): sync magpie $after"
+          git push --force origin "$branch"
+          {
+            echo "### Upstream sync"
+            echo ""
+            echo "- Before: \`$before\`"
+            echo "- After: \`$after\`"
+            echo "- Branch: \`$branch\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Static compatibility check
+        id: compat
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          set +e
+          bash scripts/check-upstream-compat.sh > "$RUNNER_TEMP/compat.log" 2>&1
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/compat.log"
+          cat "$RUNNER_TEMP/compat.log" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$rc" -eq 0 ]]; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload compatibility log
+        if: steps.sync.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-compat-log
+          path: ${{ runner.temp }}/compat.log
+          if-no-files-found: error
+
+  verify:
+    name: Android build
+    needs: sync
+    if: needs.sync.outputs.changed == 'true' && needs.sync.outputs.compat_ok == '1'
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.sync.outputs.branch }}
+      abis: arm64-v8a
+      release: false
+      version: ${{ needs.sync.outputs.tag }}
+      upload_artifact: false
+
+  merge:
+    name: Merge upstream
+    needs:
+      - sync
+      - verify
+    if: needs.sync.outputs.changed == 'true' && needs.sync.outputs.compat_ok == '1' && needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Open and merge pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.sync.outputs.branch }}
+          TAG: ${{ needs.sync.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh label create upstream-sync \
+            --color 1D76DB \
+            --description "Upstream magpie sync" 2>/dev/null || true
+
+          PR="$(gh pr list --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')"
+          if [[ -z "$PR" ]]; then
+            BODY="$(cat <<EOF
+          Automated integration of upstream magpie \`$TAG\`.
+
+          - Static compatibility check: passed
+          - Android arm64 build: passed
+          - Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          Merged automatically by the upstream-sync workflow.
+          EOF
+          )"
+            gh pr create \
+              --base master \
+              --head "$BRANCH" \
+              --title "chore(upstream): sync magpie $TAG" \
+              --body "$BODY" \
+              --label upstream-sync
+          fi
+
+          gh pr merge "$BRANCH" --squash --delete-branch
+          echo "Merged \`$BRANCH\` into master." >> "$GITHUB_STEP_SUMMARY"
+
+  notify-failure:
+    name: Notify failure
+    needs:
+      - sync
+      - verify
+      - merge
+    if: always() && (needs.sync.result != 'success' || (needs.sync.outputs.changed == 'true' && (needs.sync.outputs.compat_ok != '1' || needs.verify.result != 'success' || needs.merge.result != 'success')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Download compatibility log
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: upstream-compat-log
+          path: compat
+
+      - name: Open or update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.sync.outputs.tag }}
+          BRANCH: ${{ needs.sync.outputs.branch }}
+          COMPAT_OK: ${{ needs.sync.outputs.compat_ok }}
+          SYNC_RESULT: ${{ needs.sync.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          MERGE_RESULT: ${{ needs.merge.result }}
+          WEBHOOK: ${{ secrets.NOTIFY_WEBHOOK }}
+        run: |
+          set -euo pipefail
+
+          stage="unknown"
+          if [[ "$SYNC_RESULT" != "success" ]]; then
+            stage="upstream fetch or commit failed"
+          elif [[ "$COMPAT_OK" != "1" ]]; then
+            stage="static compatibility check failed"
+          elif [[ "$VERIFY_RESULT" != "success" ]]; then
+            stage="Android build failed"
+          elif [[ "$MERGE_RESULT" != "success" ]]; then
+            stage="automatic merge failed"
+          fi
+
+          gh label create upstream-sync-failed \
+            --color B60205 \
+            --description "Upstream sync needs attention" 2>/dev/null || true
+
+          URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          TITLE="[upstream-sync] ${TAG:-unknown} $stage"
+          LOG="$(tail -n 120 compat/compat.log 2>/dev/null || true)"
+          BODY="$(cat <<EOF
+          Upstream magpie integration did not pass and was left on its branch.
+
+          - Upstream: \`${TAG:-unknown}\`
+          - Branch: \`${BRANCH:-unknown}\`
+          - Stage: $stage
+          - Run: $URL
+
+          Compatibility log (tail):
+          \`\`\`
+          ${LOG:-no log}
+          \`\`\`
+
+          cc @${GITHUB_REPOSITORY_OWNER}
+          EOF
+          )"
+
+          EXISTING="$(gh issue list --label upstream-sync-failed --state open \
+            --limit 1 \
+            --json number --jq '.[0].number // empty')"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label upstream-sync-failed
+          fi
+
+          if [[ -n "${WEBHOOK:-}" ]]; then
+            PAYLOAD="$(python3 -c \
+              'import json, sys; print(json.dumps({"text": sys.argv[1]}))' \
+              "$TITLE
+          $URL")"
+            curl -fsS -X POST -H 'Content-Type: application/json' \
+              --data "$PAYLOAD" "$WEBHOOK" || echo "webhook delivery failed" >&2
+          fi
