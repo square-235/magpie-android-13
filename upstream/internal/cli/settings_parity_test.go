@@ -224,7 +224,10 @@ var cliForRoute = map[string]string{
 	"GET /api/update":                      "magpie update check",
 	"POST /api/update/check":               "magpie update check",
 	"POST /api/settings/agent-compact":     "magpie model compact",
+	"POST /api/settings/agent-suffix":      "magpie model suffix",
 	"POST /api/update/install":             "magpie update",
+	"GET /api/model-price":                 "magpie model price",
+	"POST /api/model-price":                "magpie model price",
 }
 
 var notYet = map[string]string{
@@ -238,6 +241,9 @@ var notYet = map[string]string{
 	"GET /api/notices":                           W,  // api.go
 	"GET /api/omarchy":                           W,  // api.go
 	"GET /api/quit":                              W,  // api.go: the window's Quit question
+	"GET /api/remote":                            W,  // remote.go: another magpie opened in a window of the app
+	"POST /api/remote":                           W,  // remote.go
+	"POST /api/remote/forget":                    W,  // remote.go
 	"GET /api/state":                             W,  // api.go
 	"POST /api/agents/{action}/{id}":             A,  // api.go
 	"POST /api/agents/arrange":                   W,  // api.go
@@ -331,6 +337,7 @@ var notYet = map[string]string{
 	"POST /api/dev/import":                       W,  // dev_on.go
 	"GET /api/fonts":                             W,  // fonts.go
 	"POST /api/settings/gateway-mode":            S2, // gatewaymode.go
+	"POST /api/gateway/pause":                    A,  // gatewaypause.go
 	"POST /api/gateway/restart":                  A,  // gateway_takeover.go
 	"POST /api/gateway/take-over":                A,  // gateway_takeover.go
 	"GET /api/importapps":                        P,  // importapps.go

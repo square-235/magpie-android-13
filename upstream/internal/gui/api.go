@@ -453,7 +453,9 @@ type settingsJSON struct {
 	// it is served by magpie web, where the mode can be set
 	GatewayOn  bool   `json:"gatewayOn,omitempty"`
 	GatewayWhy string `json:"gatewayWhy,omitempty"`
-	Web        bool   `json:"web,omitempty"`
+	// GatewayPaused: the user paused the gateway (gatewaypause.go)
+	GatewayPaused bool `json:"gatewayPaused,omitempty"`
+	Web           bool `json:"web,omitempty"`
 	// the proxy vendor requests go through now, and where it came from:
 	// settings, environment, system, off or none
 	ProxyNow    string `json:"proxyNow"`
@@ -834,6 +836,7 @@ func settingsState() settingsJSON {
 	s.WSL = runtime.GOOS == "windows"
 	s.Web = webPage.Load()
 	s.GatewayOn, s.GatewayWhy = gatewayMode(s.Web)
+	s.GatewayPaused = pausedNow()
 	s.LANKey = "" // the retained credential belongs on disk, not in UI state
 	// the GitHub token, masked, and where the library's requests take one
 	// from: Settings, or the environment variable named
@@ -1240,6 +1243,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
+		if !wired {
+			resumeOnWire(a)
+		}
 		s := state()
 		if a.Notice != nil && (!f.Live || !wired && a.Wired()) {
 			s.Notice = a.Notice()
@@ -1448,6 +1454,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			var c agent.Connection
 			c, err = a.ConnectHow()
 			how = &c
+			if err == nil {
+				resumeOnWire(a)
+			}
 		case "disconnect":
 			err = a.Disconnect()
 		default:
@@ -1535,9 +1544,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	cliBehindRoutes(mux)
 	configRepairRoutes(mux, !isWeb(w))
 	gatewayFixRoutes(mux)
+	gatewayPauseRoutes(mux)
 	gatewayModeRoutes(mux)
 	if !isWeb(w) {
 		appPageRoutes(mux)
+		remoteRoutes(mux, w)
 	}
 	privacyModelRoutes(mux)
 	maskingRoutes(mux)
@@ -1859,6 +1870,25 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			c = &settings.AgentCompact{At: in.At, Full: in.Full}
 		}
 		if err := provider.SetAgentCompact(in.Agent, c); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// an agent's own Provider in model names (settings.AgentSuffix): Mode
+	// "" follows the one for every agent again
+	mux.HandleFunc("POST /api/settings/agent-suffix", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Agent, Mode string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		a, err := agent.Find(in.Agent)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetAgentSuffix(a.ListsFor(), in.Mode); err != nil {
 			fail(rw, err)
 			return
 		}
