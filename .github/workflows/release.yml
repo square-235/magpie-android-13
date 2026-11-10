@@ -13,6 +13,17 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      # Forwarded to build.yml so the release APK is signed with the same
+      # stable key as every other build.
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       release:
@@ -43,6 +54,7 @@ jobs:
       release: true
       version: ${{ inputs.upstream_tag != '' && inputs.upstream_tag || 'auto' }}
       upload_artifact: true
+    secrets: inherit
 
   release:
     name: Publish

@@ -101,6 +101,7 @@ jobs:
       release: false
       version: ${{ needs.sync.outputs.tag }}
       upload_artifact: false
+    secrets: inherit
 
   merge:
     name: Merge upstream
@@ -164,6 +165,7 @@ jobs:
     with:
       release: true
       upstream_tag: ${{ needs.sync.outputs.tag }}
+    secrets: inherit
 
   notify-failure:
     name: Notify failure

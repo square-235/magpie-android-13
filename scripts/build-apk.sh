@@ -13,7 +13,8 @@ usage() {
 Usage: scripts/build-apk.sh [options]
 
 Options:
-  -r, --release        build a release APK (still signed with the debug key)
+  -r, --release        build a release APK (signed like debug: with
+                       MAGPIE_KEYSTORE if set, else Gradle's debug key)
   -S, --skip-gateway   reuse the libmagpie.so already in jniLibs/
       --no-bun         don't download/package Bun; external plugins stay off
       --abis "LIST"    ABIs to build (default: "arm64-v8a x86_64")
@@ -28,7 +29,8 @@ Options:
 
 Environment: ANDROID_HOME, ANDROID_SDK_ROOT, ANDROID_NDK_HOME,
 MAGPIE_ABIS, MAGPIE_API_LEVEL, MAGPIE_BUN_MIRROR, MAGPIE_VERSION_NAME,
-MAGPIE_VERSION_CODE, JAVA_HOME, GOPROXY,
+MAGPIE_VERSION_CODE, MAGPIE_KEYSTORE, MAGPIE_KEYSTORE_PASSWORD,
+MAGPIE_KEY_ALIAS, MAGPIE_KEY_PASSWORD, JAVA_HOME, GOPROXY,
 GRADLE_BIN (use a system gradle instead of ./gradlew).
 EOF
 }

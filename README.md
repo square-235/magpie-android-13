@@ -15,17 +15,7 @@ Termux 那套路径），外面套一层很小的安卓壳子：一个前台服�
 （荣耀 RMO-AN00）上安装验证：网关、网页界面、前台服务和内置 Bun 都能正常运行。真机上
 如果遇到问题，先看菜单里的日志。
 
-
-## 目录
-
-| 目录 | 内容 |
-| --- | --- |
-| `upstream/` | magpie 上游源码，完全没有改动；当前版本记录在 `UPSTREAM_VERSION` |
-| `android/` | 安卓工程，壳子代码在 `app/src/main/java/com/magpie/android/` |
-| `scripts/` | 构建脚本：`build-magpie-android.*` 编译网关，`build-apk.*` 打 APK；`.sh` 另含上游同步和兼容检查 |
-| `.github/workflows/` | GitHub Actions：PR 校验、自动发版、每天上游同步 |
-
-## 需要什么
+## 本地构建
 
 ### 参考：在Archlinux下的构建依赖
 ```shell
@@ -52,7 +42,7 @@ Expand-Archive ndk.zip -DestinationPath $env:USERPROFILE\sdk
 就是 33），这样二进制只引用 Android 13 也有的 libc 符号；r28c 里 33 这一档是有的。想改回
 “当前 NDK 支持的最高一档”，传 `-ApiLevel 0`。
 
-## 构建
+### 构建
 
 ```powershell
 # 一条命令：先编两个架构的网关，再打 APK
@@ -61,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-apk.ps1
 # 只要 APK（网关没改，复用上次编好的）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-apk.ps1 -SkipGateway
 
-# release 版（仍用 debug 签名，方便直接装；要发出去请换成自己的签名）
+# release 版（本仓库在Github Actions使用签名构建，本地构建请自签名）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-apk.ps1 -Release
 ```
 
@@ -69,7 +59,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-apk.ps1 -Relea
 `android/app/build/outputs/apk/debug/app-debug.apk`，加 `-Release` 后的产物是
 `android/app/build/outputs/apk/release/app-release.apk`，两者都在 268 MB 上下——两个架构的
 magpie 二进制加起来 98 MB，随包带的 Bun（两个架构各一份）又占了 176 MB 左右（为什么要带
-见“插件与内置 Bun”），只想给真机编可以加 `-Abis arm64-v8a`，体积能小到大约一半（约 135 MB）。
+见下文“体积代价”），只想给真机编可以加 `-Abis arm64-v8a`，体积能小到大约一半（约 135 MB）。
 
 如果 PowerShell 说“禁止运行脚本”，就是上面 `-ExecutionPolicy Bypass` 的作用。
 `JAVA_HOME` 没指向 JDK 21 的话先设一下：`$env:JAVA_HOME='C:\path\to\jdk-21'`。
@@ -78,7 +68,7 @@ Linux / macOS 用同一套逻辑的 shell 脚本（依赖还是上面那几样�
 
 ```bash
 scripts/build-apk.sh                     # debug APK
-scripts/build-apk.sh --release           # release（仍是 debug 签名）
+scripts/build-apk.sh --release           # release（本仓库在Github Actions使用签名构建，本地构建请自签名）
 scripts/build-apk.sh --skip-gateway      # 复用上次编好的网关
 scripts/build-apk.sh --abis "arm64-v8a"  # 只给手机编
 scripts/build-apk.sh --no-bun            # 不带插件运行时
@@ -89,49 +79,6 @@ scripts/build-magpie-android.sh          # 只编网关
 `ndk/` 下的 NDK，并按 `minSdk = 33` 选 API 33 的 clang；Bun 仍从 GitHub（或
 `--bun-mirror`）下载并按上游的 SHA-256 校验。找不到依赖时会在第一步报出缺什么。SDK/NDK
 不在常见位置时，用 `--sdk` / `--ndk` 指过去。
-
-## 安装和使用
-
-```powershell
-adb install -r android\app\build\outputs\apk\release\app-release.apk
-```
-
-打开 magpie 应用，它会自己把网关拉起来，界面就是 magpie 的网页：
-
-1. 顶部一行是状态：绿点 + 端口，右边 `⋮` 是菜单。
-2. 在网页里加好要用的供应商和账号，和桌面版完全一样。
-3. 菜单里 **复制网关地址** 会得到 `http://127.0.0.1:3425/v1`，把它填给手机上的 agent 当
-   base URL（Claude Code、Codex、Gemini CLI 这些在 Termux 或别的终端里跑的都能用）。
-4. 菜单里 **设置** 可以改端口、开局域网访问、开开机自启；改完点“保存并重启”立即生效。
-5. 菜单里 **查看日志** 是 magpie 自己的输出，出问题先看它。
-
-网关和网页界面是同一个进程。进程意外退出会自动重启（逐次退避），界面重连上之后也会
-自己把网页加载出来。
-
-
-### 登录和外部链接
-
-插件登录（ZCode、Factory 之类）是网页用 `window.open(url, "_blank")` 打开厂商页面的。
-安卓 WebView 默认没有“新窗口”这个东西，这个请求会被直接丢掉，按钮看着像没反应。壳子
-现在处理了 `onCreateWindow`：把新窗口的地址交给手机上的浏览器，magpie 自己的页面原地
-不动，登录完切回来就行。页面里其它离开 magpie 的链接（下载、厂商主页）也一样走浏览器。
-
-ZCode 的登录是**轮询式**的：浏览器里登录完，magpie 在后台问 Z.ai“好了没”，不需要
-本地回调端口，所以手机上这条路是通的。`ZCode app's sign-in` 那种要读桌面 ZCode 客户端
-凭据的方式在手机上自然没有东西可读，用 Z.ai / BigModel 或 API key 那几条即可。
-
-### 已知装不上的插件
-
-`zcode-provider` 不是给 magpie 用的 OpenCode 登录插件，而是一个要拉起 ZCode
-app-server 的 pi 包。它在 Bun 1.4.2 的安卓版上解包依赖时会以
-`signal: bad system call`（退出码 159）崩溃，包还没写进磁盘就结束了——这是 Bun 的安卓
-构建的问题，不是 magpie 或壳子的权限问题。插件页的“Have one in mind?”里输入
-`zcode-provider` 会直接给出这条说明；其它社区插件不受影响。
-
-已经实测能装的：`@magpie-community/opencode-zen-free-auth`（免费访问，密钥填
-`public`）、`@magpie-community/opencode-zcode-auth`、`@magpie-community/opencode-factory-auth`，
-以及 Discover 列表里的其它社区插件。Zen Free 登录后经网关真实发过请求并拿到
-`MAGPIE_ANDROID_OK`；ZCode 的浏览器登录页和 API key 两条路都走到了 Z.ai 那一跳。
 
 ### 体积代价
 
@@ -160,6 +107,45 @@ app-server 的 pi 包。它在 Bun 1.4.2 的安卓版上解包依赖时会以
 
 `.sh` 版本用同名长选项：`--no-bun`、`--bun-mirror`、`--abis`、`--skip-gateway`、
 `--release`；另有 `--sdk`、`--ndk`、`--api-level`、`--version`、`--no-verify`。
+
+## 安装和使用
+
+从 [Releases](https://github.com/square-235/magpie-android-13/releases) 下载
+`magpie-android-<版本>-arm64-v8a.apk`，安装即可
+
+打开 magpie 应用，它会自己把网关拉起来，界面就是 magpie 的网页：
+
+1. 顶部一行是状态：绿点 + 端口，右边 `⋮` 是菜单。
+2. 在网页里加好要用的供应商和账号，和桌面版完全一样。
+3. 菜单里 **复制网关地址** 会得到 `http://127.0.0.1:3425/v1`，把它填给手机上的 agent 当
+   base URL（Claude Code、Codex、Gemini CLI 这些在 Termux 或别的终端里跑的都能用）。
+4. 菜单里 **设置** 可以改端口、开局域网访问、开开机自启；改完点“保存并重启”立即生效。
+5. 菜单里 **查看日志** 是 magpie 自己的输出，出问题先看它。
+
+网关和网页界面是同一个进程。进程意外退出会自动重启（逐次退避），界面重连上之后也会
+自己把网页加载出来。
+
+### 登录和外部链接
+
+插件登录（ZCode、Factory 之类）是网页用 `window.open(url, "_blank")` 打开厂商页面的。
+安卓 WebView 默认没有“新窗口”，这个请求会被直接丢掉，按钮看着像没反应。壳子处理了
+`onCreateWindow`：把新窗口的地址交给手机上的浏览器，magpie 自己的页面原地不动，登录完
+切回来就行。页面里其它离开 magpie 的链接（下载、厂商主页）也一样走浏览器。
+
+ZCode 的登录是**轮询式**的：浏览器里登录完，magpie 在后台问 Z.ai“好了没”，不需要本地
+回调端口，所以手机上这条路是通的。`ZCode app's sign-in` 那种要读桌面 ZCode 客户端凭据的
+方式在手机上自然没有东西可读，用 Z.ai / BigModel 或 API key 那几条即可。
+
+### 已知装不上的插件
+
+`zcode-provider` 不是给 magpie 用的 OpenCode 登录插件，而是一个要拉起 ZCode app-server 的
+pi 包。它在 Bun 1.4.2 的安卓版上解包依赖时会以 `signal: bad system call`（退出码 159）
+崩溃，这是 Bun 的安卓构建的问题，不是 magpie 或壳子的权限问题。插件页输入
+`zcode-provider` 会直接给出这条说明；其它社区插件不受影响。
+
+已经实测能装的：`@magpie-community/opencode-zen-free-auth`（免费访问，密钥填 `public`）、
+`@magpie-community/opencode-zcode-auth`、`@magpie-community/opencode-factory-auth`，以及
+Discover 列表里的其它社区插件。
 
 ## 端口
 
@@ -191,97 +177,6 @@ magpie 优先用它，所以不需要改上游代码。
 长期在后台的正规方式。想在息屏后长时间稳定运行，建议在菜单里点一次 **忽略电池优化**；
 想开机自动起来，就在设置里打开 **开机自动启动**。部分国产 ROM 还会额外清后台，需要在系统
 的电池/自启动白名单里再放行一次。
-
-
-**想改支持的安卓版本** — 改 `android/app/build.gradle.kts`：`minSdk` 现在是 33
-（Android 13）。壳子用了 API 33 的 `OnBackInvokedDispatcher` 和
-`enableOnBackInvokedCallback`，33 是当前的下限；再往下要改返回键处理，并重新考虑前台服务
-类型。`compileSdk`/`targetSdk` 仍是 36，要退回旧版本就一起改；网关侧同步改
-`scripts/build-magpie-android.ps1` 的 `-ApiLevel` / `.sh` 的 `--api-level`。
-
-**想只编一个架构、或者加 32 位** — `-Abis` 支持 `arm64-v8a`、`armeabi-v7a`、`x86_64`、
-`x86`，改完记得同步 `app/build.gradle.kts` 里的 `abiFilters`。
-
-**换上游新版 magpie** — 平时交给每天的 `upstream-sync` workflow 自动做；本地也可以手动：
-
-```bash
-./scripts/sync-upstream.sh                 # 拉最新 release
-./scripts/check-upstream-compat.sh         # 静态检查集成点
-./scripts/build-apk.sh --abis arm64-v8a    # 真正构建
-```
-
-`sync-upstream.sh` 会整体替换 `upstream/` 并更新 `UPSTREAM_VERSION`，不要手动把上游的
-`.git` 带进来。`upstream/` 里没有任何本地改动，方便对比和跟进上游；上游的 `build/` 目录
-是源码的一部分（图标生成器和 Windows/macOS 清单），要一起保留，仓库的 `.gitignore` 也不
-再忽略它。
-
-## CI/CD
-
-仓库带三个用户可见的 GitHub Actions workflow，外加可复用、也可手动运行的 `build.yml`：
-
-| 文件 | 触发 | 做什么 |
-| --- | --- | --- |
-| `.github/workflows/ci.yml` | PR、push `master`、手动 | **只做静态校验**：上游兼容性 + 版本接线；不构建 APK，不发 Release |
-| `.github/workflows/build.yml` | `workflow_call`、手动 | 可复用构建；也可在 Actions 里手动运行，完整日志便于排查编译报错；默认上传 APK artifact，不发布 |
-| `.github/workflows/release.yml` | 由 `upstream-sync` 成功后调用、手动 | 构建 release APK 并创建 GitHub Release |
-| `.github/workflows/upstream-sync.yml` | 每天 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并并发版，失败发通知 |
-
-真正的 APK 构建只在上游同步分支、Release 和手动 `build` 里跑，在 GitHub 的 `ubuntu-latest` 上完成：
-JDK 21、Go（版本读 `upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，
-Gradle 用仓库自带的 wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact
-形式上传。`ci.yml` 不再占用构建时间。
-
-**版本规则**
-
-版本唯一来源是 `UPSTREAM_VERSION` 里的 `tag=`，例如 `v0.1.3532`。`v` 只是 tag 的符号
-前缀，不进入数值版本字段：
-
-| 位置 | 值 |
-| --- | --- |
-| Release tag | `v0.1.3532` |
-| APK `versionName` | `0.1.3532` |
-| APK `versionCode` | `major * 10000000 + minor * 1000000 + patch`，即 `1003532` |
-| 网关 `--version` | `0.1.3532` |
-| APK 文件名 | `magpie-android-0.1.3532-arm64-v8a.apk` |
-
-CI 校验、上游同步分支构建和最终 Release 都从同一个 `UPSTREAM_VERSION` 取值，不再
-写死 `1.0`，也不再用日期或 run number 当版本号。`versionCode` 只取前三段数字，后缀
-（如 `-beta`）只保留在 `versionName` / tag 中。
-
-**上游同步的流程**
-
-1. 查询 `yetone/magpie` 最新 release，和 `UPSTREAM_VERSION` 比较
-2. 有新版就整体替换 `upstream/`，提交到 `upstream/<tag>` 分支并推送
-3. 跑 `scripts/check-upstream-compat.sh`，检查 CLI、环境变量、Bun 版本、手机端 CSS/JS 选择器
-4. 用 `build.yml` 在该分支上真正编译 arm64 APK
-5. 全部通过：自动开 PR 并 squash 合进 `master`
-6. 合并成功后：调用 `release.yml`，从最新 `master` 重新构建 release APK 并创建 GitHub Release
-7. 任一环节失败（含发版失败）：分支保留，自动开/更新带 `upstream-sync-failed` 标签的
-   issue，并 @ 仓库 owner
-
-定时任务统一是 **1 天一次**（每天 03:17 UTC）；GitHub 的 cron 可能因负载延迟几分钟到几十分钟。
-
-**发版规则**
-
-- push `master`：只做静态校验，**不构建、不创建 Release**
-- `upstream-sync` 成功合并后：自动创建 `v<上游版本>` 的 Release，例如 `v0.1.3532`
-- 如果该 tag 的 Release 已存在，会覆盖上传 APK 和 `.sha256`，不再静默跳过
-- 也可以在 Actions 里手动跑 `release` workflow 发一次版（取消 `release` 复选框则只构建）
-- 资产里是 `magpie-android-<version>-arm64-v8a.apk`（version 不含 `v`）和同名 `.sha256`
-- 目前仍是 **debug key 签名**，和 `build-apk.sh --release` 的行为一致；要正式签名，得在
-  Gradle 里换 signingConfig，再加 keystore secrets
-
-**仓库需要开的设置**
-
-- `Settings → Actions → General → Workflow permissions` 选 **Read and write permissions**，
-  否则 `GITHUB_TOKEN` 不能建 Release、开 issue 或合并 PR
-- 如果 `master` 开了分支保护，要允许 GitHub Actions 创建/合并 PR，否则第 5 步会失败并转成
-  issue 通知
-- 可选的 `NOTIFY_WEBHOOK` secret：填一个 Slack 风格的 webhook，失败时会额外 POST
-  `{"text": "..."}`。不填也一定会开 GitHub issue
-
-`upstream-sync` 用 `GITHUB_TOKEN` 创建的 PR 不会触发 `ci.yml`，所以它自己在同一条
-workflow 里直接跑构建，不依赖 PR 的 check。
 
 ## 不想打包 APK 的话
 

@@ -29,3 +29,10 @@ desktop.ini
 # Local logs and scratch files.
 *.log
 tmp/
+
+# Signing material: the keystore and its base64 copy must never be committed.
+*.p12
+*.jks
+*.keystore
+*.b64
+.signing/

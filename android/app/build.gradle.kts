@@ -29,6 +29,27 @@ val magpieVersionCode = System.getenv("MAGPIE_VERSION_CODE")
     ?.toIntOrNull()
     ?: fallbackVersionCode
 
+// Signing is driven from the environment so that every CI run signs with the
+// same key. MAGPIE_KEYSTORE points at a PKCS12 or JKS keystore (absolute path,
+// or relative to the repository root). When it is absent — local builds, pull
+// requests from forks without secrets — Gradle falls back to its automatic
+// debug key, which is fine for a quick install but yields a *different*
+// certificate on every machine, so those APKs cannot update one another.
+val magpieKeystorePath = System.getenv("MAGPIE_KEYSTORE")?.trim()?.takeIf { it.isNotEmpty() }
+val magpieKeystoreFile = magpieKeystorePath?.let { path ->
+    val file = java.io.File(path)
+    if (file.isAbsolute) file else rootProject.file(path)
+}
+val magpieKeystorePassword = System.getenv("MAGPIE_KEYSTORE_PASSWORD")
+val magpieKeyAlias = System.getenv("MAGPIE_KEY_ALIAS")?.trim()?.takeIf { it.isNotEmpty() } ?: "magpie"
+val magpieKeyPassword = System.getenv("MAGPIE_KEY_PASSWORD")?.takeIf { it.isNotEmpty() }
+    ?: magpieKeystorePassword
+if (magpieKeystoreFile != null) {
+    require(magpieKeystoreFile.isFile) {
+        "MAGPIE_KEYSTORE points at a missing file: ${magpieKeystoreFile.absolutePath}"
+    }
+}
+
 android {
     namespace = "com.magpie.android"
     compileSdk = 36
@@ -50,16 +71,36 @@ android {
         }
     }
 
+    signingConfigs {
+        // Only created when a keystore is supplied; otherwise the built-in
+        // "debug" config stays the sole one and behaves exactly as before.
+        // storeType is deliberately left unset so both PKCS12 and JKS work
+        // (the Android Gradle plugin detects the format from the file).
+        if (magpieKeystoreFile != null) {
+            create("magpie") {
+                storeFile = magpieKeystoreFile
+                storePassword = magpieKeystorePassword
+                keyAlias = magpieKeyAlias
+                keyPassword = magpieKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
+            if (magpieKeystoreFile != null) {
+                signingConfig = signingConfigs.getByName("magpie")
+            }
         }
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so a release APK installs without a
-            // keystore of its own. Replace with your own signingConfig for
-            // anything you hand out.
-            signingConfig = signingConfigs.getByName("debug")
+            // One stable key for every build, so an APK can install over the
+            // previous one. Without the environment keystore we can only fall
+            // back to the debug key, as this project used to do.
+            signingConfig = signingConfigs.getByName(
+                if (magpieKeystoreFile != null) "magpie" else "debug"
+            )
         }
     }
 
