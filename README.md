@@ -217,15 +217,16 @@ magpie 优先用它，所以不需要改上游代码。
 
 ## CI/CD
 
-仓库带三个用户可见的 GitHub Actions workflow，外加可复用的 `build.yml`：
+仓库带三个用户可见的 GitHub Actions workflow，外加可复用、也可手动运行的 `build.yml`：
 
 | 文件 | 触发 | 做什么 |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | PR、push `master`、手动 | **只做静态校验**：上游兼容性 + 版本接线；不构建 APK，不发 Release |
+| `.github/workflows/build.yml` | `workflow_call`、手动 | 可复用构建；也可在 Actions 里手动运行，完整日志便于排查编译报错；默认上传 APK artifact，不发布 |
 | `.github/workflows/release.yml` | 由 `upstream-sync` 成功后调用、手动 | 构建 release APK 并创建 GitHub Release |
 | `.github/workflows/upstream-sync.yml` | 每天 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并并发版，失败发通知 |
 
-真正的 APK 构建只在上游同步分支和 Release 里跑，在 GitHub 的 `ubuntu-latest` 上完成：
+真正的 APK 构建只在上游同步分支、Release 和手动 `build` 里跑，在 GitHub 的 `ubuntu-latest` 上完成：
 JDK 21、Go（版本读 `upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，
 Gradle 用仓库自带的 wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact
 形式上传。`ci.yml` 不再占用构建时间。

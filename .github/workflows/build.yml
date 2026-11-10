@@ -41,6 +41,33 @@ on:
       sha:
         description: Commit the APK was built from.
         value: ${{ jobs.build.outputs.sha }}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build; defaults to the selected ref.
+        required: false
+        type: string
+        default: ""
+      abis:
+        description: Space-separated Android ABIs.
+        required: false
+        type: string
+        default: arm64-v8a
+      release:
+        description: Build the release variant instead of debug.
+        required: false
+        type: boolean
+        default: false
+      version:
+        description: Version to build; "auto" reads the tag from UPSTREAM_VERSION.
+        required: false
+        type: string
+        default: auto
+      upload_artifact:
+        description: Upload the APK as a workflow artifact.
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
