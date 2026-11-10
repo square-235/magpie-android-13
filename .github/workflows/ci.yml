@@ -7,6 +7,13 @@ on:
   pull_request:
     branches:
       - master
+    # upstream-sync creates a PR after it already built the same branch, then
+    # merges and deletes that branch immediately. Letting the PR trigger a
+    # second build only produces a startup failure once the branch is gone.
+    # A PR that changes Android/scripts still runs the normal CI.
+    paths-ignore:
+      - "upstream/**"
+      - "UPSTREAM_VERSION"
   workflow_dispatch:
 
 permissions:
