@@ -35,6 +35,9 @@ on:
       version:
         description: Version the gateway was stamped with.
         value: ${{ jobs.build.outputs.version }}
+      sha:
+        description: Commit the APK was built from.
+        value: ${{ jobs.build.outputs.sha }}
 
 permissions:
   contents: read
@@ -47,6 +50,7 @@ jobs:
     outputs:
       apk_name: ${{ steps.package.outputs.name }}
       version: ${{ steps.package.outputs.version }}
+      sha: ${{ steps.package.outputs.sha }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -173,6 +177,7 @@ jobs:
           sha256sum "dist/$APK_NAME" > "dist/$APK_NAME.sha256"
           echo "name=$APK_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Android build"

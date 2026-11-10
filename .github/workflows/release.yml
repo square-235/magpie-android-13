@@ -1,11 +1,18 @@
 name: release
 
 on:
-  push:
-    branches:
-      - master
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      release:
+        description: Create a GitHub release after a successful build.
+        required: false
+        type: boolean
+        default: true
+      upstream_tag:
+        description: Upstream magpie tag this APK was synced from.
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       release:
@@ -13,6 +20,11 @@ on:
         required: false
         type: boolean
         default: true
+      upstream_tag:
+        description: Upstream magpie tag this APK was synced from.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -26,15 +38,16 @@ jobs:
     name: Build
     uses: ./.github/workflows/build.yml
     with:
+      ref: master
       abis: arm64-v8a
       release: true
-      version: ${{ github.ref_type == 'tag' && github.ref_name || format('master-{0}', github.run_number) }}
+      version: ${{ inputs.upstream_tag != '' && inputs.upstream_tag || format('master-{0}', github.run_number) }}
       upload_artifact: true
 
   release:
     name: Publish
     needs: build
-    if: github.event_name == 'push' || inputs.release
+    if: inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -48,19 +61,26 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.build.outputs.sha }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            TAG="$GITHUB_REF_NAME"
-          else
-            TAG="v$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          TAG="v$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          TITLE="magpie Android $TAG"
+          if [[ -n "$UPSTREAM_TAG" ]]; then
+            TITLE="$TITLE (upstream $UPSTREAM_TAG)"
+          fi
+          if [[ -z "$TARGET_SHA" ]]; then
+            echo "build did not report the commit it built" >&2
+            exit 1
           fi
 
           {
             echo "### Release"
             echo ""
             echo "- Tag: \`$TAG\`"
-            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Commit: \`$TARGET_SHA\`"
+            echo "- Upstream: \`${UPSTREAM_TAG:-not recorded}\`"
             echo "- Assets:"
             ls -lh dist
           } >> "$GITHUB_STEP_SUMMARY"
@@ -71,6 +91,6 @@ jobs:
           fi
 
           gh release create "$TAG" dist/*.apk dist/*.sha256 \
-            --title "magpie Android $TAG" \
+            --title "$TITLE" \
             --generate-notes \
-            --target "$GITHUB_SHA"
+            --target "$TARGET_SHA"

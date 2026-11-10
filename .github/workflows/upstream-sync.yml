@@ -154,13 +154,25 @@ jobs:
           gh pr merge "$BRANCH" --squash --delete-branch
           echo "Merged \`$BRANCH\` into master." >> "$GITHUB_STEP_SUMMARY"
 
+  release:
+    name: Release
+    needs:
+      - sync
+      - merge
+    if: needs.merge.result == 'success'
+    uses: ./.github/workflows/release.yml
+    with:
+      release: true
+      upstream_tag: ${{ needs.sync.outputs.tag }}
+
   notify-failure:
     name: Notify failure
     needs:
       - sync
       - verify
       - merge
-    if: always() && (needs.sync.result != 'success' || (needs.sync.outputs.changed == 'true' && (needs.sync.outputs.compat_ok != '1' || needs.verify.result != 'success' || needs.merge.result != 'success')))
+      - release
+    if: always() && (needs.sync.result != 'success' || (needs.sync.outputs.changed == 'true' && (needs.sync.outputs.compat_ok != '1' || needs.verify.result != 'success' || needs.merge.result != 'success' || needs.release.result != 'success')))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -182,6 +194,7 @@ jobs:
           SYNC_RESULT: ${{ needs.sync.result }}
           VERIFY_RESULT: ${{ needs.verify.result }}
           MERGE_RESULT: ${{ needs.merge.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
           WEBHOOK: ${{ secrets.NOTIFY_WEBHOOK }}
         run: |
           set -euo pipefail
@@ -195,6 +208,8 @@ jobs:
             stage="Android build failed"
           elif [[ "$MERGE_RESULT" != "success" ]]; then
             stage="automatic merge failed"
+          elif [[ "$RELEASE_RESULT" != "success" ]]; then
+            stage="release build or publish failed"
           fi
 
           gh label create upstream-sync-failed \

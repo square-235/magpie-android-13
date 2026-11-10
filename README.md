@@ -217,13 +217,13 @@ magpie 优先用它，所以不需要改上游代码。
 
 ## CI/CD
 
-仓库带三个 GitHub Actions workflow：
+仓库带三个用户可见的 GitHub Actions workflow，外加可复用的 `build.yml`：
 
 | 文件 | 触发 | 做什么 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | PR、手动 | 调用可复用的 `build.yml`，构建 arm64 debug APK，作为 PR 门禁 |
-| `.github/workflows/release.yml` | push `master`、push `v*` tag、手动 | 构建 release APK，成功后自动创建 GitHub Release |
-| `.github/workflows/upstream-sync.yml` | 每周一 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并，失败发通知 |
+| `.github/workflows/ci.yml` | PR、push `master`、手动 | 调用可复用的 `build.yml`；PR 构建 debug，`master` push 构建 release 变体，**只验证，不发 Release** |
+| `.github/workflows/release.yml` | 由 `upstream-sync` 成功后调用、手动 | 构建 release APK 并创建 GitHub Release |
+| `.github/workflows/upstream-sync.yml` | 每周一 03:17 UTC、手动 | 拉最新上游，建分支，静态检查 + Android 构建，成功自动合并并发版，失败发通知 |
 
 构建全部在 GitHub 的 `ubuntu-latest` 上跑，本机不参与：JDK 21、Go（版本读
 `upstream/go.mod`）、Android SDK 36、Build-Tools 36.0.0、NDK r28c，Gradle 用仓库自带的
@@ -236,14 +236,17 @@ wrapper。Gradle、Go modules 和 Bun zip 都有缓存，APK 以 artifact 形式
 3. 跑 `scripts/check-upstream-compat.sh`，检查 CLI、环境变量、Bun 版本、手机端 CSS/JS 选择器
 4. 用 `build.yml` 在该分支上真正编译 arm64 APK
 5. 全部通过：自动开 PR 并 squash 合进 `master`
-6. 任一环节失败：分支保留，自动开/更新带 `upstream-sync-failed` 标签的 issue，并 @ 仓库 owner
+6. 合并成功后：调用 `release.yml`，从最新 `master` 重新构建 release APK 并创建 GitHub Release
+7. 任一环节失败（含发版失败）：分支保留，自动开/更新带 `upstream-sync-failed` 标签的
+   issue，并 @ 仓库 owner
 
 定时任务统一是 **7 天一次**；GitHub 的 cron 可能因负载延迟几分钟到几十分钟。
 
-**自动发版**
+**发版规则**
 
-- push `master`：每次构建成功创建一个 `vYYYYMMDD-<run_number>` 的 Release
-- push `v*` tag：直接用 tag 名创建 Release
+- push `master`：只构建和校验，**不创建 Release**
+- `upstream-sync` 成功合并后：自动创建 `vYYYYMMDD-<run_number>` 的 Release
+- 也可以在 Actions 里手动跑 `release` workflow 发一次版（取消 `release` 复选框则只构建）
 - 资产里是 `magpie-android-<version>-arm64-v8a.apk` 和同名 `.sha256`
 - 目前仍是 **debug key 签名**，和 `build-apk.sh --release` 的行为一致；要正式签名，得在
   Gradle 里换 signingConfig，再加 keystore secrets
