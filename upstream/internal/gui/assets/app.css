@@ -187,7 +187,7 @@ code { font: var(--code-style, normal) var(--code-weight, 400) 11.5px var(--code
    they read a size bigger than a line logo beside them, so they are drawn at
    the size Alma's and Cindy's tiles have of their own. icon-tile.test.cjs
    measures every file in icons/ and keeps this list whole. */
-.ic:is([data-icon="aihubmix-color"], [data-icon="atomcode"], [data-icon="cherryin-color"], [data-icon="codebuddy-color"], [data-icon="codex-color"], [data-icon="crush"], [data-icon="geminicli-color"], [data-icon="hanako"], [data-icon="hunyuan-color"], [data-icon="kilo"], [data-icon="kimi-code-desktop"], [data-icon="kiro-color"], [data-icon="lody"], [data-icon="mistermorph-color"], [data-icon="mlx-serve"], [data-icon="monica-color"], [data-icon="nanobot-color"], [data-icon="penguin-color"], [data-icon="phala-color"], [data-icon="pipellm-color"], [data-icon="qoder"], [data-icon="snow"], [data-icon="targon-color"], [data-icon="typesafe"], [data-icon="workbuddy-color"], [data-icon="yuanbao-color"], [data-icon="zcode"], [data-icon="zoo-code"]) > * { width: 82%; height: 82%; }
+.ic:is([data-icon="aihubmix-color"], [data-icon="atomcode"], [data-icon="cherryin-color"], [data-icon="codebuddy-color"], [data-icon="codex-color"], [data-icon="crush"], [data-icon="geminicli-color"], [data-icon="hanako"], [data-icon="hunyuan-color"], [data-icon="kilo"], [data-icon="kimi-code-desktop"], [data-icon="kiro-color"], [data-icon="lody"], [data-icon="mistermorph-color"], [data-icon="mlx-serve"], [data-icon="monica-color"], [data-icon="nanobot-color"], [data-icon="openbot"], [data-icon="penguin-color"], [data-icon="phala-color"], [data-icon="pipellm-color"], [data-icon="qoder"], [data-icon="snow"], [data-icon="targon-color"], [data-icon="typesafe"], [data-icon="workbuddy-color"], [data-icon="yuanbao-color"], [data-icon="zcode"], [data-icon="zoo-code"]) > * { width: 82%; height: 82%; }
 .ic.generic { color: var(--muted); }
 /* maskSpan's shelf: a hidden user of every mask picture loaded, so a logo drawn again paints at once (#1847) */
 .mask-shelf { position: fixed; top: 0; left: 0; width: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
@@ -394,7 +394,16 @@ body.side-drag, body.side-drag * { cursor: col-resize !important; user-select: n
    the button and the magpie beside them, level with them (see .top above) */
 body.window.mac .side-top { height: calc(50px / var(--zoom, 1)); padding: calc(2px / var(--zoom, 1)) 0 0 calc(96px / var(--zoom, 1)); }
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
-.side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
+/* laid from its end, Settings' button and the gateway's line kept where
+   they are as Settings' tabs open over the button and the foot grows up
+   (jen_celeus on X), and a foot too short for them scrolls from its end.
+   The order is the reading order, top down: tabs, Settings, the gateway */
+.side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
+/* a foot too short for them scrolls, its rows kept whole */
+.side-foot > * { flex: none; }
+.side-foot > .side-gw { order: 0; }
+.side-foot > #prefs { order: 1; }
+.side-foot > .nav-sub { order: 2; }
 /* a short window's sidebar keeps no bar beside its pages: a thin one is laid
    over them while they scroll and fades once they stop, as a Mac's overlay
    scroll bar does (app.js sideBars), the same in WebKit, WebView2 and
@@ -437,6 +446,11 @@ body.side-nav #nav button.has-dot::after { top: 50%; right: 10px; margin-top: -3
 /* the open page's tabs, under it on a thin line */
 .nav-sub { position: relative; display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px 16px; padding-left: 8px; }
 .nav-sub.moving { overflow: hidden; }
+/* Settings' tabs, over its button at the sidebar's foot (app.js navSubs),
+   close to the button they come from; the foot takes more of a short
+   sidebar while they show */
+.side-foot > .nav-sub { margin: 6px 0 2px 16px; }
+.side-foot:has(> .nav-sub) { max-height: 80%; }
 .nav-sub::before { content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 1px; background: var(--line); }
 /* rows keep their size while the list unrolls or folds: squeezed, a strip
    drawn again then (Installed gets its count) marked the selection a third
@@ -2016,6 +2030,13 @@ body.panel .profiles #save { height: 25px; } /* the field's: the line keeps its 
 .pq-gn { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* how many accounts: a quiet count set by the name, on its cap height */
 .pq-count { flex: none; min-width: 16px; height: 15px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; display: inline-grid; place-items: center; background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--muted); font-size: 9.5px; font-weight: 600; line-height: 1; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+/* with a vendor's accounts to put first: the count opens their menu */
+.pq-pick { height: 17px; gap: 1px; padding: 0 3px 0 6px; display: inline-flex; align-items: center; cursor: default; transition: background .12s ease, color .12s ease, transform .12s cubic-bezier(.23, 1, .32, 1); }
+.pq-pick svg { flex: none; opacity: .8; }
+.pq-pick:is(:hover, .open) { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+.pq-pick:active { transform: scale(.97); }
+/* the account used first: ticked before its name */
+.pq-first { flex: none; display: inline-grid; place-items: center; width: 12px; height: 12px; margin-right: 3px; color: var(--accent); }
 .pq-gnote { flex: none; margin-left: auto; font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
 .pq-gnote.ends { color: var(--amber); }
 /* used or left: a quiet pill at the right, over the rings; lit a moment
@@ -3677,6 +3698,14 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .mnhead { position: sticky; top: -1px; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 2px 8px; background: var(--card); }
 .mnhead b { flex: 1; min-width: 0; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .mnhead .text.action { flex: none; padding: 2px 7px; font-size: 11.5px; }
+/* a long list's search and Expand (soilzhu80 on X): open, the list is as
+   tall as its rows and the editor scrolls, its head held at the top */
+.mnhead { flex-wrap: wrap; }
+.mnhead.finds b { flex: none; }
+.mnhead .mbig { margin-left: auto; }
+.mnhead .mfind { flex: 1 1 140px; min-width: 0; max-width: 260px; padding: 3px 8px; font-size: 12px; }
+.mnames.open { max-height: none; overflow-y: visible; }
+.mnames > .mnone { padding: 4px 8px; }
 /* how the agents' lists will call them, and the setting that says so (#868) */
 .msuffix { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 2px 8px 4px; font-size: 12px; }
 .msuffix .hint { font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
@@ -3704,6 +3733,11 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .mname .mprice > span { flex: none; }
 .mname .mpart { display: flex; align-items: center; gap: 4px; flex: none; }
 .mname .mpart input { width: 72px; height: 25px; font-size: 11.5px; }
+.price-ask-parts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px 10px; margin: 4px 0 8px; }
+.price-ask-unit { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.price-ask-parts .mpart { display: flex; flex-direction: column; align-items: stretch; gap: 3px; font-size: 12px; color: var(--muted); }
+.price-ask-parts .mpart input { width: 100%; min-width: 0; }
+.price-ask-bad { color: var(--red); margin: 0 0 6px; }
 .mname .mtier { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; flex: 1 1 100%; min-width: 0; }
 .mname .mtier[hidden], .mname .mtier-add[hidden] { display: none; }
 .mname .mtier-add { font-size: 11.5px; padding: 0; }
@@ -3958,22 +3992,40 @@ input.words.compact-num { flex: none; width: 76px; font-variant-numeric: tabular
    sends, who the allow list lets in), a line with a button or link in
    it. A touch screen, with no hover, keeps them all. */
 @media (hover: hover) {
-  #view-settings:not(.set-searching) .row.pref > .who > .sub:not(.err, .bad, .say, .proxy-check, .lib-way, .image-gen-hidden, .sync-sign-in, .no-names, .pv-hits, .feat-why, .vision-not-marked, .video-gen-how, .font-note, .acts, [role="status"], #proxySub):not(#otelSessionsRow *, #allowList *, .disabled-model *) {
-    --hint: 1; position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  :is(#view-settings:not(.set-searching), .editor.roomy .prov-prefs) .row.pref > .who > .sub:not(.err, .bad, .say, .proxy-check, .lib-way, .image-gen-hidden, .sync-sign-in, .no-names, .pv-hits, .feat-why, .vision-not-marked, .video-gen-how, .font-note, .acts, [role="status"], #proxySub):not(#otelSessionsRow *, #allowList *, .disabled-model *) {
+    --hint: 1; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
   }
   /* a row left with its name alone is as tall as any other: its control
      (a switch, a field, a shortcut) no longer sets it apart */
   #view-settings .row.pref:not(.feat-set) { box-sizing: content-box; min-height: 27px; } /* 51 with its padding, a line above it outside */
+  /* the same in a provider's editor, field by field (yujezhang on X,
+     11-10: "界面只保留完成操作必需的信息"), and on Routing groups'
+     settings: the line that explains a field rests out of sight. A
+     field's lead, the short line of what turning it on costs, stays in
+     its place; so do a warning and a line with a link or control in it */
+  .editor.roomy .fld > .hint.expl:not(.acts, .warn, .err),
+  .hint-row > .txt > .expl {
+    --hint: 1; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .editor.roomy .fld > .hint.lead { display: block; }
+  /* the line held out of sight stays in its field's box: placed against
+     the page, deep in the editor's scroll it would grow the page a scrollbar */
+  .editor.roomy .fld, .hint-row > .txt { position: relative; }
   /* Check in now's result comes under its name and the row grows down,
      its button held where it was pressed */
   :is(#view-settings, .prov-prefs) .ci-now-row { align-items: flex-start; }
 }
-.set-hint { position: fixed; z-index: 60; max-width: min(380px, calc(100vw - 32px)); padding: 8px 11px; border-radius: 9px; background: var(--pop-bg); box-shadow: var(--shadow); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); font-size: 12px; line-height: 1.45; color: var(--fg-2); overflow-wrap: anywhere; pointer-events: none; opacity: 0; transform: translateY(-2px); transition: opacity .14s ease, transform .14s ease; }
+/* a field's lead says again, in short, what its hint says: in sight only
+   where the hint isn't (above, with a mouse) */
+.fld > .hint.lead { display: none; }
+/* the card comes from its row, a little smaller, on the strong ease-out
+   (UI motion rules: a tooltip 125-200ms, never from nothing) */
+.set-hint { position: fixed; z-index: 60; max-width: min(380px, calc(100vw - 32px)); padding: 8px 11px; border-radius: 9px; background: var(--pop-bg); box-shadow: var(--shadow); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); font-size: 12px; line-height: 1.45; color: var(--fg-2); overflow-wrap: anywhere; pointer-events: none; opacity: 0; transform: translateY(-2px) scale(.96); transition: opacity .15s ease, transform .15s cubic-bezier(.23, 1, .32, 1); }
 .set-hint.on { opacity: 1; transform: none; }
 .set-hint > p { margin: 0; }
 .set-hint > p + p { margin-top: 4px; }
-@media (prefers-reduced-motion: reduce) { .set-hint { transition: none; transform: none; } }
-:root[data-motion="reduce"] .set-hint { transition: none; transform: none; }
+@media (prefers-reduced-motion: reduce) { .set-hint { transition: opacity .15s ease; transform: none; } }
+:root[data-motion="reduce"] .set-hint { transition: opacity .15s ease; transform: none; }
 .prefs .val.rule-add { flex: 1 1 100%; max-width: none; margin-left: 0; gap: 6px; }
 input.words.rule-kind { flex: none; width: 110px; }
 input.words.gateway-port { flex: none; width: 110px; font-variant-numeric: tabular-nums; }input.words.rule-match { flex: 1 1 auto; width: auto; min-width: 0; }

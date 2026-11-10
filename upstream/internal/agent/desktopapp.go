@@ -96,6 +96,16 @@ var desktopApps = map[string]desktopApp{
 	// electron-builder registers it under, the UUID v5 of the appId in its
 	// namespace, as dsh's above is of com.deepseek.dsh. Linux's deb links
 	// /usr/bin/penguin, so Bin finds it there.
+	// mu's desktop app (desktop/packages/desktop/electron-builder.yml,
+	// qybaihe/mu b71cd18: appId io.github.qybaihe.mu, productName and
+	// executable mu) carries mu-agent itself (resources/harness) and runs
+	// it on the CLI's agent folder (MU_AGENT_DIR, kyrn/naming.ts), so it
+	// needs no CLI. Windows' assisted NSIS installer and its guid as
+	// penguin's below; Linux's deb puts it in /opt/mu (v0.3.9's
+	// mu-0.3.9-linux-amd64.deb), whose /usr/bin/mu link is no mu-agent
+	// (notMuAgent).
+	"mu": {id: "io.github.qybaihe.mu", names: []string{"mu.app"}, win: filepath.Join("mu", "mu.exe"), guid: "8be59721-9051-5f2b-8372-96932fdbf5da",
+		onLinux: &linuxApp{dirs: []string{"/opt/mu"}, exe: "mu", name: "mu", scheme: "mu"}},
 	"penguin": {id: "com.prismshadow.penguinharness", names: []string{"PenguinHarness.app"}, win: filepath.Join("PenguinHarness", "PenguinHarness.exe"), guid: "8bb9acb7-2bdc-596b-9669-7b014ab1c47f"},
 	// The CodeBuddy IDE (Tencent's VS Code fork, 4.12.2: CodeBuddy.app,
 	// com.tencent.codebuddy, from codebuddy.ai; CodeBuddy CN.app,
@@ -423,7 +433,9 @@ func spotlightBundles(id string) []string {
 	out, err := proc.CommandContext(ctx, "mdfind", "kMDItemCFBundleIdentifier == '"+id+"'").Output()
 	if err == nil {
 		for _, p := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if p = strings.TrimSpace(p); p != "" {
+			// an app dragged to the Trash, as a Mac app is uninstalled,
+			// is still in Spotlight: it isn't installed
+			if p = strings.TrimSpace(p); p != "" && !inTrash(p) {
 				paths = append(paths, p)
 			}
 		}
@@ -433,6 +445,12 @@ func spotlightBundles(id string) []string {
 	}
 	spotlight.m[id] = spotlightAnswer{paths: paths, at: time.Now()}
 	return paths
+}
+
+// inTrash reports whether p is in a Mac's Trash: the user's ~/.Trash, or
+// a volume's .Trashes.
+func inTrash(p string) bool {
+	return strings.Contains(p, "/.Trash/") || strings.Contains(p, "/.Trashes/")
 }
 
 // AppVersion is the version of the agent's desktop app installed here, ""

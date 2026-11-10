@@ -48,6 +48,8 @@ var Vars = []string{
 	// Raft (slock), whose agents keep their Pi sessions in its folder
 	"SLOCK_HOME",
 	"PRIME_AGENT_CODING_AGENT_DIR",
+	// mu's agent folder (agentDirFor in kyrn/bin/mu.mjs), KYRN_ its old name
+	"MU_AGENT_DIR", "KYRN_AGENT_DIR", "MU_CODING_AGENT_DIR", "KYRN_CODING_AGENT_DIR",
 	// StepCode: config root resolution and folder overrides
 	"STEP_CODING_AGENT_DIR", "STEPCODE_CONFIG_DIR",
 	// MothX's config folder ($MOTHX_DIR/settings.json)
@@ -92,6 +94,8 @@ var Vars = []string{
 	"DEVECO_CONFIG_DIR",
 	// alma-server's data folder (Alma without a desktop, on Linux)
 	"ALMA_DATA_DIR",
+	// miniQ's data folder, its settings.json and daemon.json in it
+	"MINIQ_DATA_DIR",
 	// Reasonix Studio and its native CLI share this config home
 	"REASONIX_HOME",
 	// Reasonix's state folder, where it reads REASONIX.md
