@@ -69,6 +69,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default is "tools platform-tools", but the "tools"
+          # package no longer exists in current SDK repositories. Install
+          # platform-tools here and the build packages explicitly below.
+          packages: platform-tools
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK packages
         run: |
