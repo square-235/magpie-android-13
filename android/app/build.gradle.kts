@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
 }
@@ -36,9 +38,11 @@ val magpieVersionCode = System.getenv("MAGPIE_VERSION_CODE")
 // debug key, which is fine for a quick install but yields a *different*
 // certificate on every machine, so those APKs cannot update one another.
 val magpieKeystorePath = System.getenv("MAGPIE_KEYSTORE")?.trim()?.takeIf { it.isNotEmpty() }
+// `java.io.File` cannot be spelled out here: Kotlin DSL resolves a bare
+// `java` to the Java plugin extension, so the class is imported above.
 val magpieKeystoreFile = magpieKeystorePath?.let { path ->
-    val file = java.io.File(path)
-    if (file.isAbsolute) file else rootProject.file(path)
+    val file = File(path)
+    if (file.isAbsolute) file else File(rootProject.rootDir.parentFile, path)
 }
 val magpieKeystorePassword = System.getenv("MAGPIE_KEYSTORE_PASSWORD")
 val magpieKeyAlias = System.getenv("MAGPIE_KEY_ALIAS")?.trim()?.takeIf { it.isNotEmpty() } ?: "magpie"
