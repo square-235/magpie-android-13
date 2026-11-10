@@ -247,6 +247,7 @@ var notYet = map[string]string{
 	"POST /api/agents/rescan":                    A,  // api.go
 	"POST /api/agents/restart/{id}":              A,  // api.go
 	"POST /api/agents/stage/{id}":                A,  // api.go
+	"POST /api/agents/telemetry/{id}":            A,  // api.go
 	"POST /api/cli":                              A,  // api.go
 	"POST /api/cli-behind/quiet":                 W,  // api.go
 	"POST /api/gateway/held/reveal":              W,  // api.go
@@ -260,6 +261,7 @@ var notYet = map[string]string{
 	"POST /api/settings/claude-cache":            S2, // tune.go
 	"POST /api/settings/codex-agents-v1":         S2, // api.go
 	"POST /api/settings/codex-async-compact":     S2, // api.go
+	"POST /api/settings/codex-service-tier":      S2, // api.go
 	"POST /api/settings/codex-auto-reset":        S2, // api.go
 	"POST /api/settings/codex-auto-review":       S2, // api.go
 	"POST /api/settings/codex-compact-held/drop": S2, // api.go
@@ -375,6 +377,7 @@ var notYet = map[string]string{
 	"POST /api/memory":                           L,  // memory.go
 	"POST /api/memory/digest":                    L,  // memory.go
 	"POST /api/memory/remove":                    L,  // memory.go
+	"POST /api/memory/status":                    L,  // memory.go
 	"GET /api/memory/distill":                    L,  // memory_distill.go
 	"POST /api/memory/distill":                   L,  // memory_distill.go
 	"POST /api/memory/distill/run":               L,  // memory_distill.go

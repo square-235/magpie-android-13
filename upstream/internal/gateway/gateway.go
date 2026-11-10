@@ -60,6 +60,9 @@ func TokenFor(agent string) string { return Token + "-" + agent }
 // agentOf is the agent a request came from: the one its token names
 // (TokenFor), else the one its User-Agent does.
 func agentOf(r *http.Request) string {
+	if id := pathAgent(r); id != "" {
+		return id
+	}
 	if id, ok := strings.CutPrefix(callerKey(r), Token+"-"); ok && id != "" {
 		return usage.AgentOf(id)
 	}
@@ -114,6 +117,9 @@ func codexForClaudeCode(h http.Header) bool {
 // came with the plain gateway token, not one magpie gave an agent, and
 // its User-Agent names no agent.
 func startedByAgent(r *http.Request, agent string) bool {
+	if pathAgent(r) != "" {
+		return false
+	}
 	if _, ok := strings.CutPrefix(callerKey(r), Token+"-"); ok {
 		return false
 	}
@@ -2117,6 +2123,9 @@ func (s *Server) handle(from provider.Protocol) http.HandlerFunc {
 		// (Gearclickist on Discord)
 		if from == provider.Responses && (fromCodex(r.Header) || agentOf(r) == "codex") {
 			body = spawnAgentModels(r, body, model, false)
+			// the service tier set for Codex, in place of the one it
+			// asked (codexTiered)
+			body = codexTiered(r, body, model)
 		}
 		if from == provider.Chat {
 			body = thinkingEffort(body)
@@ -2922,7 +2931,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// the groups the user built with this model in them go on from
 			// it, as a request to the group would (the Codex app asks
 			// Codex's own model, never the group)
-			if q, ok := groupsAfter(p, model); ok {
+			// Codex's auto-review on codex-auto-review, which no group has,
+			// goes on where its conversation's turns go (codexReviewAfter)
+			if q, ok := groupsAfter(p, model, s.codexReviewAfter(r, p, model, body)...); ok {
 				cands, pl = s.planPaused(q, model, from, pausedIn)
 			}
 		}
@@ -2930,6 +2941,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// Codex's own sign-in, asked as often as it is asked: only
 			// the fallbacks are left (codexFallBack)
 			cands, pl = fallbacksOnly(cands, pl, p.ID, model)
+			if lead := s.codexReviewLead(r, p, model, body); lead != "" && !strings.Contains(lead, "/") {
+				// and an auto-review's, on the conversation's model through
+				// that same sign-in, in a group it goes on to
+				cands, pl = fallbacksOnly(cands, pl, p.ID, lead)
+			}
 		}
 		if provider.IsFastPick(agent, p.ID+"/"+model) {
 			// the agent's pick of it is sent in its vendor's fast mode
