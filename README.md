@@ -25,6 +25,14 @@ Termux 那套路径），外面套一层很小的安卓壳子：一个前台服�
 
 ## 需要什么
 
+### 参考：在Archlinux下的构建依赖
+```shell
+yay -S go android-ndk-28 android-platform-36 android-sdk-build-tools-36 android-sdk-cmdline-tools-latest gradle jdk21-openjdk
+```
+
+### 说明
+
+- **Gradle**
 - **JDK 21**
 - **Android SDK**，要有 API 36 的 platform 和 build-tools（`compileSdk`/`targetSdk` 仍是
   36；应用能装到 Android 13 上是由 `minSdk = 33` 决定的）
@@ -64,7 +72,7 @@ magpie 二进制加起来 98 MB，随包带的 Bun（两个架构各一份）又
 如果 PowerShell 说“禁止运行脚本”，就是上面 `-ExecutionPolicy Bypass` 的作用。
 `JAVA_HOME` 没指向 JDK 21 的话先设一下：`$env:JAVA_HOME='C:\path\to\jdk-21'`。
 
-Linux / macOS 用同一套逻辑的 shell 脚本（依赖还是上面那四样）：
+Linux / macOS 用同一套逻辑的 shell 脚本（依赖还是上面那几样）：
 
 ```bash
 scripts/build-apk.sh                     # debug APK
