@@ -13,7 +13,6 @@ import (
 // gets a target or a line here.
 var noLibrary = map[string]string{
 	"claude-science":    "not looked at (#5897)",
-	"antigravity":       "not looked at (#5897)",
 	"openchamber":       "not looked at (#5897)",
 	"mothx":             "not looked at (#5897)",
 	"penguin":           "not looked at (#5897)",
@@ -50,6 +49,8 @@ var noLibrary = map[string]string{
 	"avibe":             "not looked at (#5897)",
 	"obsidian":          "not looked at (#5897)",
 	"paimon":            "not looked at (#5897)",
+	"shelley":           "not looked at (#5897)",
+	"kun":               "not looked at (#5897)",
 }
 
 func TestEveryAgentInLibrary(t *testing.T) {

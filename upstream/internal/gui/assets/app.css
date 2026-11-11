@@ -339,24 +339,43 @@ body:not(.side-nav) #nav button[data-view="groups"], body.side-nav .rt-togroups 
 .top.packed .seg { min-width: 0; flex: 0 1 auto; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .top.packed .seg::-webkit-scrollbar { display: none; }
 /* magpie web on a phone, or a browser as narrow (phoneWeb): the magpie and
-   the icons in a row, the tabs at their size in a row of their own under
-   them, sliding sideways when they don't fit (they were squeezed into the
-   room between, too small to read or tap) */
+   the icons in the header, the pages a tab bar at the foot, as an iPhone
+   app's: each tab its mark over its word, five at most, the fifth More
+   when there are more (phonetabs.js). A strip that slid sideways hid the
+   pages past its edge (geraldpppppp on X) */
 @media (max-width: 760px), (pointer: coarse) and (max-width: 1024px) {
+  body.web:not(.panel) { --tabbar: calc(50.5px + env(safe-area-inset-bottom)); padding-bottom: var(--tabbar); }
   body.web .top {
-    height: auto; min-height: 48px; flex-wrap: wrap; gap: 4px 8px;
-    padding: calc(6px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    height: auto; min-height: 48px; gap: 4px 8px;
+    padding: calc(6px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 4px max(12px, env(safe-area-inset-left));
   }
   body.web .top .brand, body.web .top .actions { min-height: 40px; align-items: center; }
-  body.web .top #nav {
-    position: relative; left: auto; top: auto; transform: none;
-    order: 3; flex: 0 0 100%; min-width: 0; max-width: 100%;
-    overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none;
+  body.web:not(.panel) .top #nav {
+    position: fixed; z-index: 15; left: 0; right: 0; top: auto; bottom: 0; transform: none;
+    display: flex; height: var(--tabbar); padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
+    border-radius: 0; border-top: .5px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    -webkit-backdrop-filter: saturate(1.6) blur(20px); backdrop-filter: saturate(1.6) blur(20px);
   }
-  body.web .top #nav::-webkit-scrollbar { display: none; }
-  body.web .top #nav button { flex: none; height: 40px; padding: 0 14px; font-size: 14px; }
+  body.web:not(.panel) .top #nav > :is(.thumb, .tb-over), body.web:not(.side-nav, .panel) .top #nav > [data-view="groups"] { display: none; }
+  body.web:not(.panel) .top #nav > button {
+    flex: 1 1 0; min-width: 0; height: 50px; padding: 5px 2px 3px; border-radius: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    font-size: 10.5px; font-weight: 500; line-height: 1.1; color: var(--muted);
+  }
+  body.web:not(.panel) .top #nav > button.on { color: var(--fg); }
+  body.web:not(.panel) .top #nav > button > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body.web:not(.panel) .top #nav .nav-ic { display: block; flex: none; width: 23px; height: 23px; }
+  body.web:not(.panel) .top #nav > button.has-dot::after { top: 5px; right: calc(50% - 17px); }
   body.web .top .actions { gap: 4px; }
+  /* a status line comes up over the bar, not under it */
+  html body.web:not(.panel) :is(.foot .status:not(:empty):not(.lift), .status.lift) { bottom: calc(var(--tabbar) + 10px); }
 }
+/* More's menu: each page with its tab's mark */
+.nav-more-menu .pm-head { display: none; }
+.nav-more-menu .pm-item { align-items: center; gap: 10px; padding: 9px 10px; }
+.nav-more-menu .nav-ic { display: block; flex: none; width: 20px; height: 20px; color: var(--fg-2); }
+.nav-more-menu .pm-name { font-size: 14px; }
 @keyframes update-in { from { opacity: 0; max-width: 0; margin-right: 0; padding: 0; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -446,6 +465,9 @@ body.side-nav #nav button.has-dot::after { top: 50%; right: 10px; margin-top: -3
 /* the open page's tabs, under it on a thin line */
 .nav-sub { position: relative; display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px 16px; padding-left: 8px; }
 .nav-sub.moving { overflow: hidden; }
+/* a section's name over its rows, as a Mac source list's */
+.nav-sl { position: relative; z-index: 1; padding: 8px 10px 2px; font-size: 11px; font-weight: 500; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+.nav-sl:first-of-type { padding-top: 2px; }
 /* Settings' tabs, over its button at the sidebar's foot (app.js navSubs),
    close to the button they come from; the foot takes more of a short
    sidebar while they show */
@@ -456,6 +478,8 @@ body.side-nav #nav button.has-dot::after { top: 50%; right: 10px; margin-top: -3
    drawn again then (Installed gets its count) marked the selection a third
    of a row up, over Discover (#1787) */
 .nav-sub > button { position: relative; z-index: 1; flex: none; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; color: var(--ctl-fg); text-align: left; white-space: nowrap; transition: color .2s var(--ease); }
+.nav-sub > button > :is(svg, .nav-s-ic) { flex: none; width: 14px; height: 14px; margin-left: -2px; color: var(--muted); transition: color .2s var(--ease); }
+.nav-s:hover:not(.cur) > svg, .nav-s.cur > svg { color: inherit; }
 .nav-sub > button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .nav-sub > button > em { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* an update waiting, in the sidebar's dot colour, as the words the dot means */
@@ -1414,6 +1438,21 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 .led-strip .meter { height: 5px; margin-top: 8px; border-radius: 3px; background: var(--pill); overflow: hidden; }
 .led-strip .meter i { display: block; height: 100%; border-radius: 3px; background: var(--green); }
 .led-trend { padding: 10px 14px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.led-speed { margin-top: 10px; padding: 10px 14px 6px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.led-speed[hidden] { display: none; }
+.led-spd-t { font-size: 13px; font-weight: 600; }
+.led-spd-scroll { max-height: 280px; overflow: auto; }
+.led-spd { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.led-spd th, .led-spd td { padding: 5px 0 5px 12px; text-align: right; white-space: nowrap; }
+.led-spd th:first-child, .led-spd td:first-child { padding-left: 0; text-align: left; }
+.led-spd td.nm { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.led-spd thead th { position: sticky; top: 0; background: var(--card); z-index: 1; font-weight: 400; }
+.led-spd tbody td { border-top: 1px solid var(--line-2); }
+.led-spd td.faint { color: var(--faint); }
+.led-spd-h { padding: 2px 0; border: 0; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.led-spd-h:hover, .led-spd-h.on { color: var(--fg); }
+.led-spd th[aria-sort="descending"] .led-spd-h::after { content: " ↓"; }
+.led-spd th[aria-sort="ascending"] .led-spd-h::after { content: " ↑"; }
 .led-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-bottom: 8px; }
 .led-bar .grow { flex: 1; }
 .led-by { font-size: 11.5px; color: var(--muted); }
@@ -2825,9 +2864,27 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc + .acc, .accts .signing { border-top: 1px solid var(--line-2); }
 /* every row of the box ruled off from the one above it, a setting's too
    (the owner, 10-29: Add another sat unruled under Only switch) */
-.accts > :is(.keep-login, .switch-only, .restart-app, .pool-ends) + .acc { border-top: 1px solid var(--line-2); }
-.editor .accts .keep-login, .editor .accts .switch-only, .editor .accts .restart-app, .editor .accts .pool-ends { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 34px; padding: 6px 11px; font-size: 12px; border-top: 1px solid var(--line-2); }
-.editor .accts .keep-login .keep-as { max-width: 240px; }
+.accts > :is(.auto-switch, .switch-only, .restart-app, .pool-ends) + .acc { border-top: 1px solid var(--line-2); }
+.editor .accts .switch-only, .editor .accts .restart-app, .editor .accts .pool-ends { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 34px; padding: 6px 11px; font-size: 12px; border-top: 1px solid var(--line-2); }
+.editor .accts .auto-switch { display: flex; flex-direction: column; gap: 6px; padding: 8px 11px; font-size: 12px; border-top: 1px solid var(--line-2); }
+.editor .accts .auto-switch .as-head { display: flex; text-align: left; padding-top: 0; align-items: center; gap: 8px; min-height: 18px; cursor: pointer; }
+.editor .accts .auto-switch .as-name { flex: 1; min-width: 0; }
+.editor .accts .auto-switch .as-head .lib-switch { flex: none; }
+/* how the switch works (autoswitchtip.js): its lines rest out of sight and
+   settingshints.js shows them in its card; the mark says one is there. A
+   touch screen, with no hover, keeps the lines in place and no mark */
+.editor .accts .auto-switch .as-head .as-tip { display: none; flex: none; color: var(--muted); }
+.editor .accts .auto-switch > .hint { margin: 0; line-height: 1.5; color: var(--fg-2); }
+@media (hover: hover) {
+  .editor .accts .auto-switch .as-head .as-tip { display: inline-flex; }
+  .editor .accts .auto-switch.hint-row { position: relative; }
+  .editor .accts .auto-switch.hint-row > .hint {
+    --hint: 1; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
+.editor .accts .auto-switch .sign-in-moves { line-height: 1.5; color: var(--fg-2); }
+.editor .accts .auto-switch .as-keep { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--fg-2); }
+.editor .accts .auto-switch .keep-as { max-width: 240px; }
 /* Claude Code's interactive mode or -p, with why (claudeModeRow) */
 .claude-mode { display: contents; }
 .cc-run { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 26px; }
@@ -3078,6 +3135,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 #gatewayKeys .klf-days[hidden] { display: none; }
 #gatewayKeys .klf-models { grid-column: 1 / -1; }
 #gatewayKeys .klf .klf-pick > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor .headers.aliases .pair .alias-pick { flex: 6; max-width: none; min-width: 0; height: 27px; justify-content: space-between; }
+.editor .headers.aliases .pair input:first-child { flex: 4; }
 #gatewayKeys .klf-used { display: flex; align-items: center; gap: 8px; min-width: 0; }
 #gatewayKeys .klf-used .key-limit { flex: 1 1 auto; }
 #gatewayKeys .klf-used .klf-reset { flex: none; }
@@ -3092,12 +3151,12 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 #gatewayKeys .amodels.key-models { display: inline-block; flex: 0 1 auto; min-width: 24px; max-width: 180px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 /* a key's quotas and concurrency badges (#2216) take no room until the
    row is hovered, and give way before the row runs past a narrow window */
-#gatewayKeys .amodels:is(.key-quotas, .key-conc) { display: inline-block; flex: 0 1 auto; min-width: 0; line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
+#gatewayKeys .amodels:is(.key-quotas, .key-conc, .key-tier) { display: inline-block; flex: 0 1 auto; min-width: 0; line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 /* unset, shown by a hover, they give way before the masked key does: the
    key squeezed by them on a narrow window slid its copy button under the
    pointer that came to drag the row */
-#gatewayKeys .acc > :is(.key-quotas, .key-conc):not(.set) { flex-shrink: 8; }
-#gatewayKeys .acc:not(:hover) > :is(.key-quotas, .key-conc):not(.set, .open, :focus) { max-width: 0; padding: 0; margin-left: -9px; box-shadow: none; }
+#gatewayKeys .acc > :is(.key-quotas, .key-conc, .key-tier):not(.set) { flex-shrink: 8; }
+#gatewayKeys .acc:not(:hover) > :is(.key-quotas, .key-conc, .key-tier):not(.set, .open, :focus) { max-width: 0; padding: 0; margin-left: -9px; box-shadow: none; }
 /* the MCP servers a key held to some may use: cut, and gives way first */
 #gatewayKeys .amodels.key-mcp { display: inline-block; flex: 0 1 auto; min-width: 24px; max-width: 180px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* a read-only key's tag, always shown, never a button */
@@ -3123,6 +3182,10 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 /* a menu of actions, where nothing is or can be ticked, keeps no room for
    a tick: its items line up with its heading */
 .proto-menu.pm-bare .pm-tick { display: none; }
+/* a group's heading in a menu of many: it ticks all of its items */
+.proto-menu .pm-group { margin-top: 3px; }
+.proto-menu .pm-group .pm-name { font-size: 11px; font-weight: 600; color: var(--muted); }
+.proto-menu .pm-group.mixed .pm-tick::before { content: ""; width: 8px; height: 1.5px; border-radius: 1px; background: currentColor; }
 .proto-menu .pm-words { display: grid; gap: 1px; min-width: 0; }
 .proto-menu .pm-name { font-size: 12.5px; font-weight: 500; line-height: 16px; }
 .proto-menu .pm-note { font-size: 11px; color: var(--muted); line-height: 15px; }
@@ -3391,6 +3454,13 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .editor .proxy-row .proxy-mode { flex: none; }
 .editor .proxy-row input.proxy-url { flex: 1 1 auto; width: auto; min-width: 0; }
 .editor .proxy-row input.proxy-url.off { visibility: hidden; }
+.editor .proxy-row .gone { display: none; }
+.editor .proxy-row .proxy-saved { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.saved-proxy .sub { overflow-wrap: anywhere; }
+.proxy-form { flex-wrap: wrap; }
+.proxy-form .proxy-controls { justify-content: flex-end; flex: 1 1 100%; }
+.proxy-form .proxy-credential { flex: 1 1 10rem; min-width: 0; }
+.proxy-form .sub.err { flex: 1 1 100%; }
 .editor :is(input.concurrency, input.queue-limit, input.queue-wait)[type] { width: 12em; max-width: 100%; }
 .editor input[type="number"] { -moz-appearance: textfield; }
 .editor input[type="number"]::-webkit-inner-spin-button, .editor input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -3510,19 +3580,19 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
    which #929 left widening the whole page until its last agent's
    filter was only reachable by dragging the page sideways, and Plugins'
    kinds on GitHub, wider than a 420px window in Japanese */
-.segs.regions, .connect .segs, .pm-ghbar .segs { max-width: 100%; overflow-x: auto; }
+.segs.regions, .connect .segs, .pm-bar .segs { max-width: 100%; overflow-x: auto; }
 /* no scrollbar-width here: Chromium (WebView2) then drops every
    ::-webkit-scrollbar rule and draws Windows' classic bar, arrows and all,
    under the strip; the app's thin thumb instead, slimmer still */
-:where(body:not(.mac)) :is(.segs.regions, .connect .segs, .pm-ghbar .segs)::-webkit-scrollbar { height: 6px; }
-:where(body:not(.mac)) :is(.segs.regions, .connect .segs, .pm-ghbar .segs)::-webkit-scrollbar-thumb { border-width: 1px; }
+:where(body:not(.mac)) :is(.segs.regions, .connect .segs, .pm-bar .segs)::-webkit-scrollbar { height: 6px; }
+:where(body:not(.mac)) :is(.segs.regions, .connect .segs, .pm-bar .segs)::-webkit-scrollbar-thumb { border-width: 1px; }
 /* on a Mac they scroll with no bar, as a Mac's own tab strips do: the
    system's overlay bar showed over the options' lower half for a moment
    after each scroll, and a click there went to the bar, which paged the
    strip sideways and picked nothing (#1620) */
-:where(body.mac) :is(.segs.regions, .connect .segs, .pm-ghbar .segs) { scrollbar-width: none; }
-:where(body.mac) :is(.segs.regions, .connect .segs, .pm-ghbar .segs)::-webkit-scrollbar { display: none; }
-.segs.regions .opt, .connect .segs .opt, .pm-ghbar .segs .opt { flex: none; }
+:where(body.mac) :is(.segs.regions, .connect .segs, .pm-bar .segs) { scrollbar-width: none; }
+:where(body.mac) :is(.segs.regions, .connect .segs, .pm-bar .segs)::-webkit-scrollbar { display: none; }
+.segs.regions .opt, .connect .segs .opt, .pm-bar .segs .opt { flex: none; }
 /* a custom provider's five Base URL APIs wrap to a second row where the
    editor is too narrow for them (#1346); the thumb follows the row */
 .segs.base-apis { max-width: 100%; flex-wrap: wrap; }
@@ -3734,6 +3804,10 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .mname .mapi { flex: none; min-height: 24px; font-size: 11px; }
 .mname .msame { display: flex; align-items: center; gap: 6px; flex: 0 1 230px; min-width: 0; font-size: 11.5px; color: var(--muted); }
 .mname .msame span { flex: none; }
+.mname .msame-wrap { display: flex; align-items: center; gap: 2px; flex: 0 1 260px; min-width: 0; }
+.mname .msame-wrap .msame { flex: 1 1 auto; }
+.mname .mpick { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px; padding: 0; color: var(--muted); }
+.mpick-menu { max-width: min(420px, calc(100vw - 16px)); }
 .mname .msame input { flex: 1; min-width: 0; height: 25px; font-size: 11.5px; }
 .mname .mlimits { display: contents; }
 .mname .mlimit { flex: 0 1 170px; }
@@ -4003,6 +4077,11 @@ input.words.compact-num { flex: none; width: 76px; font-variant-numeric: tabular
   :is(#view-settings:not(.set-searching), .editor.roomy .prov-prefs) .row.pref > .who > .sub:not(.err, .bad, .say, .proxy-check, .lib-way, .image-gen-hidden, .sync-sign-in, .no-names, .pv-hits, .feat-why, .vision-not-marked, .video-gen-how, .font-note, .acts, [role="status"], #proxySub):not(#otelSessionsRow *, #allowList *, .disabled-model *) {
     --hint: 1; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
   }
+  /* the line held out of sight stays in its row's box: placed against the
+     page it sat at the window's top-left, and a row opened far down
+     (Sessions' Settings ›, scrolled to in Privacy) scrolled the whole page
+     to reach it, the header off the top (kalicyh on X) */
+  :is(#view-settings, .editor.roomy .prov-prefs) .row.pref:not(.lan-address-row) > .who { position: relative; }
   /* a row left with its name alone is as tall as any other: its control
      (a switch, a field, a shortcut) no longer sets it apart */
   #view-settings .row.pref:not(.feat-set) { box-sizing: content-box; min-height: 27px; } /* 51 with its padding, a line above it outside */
@@ -4112,9 +4191,13 @@ input.words.remote-key { width: 160px; }
 .warm-at.times > :not(.warm-times) { flex: none; }
 .warm-at .warm-times { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 8px; min-width: 0; }
 .warm-at .warm-time { display: inline-flex; align-items: center; gap: 2px; }
+.bark-box { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; min-width: 0; max-width: 100%; }
+.bark-box input.words { width: 180px; }
+.bark-box code { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 .warm-at .warm-rm, .warm-at .warm-add { min-width: 24px; height: 27px; padding: 0 6px; font-size: 14px; line-height: 1; }
 .row.pref .sub .warn { color: var(--amber); }
 .row.pref .sub.wraps { white-space: normal; }
+.row.pref code.sub.https-cmd { display: block; font-size: 11px; user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
 .row.pref .login-allow-open { font: inherit; color: var(--accent); padding: 0; background: none; border: 0; cursor: pointer; }
 .row.pref .login-allow-open:hover { text-decoration: underline; }
 /* the field's clock and picker in the page's own palette */
@@ -4238,7 +4321,8 @@ html.theming, html.theming *, html.theming *::before, html.theming *::after {
 /* ---------- modal ---------- */
 .modal {
   position: fixed; inset: 0; z-index: 20;
-  display: flex; align-items: center; justify-content: center; padding: 28px 24px;
+  --grip-h: var(--top-h, 46px);
+  display: flex; align-items: center; justify-content: center; padding: max(28px, var(--grip-h)) 24px;
   background: rgba(0, 0, 0, .28);
   -webkit-backdrop-filter: blur(8px) saturate(1.1); backdrop-filter: blur(8px) saturate(1.1);
 }
@@ -4251,7 +4335,20 @@ html.theming, html.theming *, html.theming *::before, html.theming *::after {
 .modal.out { pointer-events: none; }
 /* open, it holds its place from a top app.js gives it (holdModal) */
 .modal.held { align-items: flex-start; }
-.modal .dialog { position: relative; }
+.modal .dialog { position: relative; z-index: 1; }
+/* the scrim covers the title bar, so the window is still dragged from the
+   top strip while a dialog is open; the dialog lies over it and stays no-drag
+   (the strip is after it in the markup, app.js keeps the dialog the first child).
+   The modal's padding is at least the strip's height, so a tall dialog never
+   lies over the strip's middle (the strip was only free at the sides, and the
+   bar's middle is where a window is taken). */
+.modal-grip { position: absolute; z-index: 0; top: 0; left: 0; right: 0; height: var(--grip-h); }
+body.window.mac .modal { --grip-h: calc(50px / var(--zoom, 1)); }
+/* On the Mac the scrim begins under the bar, and the bar itself (the header,
+   the sidebar's top) is inert while a dialog is open (modalBackground), so
+   nothing there drags: the strip reaches up over it. (A fixed child wouldn't:
+   the scrim's backdrop-filter is its containing block.) */
+body.window.mac .modal-grip { top: calc(-1 * var(--grip-h)); }
 .modal .dialog {
   width: min(600px, 100%); min-width: 0; max-height: 100%; overflow-y: auto;
   border-radius: 14px; background: var(--card);
@@ -4304,7 +4401,7 @@ html.theming, html.theming *, html.theming *::before, html.theming *::after {
 /* Keep native window chrome outside the scrim and dialog. In particular, the
    macOS traffic lights must never sit on top of modal content. */
 body.window.mac .modal { top: calc(50px / var(--zoom, 1)); padding: 16px 24px 24px; }
-body.window .modal { padding: 16px 24px 24px; }
+body.window .modal { padding: max(16px, var(--grip-h)) 24px 24px; }
 body.panel .modal { padding: 16px 12px; }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes content-in { from { opacity: .5; transform: translateY(2px); } }
@@ -4338,7 +4435,7 @@ body.panel .modal { padding: 16px 12px; }
   body.web .view {
     --view-left: max(12px, env(safe-area-inset-left));
     --view-right: max(12px, env(safe-area-inset-right));
-    padding: 2px max(0px, calc(var(--view-right) - var(--bar, 0px))) max(12px, env(safe-area-inset-bottom)) var(--view-left);
+    padding: 2px max(0px, calc(var(--view-right) - var(--bar, 0px))) 12px var(--view-left); /* the tab bar keeps the home indicator clear */
   }
   body.web .foot .status { min-width: 0; overflow-wrap: anywhere; }
   body.web .row-head { height: auto; min-height: 40px; flex-wrap: wrap; gap: 4px; }
@@ -4352,7 +4449,7 @@ body.panel .modal { padding: 16px 12px; }
   body.web .segs .thumb { border-radius: 6px; }
   body.web .segs .opt { height: 28px; padding: 0 11px; font-size: 13px; }
   body.web .segs .opt::after { content: ""; position: absolute; left: 0; right: 0; top: -8px; bottom: -8px; }
-  body.web :is(.segs.regions, .connect .segs, .pm-ghbar .segs, .ctx-contents-head .segs, .editor.importapps .approw .segs) { overflow-y: hidden; }
+  body.web :is(.segs.regions, .connect .segs, .pm-bar .segs, .ctx-contents-head .segs, .editor.importapps .approw .segs) { overflow-y: hidden; }
   body.web .text { padding: 8px 10px; }
   body.web .copy { min-width: 44px; }
   body.web .fields { width: 100%; grid-template-columns: minmax(0, 1fr) minmax(0, 124px); }
@@ -4467,8 +4564,8 @@ body.panel .modal { padding: 16px 12px; }
   body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .aspend, .abal):not(.set) { margin-left: 0 !important; }
   body.web .accts.keys .acc > .abal.abal-many { flex-shrink: 1 !important; padding-block: 2px !important; }
   body.web .accts.keys .key-acts > .text.quiet { margin-right: 0 !important; }
-  body.web #gatewayKeys .acc > :is(.key-quotas, .key-conc) { max-width: none !important; padding: 0 7px !important; margin-left: 0 !important; flex-shrink: 0; }
-  body.web #gatewayKeys .acc > :is(.key-quotas, .key-conc):not(.set) { box-shadow: inset 0 0 0 1px var(--line) !important; }
+  body.web #gatewayKeys .acc > :is(.key-quotas, .key-conc, .key-tier) { max-width: none !important; padding: 0 7px !important; margin-left: 0 !important; flex-shrink: 0; }
+  body.web #gatewayKeys .acc > :is(.key-quotas, .key-conc, .key-tier):not(.set) { box-shadow: inset 0 0 0 1px var(--line) !important; }
 }
 
 /* Import from other apps: a checklist per app */
@@ -5062,6 +5159,7 @@ input[type="checkbox"]:disabled { opacity: .45; }
 .ag-manage-state { flex: none; }
 .ag-manager > .bar { flex-wrap: wrap; }
 .ag-manage-result { font-size: 13px; overflow-wrap: anywhere; }
+.modal .editor.alias-ask > .ebody { grid-template-columns: minmax(0, 1fr); }
 .modal .editor.ag-manager > .ebody { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; }
 
 /* a disabled model's pattern, as typed (#1867): an id or a glob */
@@ -5102,6 +5200,9 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 .editor .prov-prefs .row.pref > .who > * { grid-column: 1 / -1; }
 .editor .prov-prefs .row.pref > .who > .name { grid-column: 1; grid-row: 1; }
 .editor .prov-prefs .row.pref > :not(.who) { grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; margin-left: 0; }
+/* its width is the grid track's: .prefs .val's 60% of an auto track read as the
+   least, and a switch's buttons stacked (Xia5ai on X) */
+.editor .prov-prefs .row.pref > .val { max-width: 100%; }
 .editor .prov-prefs .row.pref .name { font-size: 12.5px; font-weight: 400; line-height: 24px; white-space: normal; }
 .editor .prov-prefs .row.pref .sub { font-size: 11px; line-height: 16px; color: var(--fg-2); margin-top: 0; white-space: normal; }
 /* a time and its picks fit the editor's narrower column: they wrap, at its end */
@@ -5132,6 +5233,6 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 .sess-pick.led-more svg { transform: none; }
 .sess-tools .led-rename { flex: none; width: 180px; height: 26px; padding: 0 8px; border-radius: 7px; font-size: 12px; }
 /* Settings › About › Open-source licenses: the notices, as written */
-.notices-text { margin: 0; font: 11px/1.5 var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
+.notices-text { grid-column: 1 / -1; min-width: 0; margin: 0; font: 11px/1.5 var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
 .client-cert { display: grid; gap: 6px; min-width: 0; }
 .client-cert input { width: 100%; min-width: 0; }

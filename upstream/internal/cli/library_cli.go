@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +20,10 @@ const libraryUsage = `magpie library                     what the library gives 
   magpie library instructions        print the shared instructions
   magpie library instructions set <file|->   replace them with a file's text (- for stdin)
   magpie library instructions agents <a,b…|none>   the agents that get them
-  magpie library mcp add <name> <url | command args…> [agents=a,b…] [--local]
+  magpie library mcp add <name> <url | command args…> [agents=a,b…] [header=K=V…] [env=K=V…] [timeout=SECS] [--local]
+                                     header= is for a URL, env= for a command; the program's own words go after --
+  magpie library mcp set <name> header=K=V | header-=K | env=K=V | env-=K | timeout=SECS   change one setting of a server
+  magpie library mcp show <name>     print the server as the library keeps it, as JSON
   magpie library mcp agents <name> <a,b…|none>
   magpie library mcp local <name> on|off   keep it to this computer: a sync or a backup never carries it, and one
                                      coming in neither takes it away nor puts another computer's in its place
@@ -46,6 +50,7 @@ const libraryUsage = `magpie library                     what the library gives 
   magpie library skill where agents|shared     skills go to the agents ticked, or also into ~/.agents/skills for every agent and tool that reads it
   magpie library skill use-library <name> <agent>   an agent's own skill by that name is in the way: set it aside, link the library's
   magpie library skill keep-own <name> <agent>      …or keep the agent's, and take the agent off the library's
+  magpie library project …           a project folder's own skills (Library › Projects): magpie library project help
   magpie library rtk                 which agents run their shell commands through RTK (rtk-ai.app), to save tokens
   magpie library rtk on|off <agent>  switch it (on with RTK's own installer; off works with RTK gone)
   magpie library rtk install         install RTK (Homebrew, winget, or RTK's own script)
@@ -105,30 +110,55 @@ func libraryCmd(args []string) error {
 		switch {
 		case len(rest) >= 3 && rest[0] == "add":
 			var cmd, agents []string
-			local := false
-			for _, a := range rest[2:] {
-				if a == "--local" {
-					local = true
-				} else if v, ok := strings.CutPrefix(a, "agents="); ok {
-					if agents, err = libraryAgents(v, "mcp"); err != nil {
-						return err
-					}
-				} else {
-					cmd = append(cmd, a)
+			var o library.ServerOpts
+			if cmd, o, err = library.SplitServerWords(rest[2:]); err != nil {
+				return err
+			}
+			for _, v := range o.Agents {
+				var as []string
+				if as, err = libraryAgents(v, "mcp"); err != nil {
+					return err
 				}
+				agents = append(agents, as...)
 			}
 			var s library.Server
 			if s, err = library.ServerOf(rest[1], cmd); err != nil {
 				return err
 			}
-			if agents != nil {
+			if o.HasAgent {
 				s.Agents = agents
 			}
-			s.Local = local
+			if err = o.Apply(&s); err != nil {
+				return err
+			}
 			res, err = library.SaveServer("", s)
 			if len(s.Agents) == 0 {
 				unused = s.Name
 			}
+		case len(rest) >= 3 && rest[0] == "set" && !strings.HasPrefix(rest[1], "-"):
+			// header, env and timeout of a server in the library, one at a time (#6111)
+			var cmd []string
+			var o library.ServerOpts
+			if cmd, o, err = library.SplitServerWords(rest[2:]); err != nil {
+				return err
+			}
+			if len(cmd) > 0 || o.HasAgent || o.Local != nil {
+				return fmt.Errorf("set takes header=K=V, env=K=V, header-=K, env-=K and timeout=SECS, not %q", strings.Join(cmd, " "))
+			}
+			res, err = library.SetServer(rest[1], o)
+		case len(rest) == 2 && rest[0] == "show" && !strings.HasPrefix(rest[1], "-"):
+			v, rerr := library.Read(nil)
+			if rerr != nil {
+				return rerr
+			}
+			for _, s := range v.Servers {
+				if s.Name == rest[1] {
+					b, _ := json.MarshalIndent(s.Server, "", "  ")
+					fmt.Println(string(b))
+					return nil
+				}
+			}
+			return fmt.Errorf("no server called %s", rest[1])
 		case len(rest) == 3 && rest[0] == "agents":
 			var as []string
 			if as, err = libraryAgents(rest[2], "mcp"); err == nil {
@@ -227,6 +257,8 @@ func libraryCmd(args []string) error {
 		}
 	case "rtk":
 		return rtkCmd(rest)
+	case "project", "projects":
+		return libraryProjectCmd(rest)
 	case "help", "-h", "--help":
 		fmt.Print("  " + libraryUsage)
 		return nil

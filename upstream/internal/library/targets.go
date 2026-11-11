@@ -27,8 +27,12 @@ type Target struct {
 	// Override, when it exists, is read instead of it (Codex's
 	// AGENTS.override.md), which the page warns of.
 	Instructions, Override string
-	MCP                    *mcpFile
-	Skills                 string // the folder the agent finds skills in
+	// Field, when it is set, says the instructions are not the file itself
+	// but the string at this key path of the JSON file Instructions names
+	// (WorkBuddy's personalization.customPrompt): instr_field.go.
+	Field  string
+	MCP    *mcpFile
+	Skills string // the folder the agent finds skills in
 	// SkillsAlso are agents whose skills this one reads as well, as
 	// OpenCode reads Claude Code's.
 	SkillsAlso []string
@@ -142,6 +146,14 @@ func targetOf(a *agent.Agent) *Target {
 	}
 	h := home()
 	t := &Target{Agent: a}
+	if strings.HasPrefix(a.ID, "hermes#") {
+		// another Hermes profile (agent.hermesProfileAgents) is a Hermes
+		// home of its own: its config.yaml holds its mcp_servers, and its
+		// skills folder is beside it
+		t.MCP = &mcpFile{Path: a.Path, Format: fmtHermes}
+		t.Skills = filepath.Join(a.Dir, "skills")
+		return t
+	}
 	if n := a.SharedName(); n != a.Name {
 		// the files are another app's too (the Cursor editor's ~/.cursor):
 		// named for both, not for the CLI alone
@@ -167,7 +179,7 @@ func targetOf(a *agent.Agent) *Target {
 		t.Instructions = filepath.Join(d, "GEMINI.md")
 		t.MCP = &mcpFile{Path: filepath.Join(d, "settings.json"), Format: fmtGemini}
 		t.Skills = filepath.Join(d, "skills")
-	case "agy":
+	case "agy", "antigravity":
 		// Antigravity — the app and agy alike — reads its user-wide
 		// customizations from ~/.gemini/config: GEMINI.md there (as well as
 		// Gemini CLI's ~/.gemini/GEMINI.md), mcp_config.json and skills
@@ -372,6 +384,10 @@ func targetOf(a *agent.Agent) *Target {
 		// moved it to, else ~/.minimax); it has no user-wide MCP file, only
 		// plugins' own
 		t.Skills = filepath.Join(a.Dir, "skills")
+		// and AGENTS.md there before every conversation: global
+		// instructions are <dataDir>/AGENTS.md (readGlobalInstructions,
+		// @minimax-ai/code 0.7.6's chunks)
+		t.Instructions = filepath.Join(a.Dir, "AGENTS.md")
 	case "devin":
 		// Devin reads its user-wide MCP servers from mcp_config.json
 		// beside its config.json (devin mcp add --scope user)
@@ -445,6 +461,14 @@ func targetOf(a *agent.Agent) *Target {
 		// (#1266). Its skills are in skills/ there.
 		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtClaude}
 		t.Skills = filepath.Join(a.Dir, "skills")
+		// Its instructions are the Custom Instructions of its
+		// Personalization settings: personalization.customPrompt in
+		// app/app-config.json, which the app reads each time it builds a
+		// conversation's prompt (PersonalizationCollector, trimmed, in
+		// 5.5.6's app.asar; WorkBuddy AI's has the same, its folder
+		// the CONFIG_DIR). The rest of that file is the app's own
+		t.Instructions = filepath.Join(a.Dir, "app", "app-config.json")
+		t.Field = "personalization.customPrompt"
 	case "codebuddy":
 		// CodeBuddy Code's user-wide servers are in the first of
 		// .mcp.json, mcp.json (in its folder) and .codebuddy.json (beside
@@ -859,19 +883,21 @@ func wslOwnFolder(a *agent.Agent) *Target {
 
 // apps are what the library can give MCP servers to that aren't agents
 // magpie sets up: known by the folder they keep their settings in
-// (Claude Desktop), or by their program alone (Kiro CLI).
+// (Claude Desktop; on Windows by its program, agent.DesktopApp), or by
+// their program alone (Kiro CLI).
 func apps() []*agent.Agent {
 	// Desktop's own folder (%APPDATA%\Claude on Windows, the MSIX
 	// package's for a packaged Desktop, which doesn't see a file written
 	// into %APPDATA%). Desktop only ever run in its 3p mode has no Claude
 	// folder, only Claude-3p: its file is the one there
 	d := desktopdir.Here()
+	home, _ := os.UserHomeDir()
 	dir := d.Data
 	if !isDir(dir) && isDir(d.ThreeP) {
 		dir = d.ThreeP
 	}
 	out := []*agent.Agent{
-		{ID: "claude-desktop", Name: "Claude Desktop", Icon: "claude-color", Dir: dir, Path: filepath.Join(dir, "claude_desktop_config.json")},
+		agent.DesktopApp(home, dir, filepath.Join(dir, "claude_desktop_config.json")),
 	}
 	// Kiro CLI (#4769) is no agent magpie wires a model into, but the
 	// library can give it skills, MCP servers and instructions. It is
