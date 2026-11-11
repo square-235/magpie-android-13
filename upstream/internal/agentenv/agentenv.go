@@ -41,7 +41,7 @@ var Vars = []string{
 	// Antigravity's gateway, which wins over its settings.json
 	"AGY_LLM_GATEWAY_URL",
 	// Cline: its folder, its data, its sessions and its MCP settings file
-	"CLINE_DIR", "CLINE_DATA_DIR", "CLINE_SESSION_DATA_DIR", "CLINE_MCP_SETTINGS_PATH",
+	"CLINE_DIR", "CLINE_DATA_DIR", "CLINE_SESSION_DATA_DIR", "CLINE_MCP_SETTINGS_PATH", "CLINE_GLOBAL_SETTINGS_PATH",
 	// Pi and its forks (OmO, Senpi), whose profile and config are apart
 	"PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "PI_CONFIG_DIR", "PI_PROFILE",
 	"OMO_CODING_AGENT_DIR", "SENPI_CODING_AGENT_DIR",
@@ -54,6 +54,10 @@ var Vars = []string{
 	"STEP_CODING_AGENT_DIR", "STEPCODE_CONFIG_DIR",
 	// MothX's config folder ($MOTHX_DIR/settings.json)
 	"MOTHX_DIR",
+	// Kiro Crew's CLI search path adds $BUN_INSTALL/bin
+	"BUN_INSTALL",
+	// Shelley's socket ($SHELLEY_SOCKET), which magpie tells it through
+	"SHELLEY_SOCKET",
 	// PenguinHarness's data root and the Project its CLI works in
 	// ($PENGUIN_HOME/$PENGUIN_PROJECT_ID/.project_config.toml)
 	"PENGUIN_HOME", "PENGUIN_PROJECT_ID",
@@ -80,6 +84,9 @@ var Vars = []string{
 	"OMB_DATA_DIR",
 	// Avibe's home (its config/config.json and its control socket), ~/.avibe without it
 	"AVIBE_HOME",
+	// Kun's data folder (its runtime.json and model-connections.v2.json),
+	// ~/.kun/data without it
+	"KUN_DATA_DIR",
 	// AstrBot's root, the folder holding its data/ (else ~/.astrbot, the desktop app's)
 	"ASTRBOT_ROOT",
 	// jcode's folder, ~/.jcode without it

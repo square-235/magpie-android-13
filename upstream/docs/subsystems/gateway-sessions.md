@@ -220,6 +220,15 @@ Sessions is not cleared. Verification: `TestClearedUsageLeavesThePages`,
 `TestClearUsageKeepsOneMarkAModel`, `TestUsageClearRoute`,
 `usage-clear.test.cjs`.
 
+Claude Code's sessions are read from every folder it is run in
+(`appdir.ClaudeHomes`, `sessions.ClaudeDirs`): `$CLAUDE_CONFIG_DIR` or
+`~/.claude`, a folder beside it or in the home folder whose name starts with
+`claude` or `.claude` (or one level down) and holds `projects/`, and the
+folders of the Claude accounts saved in magpie. A session id kept in two of
+them is one session, under the first. Verification:
+`TestClaudeHomesIn`, `TestCallsReadEveryClaudeFolder`,
+`TestListReadsEveryClaudeFolderOnce`.
+
 Claude Desktop gateway rows can have a local name even without a CLI
 transcript (#1675). [`DesktopTitles`](../../internal/sessions/desktop_titles.go)
 reads `claude-code-sessions/*/*/local_*.json` and
@@ -250,6 +259,14 @@ A ZCode request names its session without the `sess_` prefix ZCode's
 database gives it, so `Titles` looks a `zcode:` key up under both and
 answers under the id asked for (#5195). Verification:
 `TestZCodeTitlesByRequestID`.
+
+A ZCode session's name is the app's: its task index
+(`v2/tasks-index.sqlite` in the data folder, `tasks.title` by `task_id`,
+the session's id) holds what the app shows and what the user renamed it to,
+and the CLI database's title is a guess or the default. `zcodeTaskOf`
+(`zcode_tasks.go`) overlays it on `zcDB.info`, and the task's `updated_at`
+counts toward the file's time so a rename is read again. Verification:
+`TestZCodeTitleIsTheAppsTaskName`.
 
 Routing's stage names the session an account is serving (connor_yang on
 Discord): a row answering, or that answered, the request shown adds that

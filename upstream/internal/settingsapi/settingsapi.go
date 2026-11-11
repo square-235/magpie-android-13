@@ -37,7 +37,7 @@ var Keys = []string{
 	// usage and alerts
 	"currency", "chineseUnits", "usageAlert", "balanceAlert", "resetReminder", "turnDoneAlert", "maskAlert",
 	// network
-	"proxy", "pluginProxy",
+	"proxy", "pluginProxy", "updateProxy",
 	// privacy
 	"redact", "redactPersonal", "redactKinds", "redactWords", "redactWordsAnyCase", "redactWordsWhole", "redactShape",
 	"noStats", "noUsageStats", "otel",
@@ -283,16 +283,23 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	settings.CarryPerModel(&in, &cur)
 	in.LAN, in.LANKey = cur.LAN, cur.LANKey
 	in.LANKeyID = cur.LANKeyID
-	in.Port = cur.Port                                 // set on its own (port), which moves the gateway
-	in.CORSOrigins = cur.CORSOrigins                   // set on its own (cors)
-	in.AllowIPs = cur.AllowIPs                         // set on its own (allowips)
-	in.MTLS = cur.MTLS                                 // set on its own (mtls)
-	in.FetchPrivate = cur.FetchPrivate                 // in settings.json only
-	in.RouterNote = cur.RouterNote                     // set on its own (the Library's servers/hub-note)
-	in.RouterAllTools = cur.RouterAllTools             // set on its own (the Library's servers/hub-tools)
-	in.GitHubToken = cur.GitHubToken                   // set on its own (github-token), never sent to the page
-	in.ProxyCustom = cur.ProxyCustom                   // set by settings.Save from the proxy, never by the page
-	in.PluginProxyCustom = cur.PluginProxyCustom       // and plugin downloads' from theirs
+	// Bark has its own route (bark); the page never sees its key
+	in.BarkServer, in.BarkKey, in.BarkDaily = cur.BarkServer, cur.BarkKey, cur.BarkDaily
+
+	in.Port = cur.Port                           // set on its own (port), which moves the gateway
+	in.CORSOrigins = cur.CORSOrigins             // set on its own (cors)
+	in.AllowIPs = cur.AllowIPs                   // set on its own (allowips)
+	in.MTLS = cur.MTLS                           // set on its own (mtls)
+	in.HTTPS = cur.HTTPS                         // set on its own (https)
+	in.FetchPrivate = cur.FetchPrivate           // in settings.json only
+	in.RouterNote = cur.RouterNote               // set on its own (the Library's servers/hub-note)
+	in.RouterAllTools = cur.RouterAllTools       // set on its own (the Library's servers/hub-tools)
+	in.GitHubToken = cur.GitHubToken             // set on its own (github-token), never sent to the page
+	in.ProxyCustom = cur.ProxyCustom             // set by settings.Save from the proxy, never by the page
+	in.PluginProxyCustom = cur.PluginProxyCustom // and plugin downloads' from theirs
+	in.UpdateProxyCustom = cur.UpdateProxyCustom // and updates'
+	in.ProxyNames = cur.ProxyNames
+	in.Proxies = cur.Proxies                           // set on its own (proxies), the password never sent to the page
 	in.RequestArchive = cur.RequestArchive             // the Gateway page's, set on its own
 	in.RequestArchiveMaxMB = cur.RequestArchiveMaxMB   // in settings.json only
 	in.ClaudeRunsMost = cur.ClaudeRunsMost             // magpie claude-code runs, or settings.json (#2956)
@@ -306,6 +313,7 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.RedactActions = cur.RedactActions               // set on their own (redact-actions)
 	in.RedactAllow = cur.RedactAllow                   // set on its own (redact-allow)
 	in.DisabledModels = cur.DisabledModels             // set on their own (disabled-models, #1867)
+	in.AgentTelemetryOff = cur.AgentTelemetryOff       // set on its own (agent-telemetry), which writes the agents' files
 	// the request archive on this computer: the archive's switch while no
 	// S3 bucket, and its size in settings.json only
 	in.RequestArchiveLocal, in.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
@@ -336,6 +344,8 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.FullContext = cur.FullContext     // set on its own (full-context)
 	in.CompactAt = cur.CompactAt         // and so is the threshold
 	in.AgentCompacts = cur.AgentCompacts // and each agent's own (agent-compact)
+	in.ContextCap = cur.ContextCap       // and the longest window of every model (context-cap)
+	in.ContextCapAll = cur.ContextCapAll // and whether it holds the user's own windows
 	// Codex's background compaction, set on its own (codex-async-compact)
 	in.CodexAsyncCompact, in.CodexAsyncCompactPercent = cur.CodexAsyncCompact, cur.CodexAsyncCompactPercent
 	// Claude Desktop's list, set in its row on the Agents page

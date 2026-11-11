@@ -72,7 +72,18 @@ func (p Provider) available() []catalog.Model {
 		if p.Account != nil && p.Account.unusable != nil {
 			// a model the list offers that the account was refused
 			// (Copilot's, copilot_refused.go)
-			live = slices.DeleteFunc(slices.Clone(live), func(m catalog.Model) bool { return p.Account.unusable(m.ID) })
+			// unless another of its accounts on lists it (copilot_pool.go),
+			// read only once a model was refused
+			var others map[string]bool
+			live = slices.DeleteFunc(slices.Clone(live), func(m catalog.Model) bool {
+				if !p.Account.unusable(m.ID) {
+					return false
+				}
+				if others == nil && p.Account.Agent == "copilot" {
+					others = copilotOthersList(p.Account.User)
+				}
+				return !others[m.ID]
+			})
 		}
 		switch p.ID {
 		case "cursor":
@@ -1220,6 +1231,9 @@ func (p Provider) planModels(ms []catalog.Model) []catalog.Model {
 	}
 	if p.IsVertex() && p.Vertex != nil {
 		models = vertexModels(p.Vertex.Location) // each location serves its own
+	}
+	if p.VertexExpress() {
+		models = vertexExpressModels()
 	}
 	if pr.Only == "" && (len(models) == 0 || len(ms) > 0) {
 		return ms
@@ -3118,7 +3132,10 @@ type Entry struct {
 	Default string `json:"default,omitempty"` // the model's own name, when the user gave it another
 	// Plain is a remote magpie's model's name there alone, when Name is
 	// its label there with that magpie's provider after it (catalog.Model's)
-	Plain      string   `json:"-"`
+	Plain string `json:"-"`
+	// By is the provider a remote magpie's list names as serving the
+	// model there, the first in a chain of magpies (catalog.Model's)
+	By         string   `json:"-"`
 	Efforts    []string `json:"efforts,omitempty"`
 	Provider   Provider `json:"-"`                // a group's: its first member's
 	Group      string   `json:"group,omitempty"`  // set on a routing group (group.go)
@@ -3439,7 +3456,7 @@ func entriesOf(of func(Provider) bool, off func(pid, model string) bool) []Entry
 // window and the reply limit a request on it is routed and metered against,
 // with what the user set taken over the vendor's list and models.dev.
 func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
-	ctx := p.WindowOf(m)
+	ctx := p.windowIn(m, s)
 	output := p.replyLimit(m, s)
 	images := m.Images || catalog.SeesImages(m.ID)
 	if m.ImageInput != nil {
@@ -3465,6 +3482,9 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 		e.Name, e.Default = n, name
 	} else {
 		e.Plain = m.Plain
+	}
+	if p.IsRemoteMagpie() {
+		e.By = m.By
 	}
 	// a model that thinks still does with the levels the user kept or
 	// none at all; one its source says nothing of thinks as most of the
@@ -3697,17 +3717,27 @@ func ListedWindow(m catalog.Model) int {
 // is the user's word on it, larger or not. The catalog's entries and the
 // Providers page's model lists both read it, so the page shows the window
 // agents are told.
-func (p Provider) WindowOf(m catalog.Model) int {
+func (p Provider) WindowOf(m catalog.Model) int { return p.windowIn(m, settings.Shared()) }
+
+// WindowIn is WindowOf with the settings s already read.
+func (p Provider) WindowIn(m catalog.Model, s settings.Settings) int { return p.windowIn(m, s) }
+
+// windowIn is WindowOf under settings s: a window the user typed, for the
+// model or for all the provider's (which is no larger than the model's own
+// where it says), is theirs as it is, or held to the longest context too
+// when the user chose that (settings.ContextCapAll); any other is held to
+// the longest context the user set for every model (settings.ContextCap).
+func (p Provider) windowIn(m catalog.Model, s settings.Settings) int {
 	if n := p.Contexts[m.ID]; n > 0 {
-		return n
+		return s.CappedOwn(n)
 	}
 	if n := p.Contexts["*"]; n > 0 {
 		if most := max(catalog.Window(m.Context), m.MaxContext); most > 0 && most < n {
-			return most
+			return s.CappedOwn(most)
 		}
-		return n
+		return s.CappedOwn(n)
 	}
-	return ListedWindow(m)
+	return s.Capped(ListedWindow(m))
 }
 
 // ContextOf is the context the user set for the provider's model: its own,

@@ -145,6 +145,11 @@ type Key struct {
 	// "<provider>/*" or a group's "group/<name>"; none for every model,
 	// unless it lists accounts: then its accounts' providers' (HeldModels).
 	Models []string `json:"models,omitempty"`
+	// Aliases are the names the key gives models (tsingchao on X): a name
+	// its client asks by, the model "<provider>/<model>" it stands for.
+	// /v1/models lists the name in the model's place and a request by it
+	// goes to the model, which the key's Models must allow.
+	Aliases map[string]string `json:"aliases,omitempty"`
 	// Accounts are the accounts and keys the key may use (#905), as
 	// "<provider>/<account>": a signed-in account by its stable id, a
 	// key by its fingerprint; none for every account, as keys always did.
@@ -187,6 +192,28 @@ type Key struct {
 	// queue and go out in order, as over a provider's MaxConcurrency.
 	// 0 for no limit.
 	MaxConcurrency int `json:"maxConcurrency,omitempty"`
+	// ServiceTier is the service tier the key's OpenAI-API requests (Chat
+	// and Responses) are sent at whatever the client asked (JackyFill on
+	// X): settings.CodexTierStandard for none, "priority" (Codex's Fast)
+	// or "ultrafast"; "" follows the request.
+	ServiceTier string `json:"serviceTier,omitempty"`
+}
+
+// CleanTier is a key's service tier as it is kept: "" to follow the
+// request, settings.CodexTierStandard, "priority" or "ultrafast", read from
+// the words people use for them too (normal, fast, ultra_fast).
+func CleanTier(v string) (string, error) {
+	switch strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.TrimSpace(v))) {
+	case "", "follow", "asked", "off":
+		return "", nil
+	case "default", "standard", "normal", "none":
+		return settings.CodexTierStandard, nil
+	case "priority", "fast":
+		return "priority", nil
+	case "ultrafast":
+		return "ultrafast", nil
+	}
+	return "", fmt.Errorf("Service tier: one of follow, standard, fast or ultrafast, not %q", v)
 }
 
 // MaxKeyConcurrency is the most MaxConcurrency a key may have, as a
@@ -200,6 +227,8 @@ type Identity struct {
 	Limit          *Limit
 	More           []Limit
 	Models         []string
+	// Aliases are Key.Aliases; an issued key has none.
+	Aliases map[string]string
 	// AccountModels says Models are only HeldModels' "<provider>/*" of
 	// a key that names accounts and no model, nor does the key it was
 	// issued under: every model of those accounts' providers is the
@@ -231,6 +260,8 @@ type Identity struct {
 	// (Key.MaxConcurrency), 0 for none; an issued key is held to its
 	// issuer's too (Issuer.MaxConcurrency).
 	MaxConcurrency int
+	// ServiceTier is Key.ServiceTier.
+	ServiceTier string
 	// Default: the key is the sharing key magpie made itself (Default),
 	// the one it writes into this computer's own agents that reach the
 	// gateway from beyond loopback, never one the user made for someone
@@ -418,6 +449,8 @@ type Change struct {
 	Index *int `json:"index,omitempty"`
 	// Models is what "models-key" sets; none lets the key use every model.
 	Models []string `json:"models,omitempty"`
+	// Aliases is what "aliases-key" sets; none takes the names away.
+	Aliases map[string]string `json:"aliases,omitempty"`
 	// Accounts is what "accounts-key" sets (#905); none lets the key use
 	// every account and key.
 	Accounts []string `json:"accounts,omitempty"`
@@ -438,6 +471,9 @@ type Change struct {
 	// MaxConcurrency is what "concurrency-key" sets: how many requests
 	// the key may have in flight at once, 0 for no limit.
 	MaxConcurrency int `json:"maxConcurrency,omitempty"`
+	// ServiceTier is what "tier-key" sets (Key.ServiceTier), "" to follow
+	// the request.
+	ServiceTier string `json:"serviceTier,omitempty"`
 	// Secret is the value "add-key" gives the new key, one its clients
 	// already send (love1sbug on X: keys handed out from another gateway),
 	// or "rotate-key" gives the key; "" for one magpie makes.
@@ -583,6 +619,18 @@ func Update(action string, in Change) (string, error) {
 				return "", err
 			}
 			keys[i].Models = ms
+		case "aliases-key":
+			as, err := CleanAliases(in.Aliases)
+			if err != nil {
+				return "", err
+			}
+			held := HeldModels(keys[i].Models, keys[i].Accounts)
+			for name, target := range as {
+				if !ModelAllowed(held, target) {
+					return "", fmt.Errorf("The key may not use %s, so it can't name it %s: add it to the key's models first", target, name)
+				}
+			}
+			keys[i].Aliases = as
 		case "accounts-key":
 			as, err := CleanAccounts(in.Accounts)
 			if err != nil {
@@ -602,6 +650,12 @@ func Update(action string, in Change) (string, error) {
 				return "", fmt.Errorf("Concurrency: a whole number from 0 to %d", MaxKeyConcurrency)
 			}
 			keys[i].MaxConcurrency = in.MaxConcurrency
+		case "tier-key":
+			tier, err := CleanTier(in.ServiceTier)
+			if err != nil {
+				return "", err
+			}
+			keys[i].ServiceTier = tier
 		case "issuer-key":
 			// may issue short-lived keys under itself (POST /v1/magpie/keys)
 			if in.Issues && keys[i].Browser {
@@ -647,7 +701,7 @@ func Update(action string, in Change) (string, error) {
 		default:
 			return "", fmt.Errorf("unknown key action %q", action)
 		}
-		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "accounts-key" && action != "mcp-key" && action != "quotas-key" && action != "concurrency-key" && action != "access-key" && action != "issuer-key" && action != "move-key" {
+		if defaultKey && action != "remove-key" && action != "rename-key" && action != "limit-key" && action != "reset-limit-key" && action != "models-key" && action != "aliases-key" && action != "accounts-key" && action != "mcp-key" && action != "quotas-key" && action != "concurrency-key" && action != "tier-key" && action != "access-key" && action != "issuer-key" && action != "move-key" {
 			mirror = &keys[i]
 		}
 	}

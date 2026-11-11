@@ -58,6 +58,9 @@ const providerUsage = `usage:
                                           image-files=off sends DeepSeek's API an agent's images inline on every
                                           turn; image-files=on, the default, uploads each once (for a day)
                                           and names it by its file id
+                                          upstream-providers=on, on a Remote magpie, names its models by the
+                                          provider serving each there (Claude · Office › RelayA); off, the
+                                          default, as that magpie's own list names them
                                           patience=2m keeps a request to it alone (not through a group) that long
                                           while it is busy or briefly rate limited, asking again after a pause
                                           (at most 4m); patience=off hands the agent the error at once;
@@ -159,6 +162,9 @@ const providerUsage = `usage:
                                     credentials=<file> names another, a service account key too; impersonate= needs
                                     roles/iam.serviceAccountTokenCreator on that account; location= global (the
                                     default), us, eu or a region such as us-central1; set changes them, empty clears)
+       magpie provider add google-vertex AQ.Ab8R…   (Vertex AI express mode: an API key, no project or gcloud; Gemini
+                                    models only. project= beside it asks that project's address with the key;
+                                    url=https://my-proxy.example.com asks a gateway that answers as Vertex AI does)
        magpie provider add "My Decider" decide=https://decide.example.com/v1 key=sk-… models=my-decision-model
                                    (a System One API, POST …/systemone: it routes groups, its models are never an agent's)
        magpie provider add anthropic sk-… id=anthropic-ws2 name="Anthropic WS2" header.anthropic-workspace-id=wrkspc_…
@@ -176,6 +182,9 @@ const providerUsage = `usage:
                                    (Settings' redaction leaves its requests as written, at any address: your call,
                                     so mind a relay that passes them on to a vendor; a subscription or a plugin's
                                     provider too, whose vendor gets them so; never another magpie)
+       magpie provider set claude fallback-for-others=no
+                                   (no other model's fallback, nor a routing group's next after one:
+                                    a local model that is down or full doesn't send its requests on to it)
        magpie provider set modelscope free=yes
                                    (every model of it counts as free, so a Free first routing spends it before
                                     paid ones, as a free daily quota; prices and Usage's costs stay as listed)
@@ -215,7 +224,9 @@ func keyColumn(p provider.Provider) string {
 	case p.IsVertex() && !p.Ready():
 		// no project an address can be made of (providers.json edited
 		// by hand): nothing is asked, as the app's row says
-		return amber.Render("○ needs a project")
+		return amber.Render("○ needs a project or an API key")
+	case p.IsVertex() && p.Key != "":
+		return green.Render("●") + " " + muted.Render(provider.Mask(p.Key))
 	case p.IsVertex():
 		// no key: a token minted from the user's Google credentials,
 		// traded for a service account's when it impersonates one
@@ -523,9 +534,6 @@ func providerCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		if p.IsVertex() {
-			return fmt.Errorf("%s is asked with your Google credentials, not an API key · magpie provider set %s credentials=<file> impersonate=<service account> changes them", p.Name, p.ID)
-		}
 		p.Key = rest[1]
 		if err := provider.Save(*p); err != nil {
 			return err
@@ -796,9 +804,6 @@ func addProvider(rest []string) error {
 	if pr, err := provider.FromPreset(strings.ToLower(rest[0])); err == nil {
 		p = pr
 		if len(rest) > 1 && !strings.Contains(rest[1], "=") {
-			if p.IsVertex() {
-				return fmt.Errorf("%s is asked with your Google credentials, not an API key · magpie provider add %s project=<your Google Cloud project's id>", p.Name, p.ID)
-			}
 			p.Key = rest[1]
 			rest = rest[2:]
 		} else {
@@ -816,7 +821,7 @@ func addProvider(rest []string) error {
 	id, err := provider.Add(p)
 	if err != nil && p.IsVertex() && (p.Vertex == nil || strings.TrimSpace(p.Vertex.Project) == "") {
 		// the pair that gives the project, which Save's words don't name
-		return fmt.Errorf("%w · magpie provider add %s project=<your Google Cloud project's id>", err, p.Preset)
+		return fmt.Errorf("%w · magpie provider add %s project=<your Google Cloud project's id>, or give an API key", err, p.Preset)
 	}
 	if err != nil {
 		return err
@@ -905,6 +910,9 @@ func showProviderAsking(p provider.Provider, ask bool) error {
 		}
 		kv("unmasked", "yes"+muted.Render(why))
 	}
+	if p.NoStandIn {
+		kv("fallback-for-others", "no"+muted.Render("  never takes another model's request"))
+	}
 	switch b := p.BillingKind(); {
 	case b == "":
 	case p.Billing != "":
@@ -945,6 +953,17 @@ func showProviderAsking(p provider.Provider, ask bool) error {
 		project := v.Project
 		if !p.Ready() {
 			project = amber.Render(cmp.Or(project, "not set")) + muted.Render("  magpie provider set "+p.ID+" project=…")
+		}
+		if p.Key != "" {
+			// an API key: express mode, or the project's address
+			kv("key", muted.Render(provider.Mask(p.Key)))
+			if v.BaseURL != "" {
+				kv("url", v.BaseURL)
+			}
+			if p.VertexExpress() {
+				kv("mode", "express: Gemini models, no project")
+				break
+			}
 		}
 		kv("project", project)
 		kv("location", v.Location)
@@ -1061,11 +1080,22 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 		if !ok {
 			return fmt.Errorf("expected key=value, got %q\n\n%s", kv, providerUsage)
 		}
-		if p.IsVertex() && slices.Contains([]string{"url", "chat", "openai", "responses", "anthropic", "decide", "address"}, strings.ToLower(k)) {
+		if p.IsVertex() && slices.Contains([]string{"url", "baseurl"}, strings.ToLower(k)) {
+			// an API key's gateway: Google's token never goes there, so
+			// it is kept only with a key (Save says so)
+			x := provider.Vertex{}
+			if p.Vertex != nil {
+				x = *p.Vertex
+			}
+			x.BaseURL = strings.TrimSpace(v)
+			p.Vertex = &x
+			continue
+		}
+		if p.IsVertex() && slices.Contains([]string{"chat", "openai", "responses", "anthropic", "decide", "address"}, strings.ToLower(k)) {
 			// asked only at the address its project and location make, so
 			// that its Google token goes nowhere else: one given here would
 			// be dropped without a word
-			return fmt.Errorf("%s is asked at its Google Cloud project's own address: project= and location= say where", p.Name)
+			return fmt.Errorf("%s is asked at its Google Cloud project's own address (project= and location= say where), or at url= with an API key", p.Name)
 		}
 		switch strings.ToLower(k) {
 		case "id":
@@ -1216,6 +1246,20 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			default:
 				return fmt.Errorf("image-files=on|off, not %q", v)
 			}
+		case "upstream-providers":
+			// on: a Remote magpie's models named by the provider serving
+			// each there (Provider.UpstreamProviders, lcc580 on X)
+			if !p.IsRemoteMagpie() {
+				return fmt.Errorf("upstream-providers is a Remote magpie's; %s is not one", p.ID)
+			}
+			switch strings.ToLower(v) {
+			case "on", "yes":
+				p.UpstreamProviders = true
+			case "off", "no", "default":
+				p.UpstreamProviders = false
+			default:
+				return fmt.Errorf("upstream-providers=on|off, not %q", v)
+			}
 		case "prompt":
 			// as-written: Antigravity's subscription is sent the system
 			// prompt exactly as the agent wrote it, the lines Google turns
@@ -1326,6 +1370,19 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 				return fmt.Errorf("unmasked=yes|no, not %q", v)
 			}
 			p.Unredacted = v == "yes"
+		case "fallback-for-others":
+			// no: never a fallback for another model, nor a routing
+			// group's next after one (sonnnnnnnnnnnna on X: a local
+			// uncensored model's request reaching a vendor that bans for
+			// it); yes, the default, again (provider.NoStandIn)
+			switch strings.ToLower(v) {
+			case "yes", "on":
+				p.NoStandIn = false
+			case "no", "off":
+				p.NoStandIn = true
+			default:
+				return fmt.Errorf("fallback-for-others=yes|no, not %q", v)
+			}
 		case "free":
 			// yes: every model of it counts as free for Free first and
 			// Cheapest routing, by the user's word (jiabubu on Discord:
@@ -1592,6 +1649,7 @@ func serve() error {
 	follow := newServeFollow(s, stop)
 	if follow != nil {
 		gateway.SetRestarter(follow.answer)
+		gateway.SetForceRestarter(follow.answerNow)
 		go follow.run(ctx)
 	}
 	// another magpie using this one updated (serve_update.go), and this
@@ -1757,8 +1815,8 @@ func accountCapCmd(rest []string) error {
 	if err != nil {
 		return err
 	}
-	if p.Account == nil {
-		return fmt.Errorf("%s has keys, not subscription accounts with usage windows to cap", p.Name)
+	if !p.TakesUsageCap() {
+		return fmt.Errorf("%s has keys with no usage windows magpie reads, not subscription accounts with windows to cap", p.Name)
 	}
 	if amountSet {
 		n, err := parseWindowAmount(amount)
