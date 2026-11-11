@@ -234,7 +234,7 @@ function renderGatewayKeys() {
     tick.onclick = () => gatewayKeyAction(k.off ? "on-key" : "off-key", { key: k.id });
     // the copy sits by the key it copies (the owner: stranded among the
     // badges it read as nobody's); Rotate and Remove wait in the row's menu
-    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.browser ? [gatewayBrowserTag()] : k.readOnly ? [gatewayReadOnlyTag()] : []), gatewayModelsBadge(k), ...gatewayKeptOutBadge(k), ...gatewayMCPBadge(k), gatewayQuotasBadge(k), ...(k.browser || k.readOnly ? [] : [gatewayConcurrencyBadge(k)]), gatewayLimitBadge(k), gatewayKeyMore(k));
+    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.browser ? [gatewayBrowserTag()] : k.readOnly ? [gatewayReadOnlyTag()] : []), gatewayModelsBadge(k), ...gatewayKeptOutBadge(k), ...gatewayMCPBadge(k), gatewayQuotasBadge(k), ...(k.browser || k.readOnly ? [] : [gatewayConcurrencyBadge(k), gatewayTierBadge(k)]), gatewayLimitBadge(k), gatewayKeyMore(k));
     const under = gatewayLimit?.id === k.id ? [gatewayLimitEditor(k)] : keyUsed(k).map((u) => gatewayLimitLine(k, u));
     if (under.length) row.classList.add("with-limit"), row.append(...under);
     list.append(row);
@@ -346,6 +346,8 @@ function gatewayKeyMore(k) {
       ...(k.browser ? [] : [{ name: "MCP servers", icon: MCP_GLYPH, run: () => gatewayMCPPick(k, more) }]),
       // every account but some, those signed in later too (LeiWang_2000
       // on X); the Browser key uses no account
+      // a name of the key's own for a model it may use (tsingchao on X)
+      ...(k.browser || k.readOnly ? [] : [{ name: "Model names", icon: MCP_GLYPH, run: () => gatewayAliasesAsk(k) }]),
       ...(k.browser ? [] : [{ name: "Keep accounts out", icon: KEEP_OUT_GLYPH, run: () => gatewayKeptOutPick(k, more) }]),
       { name: "Rotate key", icon: ROTATE_GLYPH, run: () => askGatewayKey(k, true) },
       { name: "Remove", icon: REMOVE_GLYPH, sep: true, run: () => askGatewayKey(k, false) },
@@ -373,6 +375,90 @@ function gatewayBrowserTag() {
   const tag = el("span", "amodels key-readonly key-browser set", t("Browser only"));
   tag.title = t("This key connects the Magpie Browser extension and nothing else. It can't use models, MCP servers or stats.");
   return tag;
+}
+
+// gatewayAliasesAsk edits the names a key gives its models: a row each, the
+// name typed and the model picked in the app's menu. /v1/models lists the
+// name in the model's place and a request by it goes to the model.
+function gatewayAliasesAsk(k) {
+  const ed = el("div", "editor alias-ask");
+  const head = el("div", "ehead");
+  head.append(el("b", "", t("Model names")));
+  const rows = Object.entries(k.aliases || {});
+  let models = null;  // the models a row may pick, read when a row is first opened
+  const box = el("div", "headers aliases");
+  const bar = el("div", "bar");
+  const cancel = el("button", "text", t("Cancel"));
+  cancel.onclick = (e) => { e.stopPropagation(); closeConfirmAsk(); };
+  const go = el("button", "text primary", t("Save"));
+  // a row with a name and no model, or a model and no name, isn't one yet;
+  // a row with neither is left out
+  const half = () => rows.some(([n, m]) => !!n.trim() !== !!m);
+  const check = () => { go.disabled = half(); };
+  const pick = async (b, row) => {
+    if (b.classList.contains("open")) return closeProtoMenu();
+    if (!models) {
+      try { ({ models } = await api("caller-keys/models")); } catch (err) { status(t(err.message), "err"); return; }
+    }
+    if (!b.isConnected) return;
+    const opts = (models || []).map((m) => ({ v: m.id, find: m.id, name: m.name, note: m.id, literalName: true }));
+    if (row[1] && !opts.some((o) => o.v === row[1])) opts.push({ v: row[1], name: row[1], note: "Not served now", literalName: true });
+    openProtoMenu(b, opts, row[1], (v) => { row[1] = v; draw(rows.indexOf(row)); check(); }, "Pick a model", "sess-menu", "left", false, "Search models");
+  };
+  const draw = (at = -1) => {
+    box.replaceChildren();
+    rows.forEach((row, i) => {
+      const line = el("div", "pair");
+      const name = input(row[0], "gpt-4");
+      name.spellcheck = false;
+      name.setAttribute("aria-label", t("Model names"));
+      name.oninput = () => { row[0] = name.value; check(); };
+      name.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") closeConfirmAsk(); };
+      const b = el("button", "sess-pick alias-pick" + (row[1] ? " set" : ""));
+      b.type = "button";
+      b.setAttribute("aria-label", t("Pick a model"));
+      b.setAttribute("aria-haspopup", "menu");
+      b.setAttribute("aria-expanded", "false");
+      b.title = row[1];
+      b.replaceChildren(el("span", "", row[1] || t("Pick a model")), svg(CHEV, 11, 1.6));
+      b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); pick(b, row); };
+      const del = el("button", "text danger", "\u00d7");
+      del.type = "button";
+      del.title = t("Remove");
+      del.setAttribute("aria-label", t("Remove"));
+      del.onclick = (e) => { e.stopPropagation(); rows.splice(i, 1); draw(); check(); };
+      const side = el("div", "side");
+      side.append(del);
+      line.append(name, b, side);
+      box.append(line);
+    });
+    const add = el("button", "text", t("Add a name"));
+    add.type = "button";
+    add.onclick = (e) => { e.stopPropagation(); rows.push(["", ""]); draw(); check(); [...box.querySelectorAll(".pair input")].at(-1)?.focus({ preventScroll: true }); };
+    const adds = el("div", "hadds");
+    adds.append(add);
+    box.append(adds);
+    if (at >= 0) box.querySelectorAll(".pair")[at]?.querySelector(".alias-pick")?.focus({ preventScroll: true });
+  };
+  go.onclick = async (e) => {
+    e.stopPropagation();
+    if (go.disabled) return;
+    const aliases = {};
+    for (const [n, m] of rows) if (n.trim() && m) aliases[n.trim()] = m;
+    go.disabled = true;
+    const out = await gatewayKeyAction("aliases-key", { key: k.id, aliases });
+    if (!out) { check(); return; }
+    closeConfirmAsk();
+    status(t("Model names saved"), "ok");
+  };
+  bar.append(el("span", "grow"), cancel, go);
+  ed.append(head, box, bar);
+  if (!rows.length) rows.push(["", ""]);
+  draw();
+  confirmAsk = ed;
+  openModal(ed);
+  $("#modal").classList.add("lib");
+  box.querySelector("input")?.focus({ preventScroll: true });
 }
 
 function askGatewayKey(k, rotate) {
@@ -564,7 +650,7 @@ function gatewayModelsBadge(k) {
   b.setAttribute("aria-label", t("Models this key may use"));
   b.setAttribute("aria-haspopup", "menu");
   b.setAttribute("aria-expanded", "false");
-  const open = (models, accounts, groups) => {
+  const open = (models, accounts, groups, bare) => {
     if (!b.isConnected) return;
     const opts = [{ v: "", name: "All models", note: "Any model and any account, now and later" }];
     const seen = new Set();
@@ -626,9 +712,18 @@ function gatewayModelsBadge(k) {
       // asks it whatever the key may use, and the key may ask it itself
       // (/v1/systemone, another magpie's list) only when it is picked
       // (Kautism on Discord)
-      opts.push({ v: m.id, name: m.name, note: m.decides ? m.id + " · " + t("Decision model: a routing group asks it whatever this key may use; pick it so the key may ask it itself") : m.id, literalName: true });
+      opts.push({ v: m.id, find: m.id, name: m.name, note: m.decides ? m.id + " · " + t("Decision model: a routing group asks it whatever this key may use; pick it so the key may ask it itself") : m.id, literalName: true });
     }
     endBlock();
+    // a provider serving no model now can still be allowed whole, for the
+    // models it serves later, its accounts after it
+    for (const m of bare || []) {
+      if (seen.has(m.provider)) continue;
+      seen.add(m.provider);
+      opts.push({ v: m.provider + "/*", name: t("Every {provider} model", { provider: m.providerName }), note: m.provider + "/*", literalName: true });
+      for (const o of ofProvider.get(m.provider) || []) opts.push(o);
+      ofProvider.delete(m.provider);
+    }
     // a provider with accounts and no model in the list (one kept
     // unlisted, or serving none now) keeps its accounts after the models
     for (const os of ofProvider.values()) opts.push(...os);
@@ -638,7 +733,7 @@ function gatewayModelsBadge(k) {
     // what the CLI kept that the list hasn't, a pattern, a model gone or
     // an account signed out: behind every live entry, a model gone
     // before an account signed out
-    for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
+    for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: /^re:/i.test(v) ? "Pattern: models whose name it matches" : "Not served now", literalName: true });
     for (const v of as) if (!accountsSet.has(v)) { accountsSet.add(v); opts.push({ v, name: v, note: v.startsWith("@") ? "Account group removed" : "Not signed in now", literalName: true }); }
     openProtoMenu(b, opts, [...ms, ...as], (picked) => {
       // one action at a time: gatewayKeyAction is busy while one is sent.
@@ -658,22 +753,32 @@ function gatewayModelsBadge(k) {
           await gatewayKeyAction("accounts-key", { key: k.id, accounts: [...pickedAccounts, ...out] });
         }
       })();
-    }, "Models this key may use", "sess-menu", "right");
+    }, "Models this key may use", "sess-menu", "right", false, "Search models, or type re: and a pattern");
+    // "re:^gpt-" and Enter adds the pattern (a regular expression the
+    // gateway checks every model id against); the server refuses a bad one
+    const q = document.querySelector(".proto-menu .sc-q");
+    if (q) q.addEventListener("keydown", (e) => {
+      const v = q.value.trim();
+      if (e.key !== "Enter" || !/^re:./i.test(v)) return;
+      e.preventDefault(); e.stopPropagation();
+      closeProtoMenu();
+      if (!ms.includes(v)) gatewayKeyAction("models-key", { key: k.id, models: [...ms, v] });
+    }, true);
   };
   b.onclick = async (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
     const loading = keyModelsLoading = { id: k.id, open };
-    let models = [], accounts = [], groups = [];
-    try { ({ models, accounts, groups } = await api("caller-keys/models")); } catch (err) {
+    let models = [], accounts = [], groups = [], bare = [];
+    try { ({ models, accounts, groups, providers: bare } = await api("caller-keys/models")); } catch (err) {
       if (keyModelsLoading === loading) keyModelsLoading = null;
       status(t(err.message), "err");
       return;
     }
     if (keyModelsLoading !== loading) return;
     keyModelsLoading = null;
-    loading.open(models, accounts, groups);
+    loading.open(models, accounts, groups, bare);
   };
   if (keyModelsLoading?.id === k.id) keyModelsLoading.open = open;
   return b;
@@ -753,7 +858,7 @@ async function gatewayMCPPick(k, anchor) {
   }
   // what the CLI kept that the list hasn't: a server gone, or a tool it
   // no longer lists
-  for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
+  for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: /^re:/i.test(v) ? "Pattern: models whose name it matches" : "Not served now", literalName: true });
   openProtoMenu(anchor, opts, [...ms], (picked) => {
     // "No MCP server" just ticked is none; left ticked beside a server
     // ticked since, the server
@@ -859,6 +964,37 @@ function gatewayConcurrencyBadge(k) {
       if (v === -1) return other();
       if (v !== own) set(v);
     }, "Requests at once", "sess-menu");
+  };
+  return b;
+}
+
+// the service tier a key's requests go at (JackyFill on X): as they ask, or
+// standard, Fast or Ultrafast whatever they ask; a provider with no service
+// tiers is sent none
+const KEY_TIERS = [
+  { v: "", name: "As the request asks", note: "" },
+  { v: "default", name: "Standard", note: "" },
+  { v: "priority", name: "Fast", note: "priority" },
+  { v: "ultrafast", name: "Ultrafast", note: "ultrafast" },
+];
+function gatewayTierBadge(k) {
+  const own = k.serviceTier || "";
+  const cur = KEY_TIERS.find((o) => o.v === own) || KEY_TIERS[0];
+  const b = el("button", "amodels key-tier" + (own ? " set" : ""));
+  b.type = "button";
+  b.textContent = t(own ? cur.name : "Service tier");
+  b.title = t(own ? "This key's requests go at this service tier, whatever they ask" : "This key's requests keep the service tier they ask for");
+  b.setAttribute("aria-label", t("Service tier"));
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(b, KEY_TIERS, cur.v, async (v) => {
+      if (v === cur.v) return;
+      const out = await gatewayKeyAction("tier-key", { key: k.id, serviceTier: v });
+      if (out) status(t("{who}: service tier {tier}", { who: k.name, tier: t(KEY_TIERS.find((o) => o.v === v).name) }), "ok");
+    }, "Service tier", "sess-menu");
   };
   return b;
 }

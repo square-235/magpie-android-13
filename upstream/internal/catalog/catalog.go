@@ -85,6 +85,12 @@ type Model struct {
 	// provider after it (magpie_label): the name Provider in model names
 	// Off has here (ARNO on Discord).
 	Plain string `json:",omitempty"`
+	// By, on a model of another magpie's list, is the provider that
+	// magpie names as serving it (magpie_by): its own provider's name, or,
+	// for a model it has from a magpie further on, the one there, the
+	// first in the chain. Its Remote magpie's upstream names (Provider's
+	// UpstreamProviders) say it after the model (lcc580 on X).
+	By string `json:",omitempty"`
 	// Via, on a model of another magpie's list, is the magpies it passes
 	// through to its vendor, that one last (magpie_via.go)
 	Via []string `json:",omitempty"`
@@ -636,6 +642,7 @@ func load() map[string]mdProvider {
 func loadGen() (map[string]mdProvider, int) {
 	loadMu.Lock()
 	defer loadMu.Unlock()
+	loadUsed()
 	if !loaded {
 		loaded = true
 		func() {
@@ -2147,6 +2154,19 @@ func WrongEndpoint(status int, body []byte) bool {
 		}
 	}
 	return false
+}
+
+// NoChannel recognizes a relay (New API and its forks) answering 503 that no
+// channel serves the model in the caller's group: the relay holds the model on
+// some of its APIs and has no channel for it on the one asked, so another API
+// of the same relay may serve it (equinox0253 on X: gpt-6.1-sol asked on a
+// relay's Anthropic URL, where only its Claude models have a channel).
+func NoChannel(status int, body []byte) bool {
+	if status != 503 && status != 404 {
+		return false
+	}
+	msg := strings.ToLower(string(Words(body)))
+	return strings.Contains(msg, "no available channel") || strings.Contains(msg, "无可用渠道")
 }
 
 // Words is an error body as its words are matched: a JSON body that

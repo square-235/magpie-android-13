@@ -698,7 +698,7 @@ function routingPage(part) {
   // from its vendor does — relays list each key its own group's models
   // or the user set the account or key to serve other models only (#474)
   // or it is held at the usage cap the user set on the account
-  const unlistedWord = (w) => w.heldOwn ? t("another account is named for this model in {group}", { group: w.heldBy }) : w.heldBy ? t("not an account {group} may use", { group: w.heldBy }) : w.held ? t("not an account the gateway key may use") : w.noCredits ? t("held: its allowance used up, set not to spend credits") : w.capped ? t("held at its {cap}% usage cap", { cap: w.capped }) : w.barred ? t("set to serve other models, not {model}", { model: w.model }) : w.kind === "key" ? t("{name}'s list for this key has no {model}", { name: w.name, model: w.model }) : t("its plan doesn't list {model}", { model: w.model });
+  const unlistedWord = (w) => w.heldOwn ? t("another account is named for this model in {group}", { group: w.heldBy }) : w.heldBy ? t("not an account {group} may use", { group: w.heldBy }) : w.held ? t("not an account the gateway key may use") : w.noCredits ? t("held: its allowance used up, set not to spend credits") : w.capped ? t("held at its {cap}% usage cap", { cap: w.capped }) : w.standIn ? t("set never to be another model's fallback") : w.barred ? t("set to serve other models, not {model}", { model: w.model }) : w.kind === "key" ? t("{name}'s list for this key has no {model}", { name: w.name, model: w.model }) : t("its plan doesn't list {model}", { model: w.model });
   // noURLWord: its keys are all set to a protocol its provider has no URL
   // for, so it went out on the URLs it has (#1702)
   const noURLWord = (w) => t("key set to {api} only, no {api} URL · sent on the others", { api: API[w.noURL] || w.noURL });
@@ -1044,6 +1044,8 @@ function routingPage(part) {
     ? t("{who} is left out: a usage window is used up, and the account is set not to spend its credits, so it counts as used up until that window renews.", { who: who(x) })
     : x.capped
     ? t("{who} is left out: a usage window is at {n}, past the {cap}% cap set on the account, so it counts as used up until that window renews.", { who: who(x), n: pct(x.used), cap: x.capped })
+    : x.standIn
+    ? t("{who} is left out: it is set never to be a fallback for another model.", { who: who(x) })
     : x.barred
     ? t("{who} is left out: it is set to serve other models, not {model}.", { who: who(x), model: x.model })
     : x.kind === "key"
@@ -1145,6 +1147,7 @@ function routingPage(part) {
         : t("{who} answered this conversation last, but the provider goes in order and {first}, ahead of it, is ready again, so turn {n} goes back to {first}.", { who: last, first: who(r.order[0]), n: a.turn });
       case "main": return t("{who}, a fallback, answered this conversation last, but the provider's own {first} is ready again, so turn {n} goes back to it.", { who: last, first: who(r.order[0]), n: a.turn });
       case "back": return t("{who} took this conversation while {first}, listed ahead of it in the group, couldn't; {first} is ready again, so turn {n} goes back to it.", { who: last, first: who(r.order[0]), n: a.turn });
+      case "hours": return t("{who} answered this conversation last, by rule {rule}, but the rule's hours are over, so turn {n} goes where the group routes it.", { who: last, rule: r.rule?.ended, n: a.turn });
       case "no-cache": return t("{who} answered this conversation last, but the vendor then read only {r} tokens of it from its cache and wrote {w} — not worth staying for.", { who: last, r: tokens(a.cacheRead || 0), w: tokens(a.cacheWrite || 0) });
       case "cold": return t("{who} answered this conversation {d} ago, longer than the 5 minutes a vendor keeps a prompt cached — so routing decides afresh.", { who: last, d: ago });
       case "off": return t("Affinity is off: each request is routed afresh, whoever answered its conversation before.");
@@ -1371,10 +1374,14 @@ function routingPage(part) {
     }
     return -new Date().getTimezoneOffset() === server ? "" : t("server time, {offset}", { offset: utcText(server) });
   }
-  // "9:5" is no time; "9:05" is 09:05
+  // "9:5" is no time; "9:05" is 09:05. What a phone's number pad or a
+  // Chinese keyboard types counts too (MinglunZhu on X): "22", "2200",
+  // "930", "22：00", "22.00", "22点", "22点30".
   const clockOf = (s) => {
-    const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(s || "");
-    return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, "0") + ":" + m[2] : "";
+    const v = String(s || "").replace(/[\uff10-\uff19]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).trim();
+    const m = /^(\d{1,2})(?:[:：.．h時时点點]\s*(\d{2})?分?)?$/i.exec(v) || /^(\d{1,2})(\d{2})$/.exec(v);
+    const h = m?.[1], mm = m?.[2] ?? "00";
+    return m && +h < 24 && +mm < 60 ? h.padStart(2, "0") + ":" + mm : "";
   };
 
   // how the reasoning a try was sent at came to be
@@ -6195,7 +6202,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, note: g.note || "", members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], where: (r.where || []).map((c) => ({ ...c })), time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, note: g.note || "", members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], redact: g.redact || "", routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], where: (r.where || []).map((c) => ({ ...c })), time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -6977,7 +6984,7 @@ function routingPage(part) {
       if (s && !s.isCollapsed && row.contains(s.focusNode) && String(s) !== selAtDown) return;
       open();
     };
-    row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(ics, g); };
+    row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(ics, g, { x: e.clientX, y: e.clientY }); };
     row.append(ics, main, tags, edit);
     // a group of the user's switches off as a whole, kept as it is (PAMI
     // on Discord); one magpie found is removed rather (provider.SwitchGroup)
@@ -7069,7 +7076,7 @@ function routingPage(part) {
     };
     return b;
   }
-  function groupMenu(anchor, g) {
+  function groupMenu(anchor, g, at) {
     const again = agentMenu?.anchor === anchor;
     closeAgentMenu();
     if (again) return;
@@ -7084,7 +7091,7 @@ function routingPage(part) {
       // the group as text for someone else's magpie (laincatx on X)
       { name: "Copy to share", icon: OUT, tip: t("{name} as text to paste into another magpie: its models, routing and rules, no key", { name: g.name }),
         run: () => shareGroup(g) },
-    ]);
+    ], at);
   }
   // nextTo: where a group moved one up (-1) or down goes, among them all:
   // the place of the card listed next to it, so a filtered list moves it
@@ -7688,6 +7695,27 @@ function routingPage(part) {
     };
     drawKeys();
 
+    // masking (1dwsdqwd2 on X): the group follows each member's provider
+    // ("Send requests unmasked") and Settings, or is masked as Settings say
+    // whichever provider it has, or is sent as written (Group.Redact)
+    const redactLabel = el("label", "rt-gredact", t("Masking")), redactBox = el("div", "rt-gredact");
+    ed.append(redactLabel, redactBox);
+    const REDACT = { "": "Follow providers", on: "Always masked", off: "Sent as written" };
+    const drawRedact = () => {
+      const b = el("button", "rt-cond rt-gredact-b" + (d.redact ? " on" : ""));
+      b.type = "button";
+      b.append(el("span", "", t(REDACT[d.redact] || REDACT[""])));
+      b.setAttribute("aria-label", `${t("Masking")}: ${b.textContent}`);
+      b.onclick = (ev) => pickFrom("masking", b, ev, Object.entries(REDACT).map(([value, label]) => ({ value, label: t(label), note: d.redact === value ? "✓" : "" })), (v) => {
+        d.redact = v === "on" || v === "off" ? v : "";
+        drawRedact();
+      }, d.redact);
+      const row = el("div", "rt-pickrow");
+      row.append(b, infoTip(t("Whether requests through this group are masked. Follow providers: each model's own setting, Send requests unmasked, decides. Always masked: as Settings say, even to a provider set to go unmasked. Sent as written: not masked, to every model in it. Masking turned off in Settings masks nothing.")));
+      redactBox.replaceChildren(row);
+    };
+    drawRedact();
+
     // patterns: models found by their ids, now and as providers list new
     // ones (#766): after the models named, in the catalog's order, until
     // the user puts them in another; then each keeps its place, one gone
@@ -7948,6 +7976,9 @@ function routingPage(part) {
     // a condition taken off is the value saved for none, as before
     const condNone = { intent: "", tokens: 0, images: false, effort: "", compact: false, agents: [], folders: [], exceptFolders: [], time: null };
     const addCond = (r, k) => {
+      // a new rule's intent box left empty gives way to the condition
+      // picked instead (MinglunZhu on X: hours took an × and a +)
+      if (k !== "intent" && !r.intent?.trim()) openedOf(r).delete("intent");
       openedOf(r).add(k);
       if (k === "images" || k === "compact") r[k] = true;
       if (k === "subagent") setWhere(r, "subagent", { op: "is" });
@@ -8746,7 +8777,7 @@ function routingPage(part) {
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), note: (d.note || "").trim(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), note: (d.note || "").trim(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, redact: d.redact || "follow", unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing

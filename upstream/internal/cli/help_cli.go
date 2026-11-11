@@ -47,6 +47,9 @@ func helpFor(args []string) string {
 		}
 		return groupUsage
 	case "library", "lib":
+		if len(args) > 1 && (args[1] == "project" || args[1] == "projects") {
+			return "  " + libraryProjectUsage
+		}
 		return "  " + libraryUsage
 	case "plugin", "plugins":
 		return pluginUsage
@@ -54,8 +57,12 @@ func helpFor(args []string) string {
 		return quotaUsage
 	case "statusline":
 		return statuslineUsage
+	case "status":
+		return statusUsage
 	case "mtls":
 		return mtlsUsage
+	case "https":
+		return httpsUsage
 	case "heap":
 		return heapUsage
 	case "cpu":
@@ -133,8 +140,9 @@ func agentHelp(a *agent.Agent) string {
 	fmt.Fprintf(&b, "  magpie %s <field> <value>  set another field\n", id)
 	fmt.Fprintf(&b, "  magpie %s default          take magpie out: back on what it had before\n", id)
 	fmt.Fprintf(&b, "  magpie %s <field> default  that field back to its own default\n", id)
-	if a.ID == "agy" {
-		fmt.Fprintf(&b, "  magpie %s run [args…]      start agy, on magpie while its model is magpie's (what your shell's agy runs)\n", id)
+	if a.Start != nil {
+		bin := a.Start().Bin
+		fmt.Fprintf(&b, "  magpie %s run [args…]      start %s, on magpie while its model is magpie's (what your shell's %s runs)\n", id, bin, bin)
 		fmt.Fprintf(&b, "  magpie %s env              the variables and model it is started with\n", id)
 	}
 	if a.ID == "claude" {

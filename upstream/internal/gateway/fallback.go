@@ -95,12 +95,19 @@ type candidate struct {
 	// what a member listed after it stands in for (standsInFor)
 	member string
 	place  int
+	// redact is what the groups the member is in say of masking
+	// (Member.Masking): "" for one that is in none, or none says
+	redact string
 	// reserve is set, to the provider's AtOnce, on an account or key held
 	// back past the first that many (keepAtOnce): tried after them, never
 	// given a request for want of a slot (laneMate) nor kept on by a
 	// conversation (affine)
 	reserve int
 }
+
+// unmasked says a request to the try goes as written: its groups say so,
+// or none says otherwise and its provider is set to (provider.UnmaskedBy).
+func (c candidate) unmasked() bool { return provider.UnmaskedBy(c.redact, c.p) }
 
 // capHold is how an account is held at its usage cap: the cap of the
 // fullest window at or past its own cap, that window's share used, and when the last such window
@@ -144,6 +151,18 @@ func spendHeld(p provider.Provider, k provider.KeyAccount, now time.Time) *capHo
 		return nil
 	}
 	return &capHold{cap: 100, used: 100 * spent / sc.USD, back: reset, spend: &spendHold{usd: sc.USD, spent: spent, period: sc.Period, since: start}}
+}
+
+// keyCapHeld is how the key k of p is held at the usage cap set on it (the
+// share of its own windows, provider/account_caps.go) for model at now, nil
+// when nothing holds it. A key whose windows aren't known (not read yet, or
+// the read failed) is not held: unknown is not spent.
+func keyCapHeld(p provider.Provider, k provider.KeyAccount, model string, now time.Time) *capHold {
+	h := p.KeyCapHeld(k, model, now, keyAllowance)
+	if h == nil {
+		return nil
+	}
+	return &capHold{cap: h.Cap, used: h.Used, back: h.Back, amount: h.Amount, count: h.Count, unit: h.Unit}
 }
 
 // label names a candidate in a call's record: the provider, and the key
@@ -415,6 +434,9 @@ func perKeyEvery(p provider.Provider, model string, from provider.Protocol) (out
 	spends := map[int]*capHold{}
 	on, unlisted, off, noURL := p.KeysFor(model, func(k provider.KeyOn) bool {
 		h := spendHeld(p, k.KeyAccount, now)
+		if h == nil {
+			h = keyCapHeld(p, k.KeyAccount, model, now)
+		}
 		if h != nil {
 			spends[k.Rank] = h
 		}
@@ -537,6 +559,9 @@ func (s *Server) planPaused(p provider.Provider, model string, from provider.Pro
 		pl.order = append(pl.order, asideOf(aside, q, fallback, from)...)
 		cs = append(cs, aside...)
 		for _, c := range left {
+			if fallback && q.NoStandIn && !p.NoStandIn {
+				continue // no last resort for another's request either
+			}
 			w := weighed(c, q, weighing{}, fallback, from)
 			w.Unlisted = true
 			pl.left = append(pl.left, w)
@@ -579,7 +604,35 @@ func (s *Server) planPaused(p provider.Provider, model string, from provider.Pro
 		seen[fp.ID+"/"+fm] = true
 		out = append(out, add(fp, fm, true)...)
 	}
+	out, pl.order, pl.left, _ = standInsOut(out, pl.order, pl.left, !p.NoStandIn)
 	return restLast(out, pl)
+}
+
+// standInsOut leaves out, of cs in the order planned (before a failure
+// rests one or a rate limit sinks it, so a local model that is down still
+// counts as first), each key or account of a provider set never to take
+// another model's request (provider.NoStandIn) that comes after one of a
+// provider not so set, and says so on left (sonnnnnnnnnnnna on X: a local
+// uncensored model that fails must not hand its request to a vendor that
+// bans for it). other is true when the request went first to a provider
+// not so set, which may have nothing planned (its model off, its accounts
+// at their caps), and comes back true once one such was seen. order is
+// cs's rows, as restLast takes them.
+func standInsOut(cs []candidate, order, left []Weighed, other bool) ([]candidate, []Weighed, []Weighed, bool) {
+	keep := cs[:0:0]
+	kept := order[:0:0]
+	for i, c := range cs {
+		if !c.p.NoStandIn {
+			other = true
+		} else if other {
+			w := order[i]
+			w.StandIn, w.Unlisted = true, true
+			left = append(left, w)
+			continue
+		}
+		keep, kept = append(keep, c), append(kept, order[i])
+	}
+	return keep, append(kept, order[len(cs):]...), left, other
 }
 
 // groupsAfter is p with the routing groups the user built that have p's
@@ -647,6 +700,11 @@ func (s *Server) planGroup(g provider.Group, ms []provider.Member, from provider
 	var asides []candidate
 	var wAsides []Weighed
 	out := planLevel(g, ms, 0, from, &pl, &asides, &wAsides, nil)
+	// a member never another's stand-in goes only where the group's
+	// first, or those before it, are so set too
+	var other bool
+	out, pl.order, pl.left, other = standInsOut(out, pl.order, pl.left, false)
+	asides, wAsides, pl.left, _ = standInsOut(asides, wAsides, pl.left, other)
 	if sinks(g.Sinks(), g.Routing) {
 		out, pl.order = sinkPlanned(out, pl.order)
 	}
@@ -730,6 +788,7 @@ func planLevel(g provider.Group, ms []provider.Member, depth int, from provider.
 			for i := range l {
 				l[i].effort, l[i].levels, l[i].effortMap, l[i].fast = m.Effort, m.Levels, m.EffortMap, m.Fast
 				l[i].firstToken = innerFirstToken(m)
+				l[i].redact = m.Masking()
 				l[i].patience = innerPatience(m)
 				if len(m.Path) > 0 {
 					l[i].member = m.Path[0]
@@ -2195,7 +2254,7 @@ func windowIn(served func() []provider.Entry, p provider.Provider, model string)
 			return e.Context
 		}
 	}
-	return p.ContextOf(model)
+	return settings.Shared().CappedOwn(p.ContextOf(model))
 }
 
 const (
