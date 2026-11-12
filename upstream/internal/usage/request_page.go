@@ -67,6 +67,9 @@ type RequestPage struct {
 	// Heat is the rows by day, as the chart's filter keeps them: only for
 	// the heatmap's own period (HeatmapOf)
 	Heat *Heatmap
+	// Big is the request that wrote the most to the cache, of the rows the
+	// filter keeps
+	Big BigWrite
 }
 
 type packedRow struct {
@@ -1262,7 +1265,7 @@ func readRequestBlocks(idx *requestIndex, st requestState, p Period, now, settle
 	makeChunk := func() func(sessions.CallSource) *rowChunk {
 		priceRow := pricers()
 		build := func(s sessions.CallSource) *rowChunk {
-			cs := readSource(s)
+			cs := ownCalls(readSource(s))
 			c := &rowChunk{Source: s, Rows: make([]packedRow, 0, len(cs))}
 			for _, call := range cs {
 				r := logRecord(call)
@@ -2354,7 +2357,7 @@ func sharesOf(m map[string]*Share) []Share {
 	return out
 }
 func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, chunks []*rowChunk) RequestPage {
-	return buildRequestBlocks(p, f, offset, limit, Clock(), []*rowChunk{gateway}, chunks, nil, nil)
+	return buildRequestBlocks(p, f, offset, limit, localNow(), []*rowChunk{gateway}, chunks, nil, nil)
 }
 
 // Shared days are never matched to this computer's gateway or session calls.
@@ -2573,6 +2576,7 @@ func buildRequestBlocksIn(p Period, f Filter, offset, limit int, now time.Time, 
 	}
 	for _, part := range parts {
 		speeds.merge(part.speeds)
+		out.Big.merge(part.big)
 		if !part.first.IsZero() && (first.IsZero() || part.first.Before(first)) {
 			first = part.first
 		}
@@ -2761,7 +2765,7 @@ func buildRequestBlocksIn(p Period, f Filter, offset, limit int, now time.Time, 
 	return out
 }
 func pageFromLedger(p Period, f Filter, offset, limit int, all Ledgered) RequestPage {
-	return pageFromLedgerAt(p, f, offset, limit, all, Clock())
+	return pageFromLedgerAt(p, f, offset, limit, all, localNow())
 }
 
 // pageFromLedgerAt is the page of a ledger read at now, its chart over the
@@ -2810,6 +2814,7 @@ func pageFromLedgerAt(p Period, f Filter, offset, limit int, all Ledgered, now t
 	for _, r := range l.Rows {
 		if !r.IsRejected() && !r.IsProbe() {
 			speeds.add(&r)
+			out.Big.add(&r)
 		}
 	}
 	out.Speeds = speeds.result()

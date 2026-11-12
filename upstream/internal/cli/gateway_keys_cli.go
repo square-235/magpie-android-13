@@ -58,6 +58,10 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 		access.MigrateLegacyLANKeyBestEffort()
 		return gatewayKeyTier(out, args[1:])
 	}
+	if action == "redact" || action == "masking" {
+		access.MigrateLegacyLANKeyBestEffort()
+		return gatewayKeyRedact(out, args[1:])
+	}
 	if action == "mcp" {
 		access.MigrateLegacyLANKeyBestEffort()
 		return gatewayKeyMCP(out, args[1:])
@@ -65,6 +69,10 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 	if action == "access" {
 		access.MigrateLegacyLANKeyBestEffort()
 		return gatewayKeyAccess(out, args[1:])
+	}
+	if action == "admin" {
+		access.MigrateLegacyLANKeyBestEffort()
+		return gatewayKeyAdmin(out, args[1:])
 	}
 	if action == "move" {
 		access.MigrateLegacyLANKeyBestEffort()
@@ -111,7 +119,7 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 		args = args[:2]
 	}
 	if (action == "list" && len(args) != 1) || (action != "list" && len(args) != 2) {
-		return fmt.Errorf("usage: magpie gateway-key list | add <name> [--key <value> | --key -] [--read-only] | rotate <id> [--key <value> | --key -] | remove <id> | limit <id> [list | off | reset [<n>] | remove <n> | [add] day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads] [--model <provider>/<model>|<provider>/* ...]] | models <id> [all | <provider>/<model>|<provider>/*|re:<regexp> ...] | aliases <id> [none | <name>=<provider>/<model> ...] | accounts <id> [all | <provider>/<account>|<provider>/<key id> ...] | quotas <id> [on | off] | concurrency <id> [<n> | off] | tier <id> [follow | standard | fast | ultrafast] | mcp <id> [all | none | <server>|<server>/<tool> ...] | access <id> [read-only | full] | move <id> <place> | issue --ttl <duration> [--name <name>] [--models a,b] [--accounts a,b] [--tokens N] [--cost USD] [--read-only] [--from <id>] | issuer <id> [on | off] | oidc [list | add --key <id> --repo owner/name … | remove <rule id>]")
+		return fmt.Errorf("usage: magpie gateway-key list | add <name> [--key <value> | --key -] [--read-only] | rotate <id> [--key <value> | --key -] | remove <id> | limit <id> [list | off | reset [<n>] | remove <n> | [add] day|week|month|total|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads] [--model <provider>/<model>|<provider>/* ...]] | models <id> [all | <provider>/<model>|<provider>/*|re:<regexp> ...] | aliases <id> [none | <name>=<provider>/<model> ...] | accounts <id> [all | <provider>/<account>|<provider>/<key id> ...] | quotas <id> [on | off] | concurrency <id> [<n> | off] | tier <id> [follow | standard | fast | ultrafast] | redact <id> [follow | on | off] | mcp <id> [all | none | <server>|<server>/<tool> ...] | access <id> [read-only | full] | move <id> <place> | issue --ttl <duration> [--name <name>] [--models a,b] [--accounts a,b] [--tokens N] [--cost USD] [--read-only] [--from <id>] | issuer <id> [on | off] | oidc [list | add --key <id> --repo owner/name … | remove <rule id>]")
 	}
 	switch action {
 	case "list", "add", "rotate", "remove":
@@ -187,7 +195,7 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 //
 //	magpie gateway-key limit <id> [list]                what it has used of each limit
 //	magpie gateway-key limit <id> off                   no limit
-//	magpie gateway-key limit <id> day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads]
+//	magpie gateway-key limit <id> day|week|month|total|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads]
 //	                                                    its only limit, or the one of several with that window
 //	magpie gateway-key limit <id> add <window> [--tokens N] [--cost USD] [--cache-reads] [--model openai/*]
 //	                                                    one more limit; a request passes only while every one has something left
@@ -199,7 +207,7 @@ func gatewayKeysTo(out io.Writer, args []string) error {
 // one model or provider under one key, the key's other models served once
 // it is spent.
 func gatewayKeyLimit(out io.Writer, args []string) error {
-	usage := fmt.Errorf("usage: magpie gateway-key limit <id> [off | reset [<n>] | remove <n> | [add] day|week|month|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads] [--model <provider>/<model>|<provider>/* ...]]")
+	usage := fmt.Errorf("usage: magpie gateway-key limit <id> [off | reset [<n>] | remove <n> | [add] day|week|month|total|<N>d|<N>h [--tokens N] [--cost USD] [--cache-reads] [--model <provider>/<model>|<provider>/* ...]]")
 	if len(args) == 0 {
 		return usage
 	}
@@ -342,9 +350,13 @@ func gatewayKeyLimit(out io.Writer, args []string) error {
 		}
 		state := "open"
 		if st.Spent {
-			state = "spent: requests are refused until " + st.Reset.Format("2006-01-02 15:04")
+			until := st.Reset.Format("2006-01-02 15:04")
+			if st.Period == "total" {
+				until = "the limit is reset or raised"
+			}
+			state = "spent: requests are refused until " + until
 			if len(st.Models) > 0 {
-				state = "spent: requests for these models are refused until " + st.Reset.Format("2006-01-02 15:04")
+				state = "spent: requests for these models are refused until " + until
 			}
 		}
 		fmt.Fprintf(w, "State\t%s\n", state)
@@ -364,6 +376,9 @@ func perPhrase(l *access.Limit) string {
 	case "hours":
 		return fmt.Sprintf("every %d hours", l.Hours)
 	}
+	if l.Period == "total" {
+		return "in total"
+	}
 	return "per " + l.Period
 }
 
@@ -380,7 +395,7 @@ func onModels(l *access.Limit) string {
 // --cost and --cache-reads.
 func parseKeyLimit(window string, rest []string, usage error) (*access.Limit, error) {
 	lim := &access.Limit{Period: window}
-	if window == "day" || window == "week" || window == "month" {
+	if window == "day" || window == "week" || window == "month" || window == "total" {
 		// a period by its name: month ends in an h, and is no count of hours
 	} else if n, ok := strings.CutSuffix(window, "d"); ok {
 		days, err := strconv.Atoi(n)
@@ -396,7 +411,7 @@ func parseKeyLimit(window string, rest []string, usage error) (*access.Limit, er
 		}
 		lim = &access.Limit{Period: "hours", Hours: hours}
 	} else if !slices.Contains(access.Periods, lim.Period) || lim.Period == "days" || lim.Period == "hours" {
-		return nil, fmt.Errorf("a limit's period is day, week, month, <N>d (every N days) or <N>h (every N hours), not %q", lim.Period)
+		return nil, fmt.Errorf("a limit's period is day, week, month, total, <N>d (every N days) or <N>h (every N hours), not %q", lim.Period)
 	}
 	for i := 0; i < len(rest); i++ {
 		flag, val, has := strings.Cut(rest[i], "=")
@@ -851,6 +866,35 @@ func gatewayKeyTier(out io.Writer, args []string) error {
 	return err
 }
 
+// gatewayKeyRedact shows or sets whether Settings › Privacy's masking
+// applies to a key's requests (access.Key.Redact, y0ngb1n on X):
+//
+//	magpie gateway-key redact <id>                      its setting
+//	magpie gateway-key redact <id> follow|on|off        set it
+func gatewayKeyRedact(out io.Writer, args []string) error {
+	if len(args) == 0 || len(args) > 2 {
+		return fmt.Errorf("usage: magpie gateway-key redact <id> [follow | on | off]")
+	}
+	id := args[0]
+	if len(args) == 2 {
+		if _, err := access.Update("redact-key", access.Change{Key: id, Redact: args[1]}); err != nil {
+			return err
+		}
+	}
+	keys, err := access.List()
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(keys, func(k access.Key) bool { return k.ID == id })
+	if i < 0 {
+		return fmt.Errorf("Key not found")
+	}
+	k := keys[i]
+	word := map[string]string{"": "follows Settings › Privacy", access.RedactOn: "on", access.RedactOff: "off"}[k.Redact]
+	_, err = fmt.Fprintf(out, "%s: masking %s\n", k.Name, word)
+	return err
+}
+
 // accessWord is a key's access as the list says it: "browser" (Magpie
 // Browser's, access.Key.Browser), "read-only" or "full".
 func accessWord(k access.Key) string {
@@ -897,6 +941,47 @@ func gatewayKeyAccess(out io.Writer, args []string) error {
 		_, err = fmt.Fprintf(out, "%s: read-only, it reads quotas and usage and uses no model, MCP server or write\n", k.Name)
 	} else {
 		_, err = fmt.Fprintf(out, "%s: full access, models and stats as its other limits let it\n", k.Name)
+	}
+	return err
+}
+
+// gatewayKeyAdmin shows or sets whether a key may call the management API
+// (/v1/magpie/admin/), which adds, changes and removes providers, accounts
+// and gateway keys:
+//
+//	magpie gateway-key admin <id> [off | local | any]
+//
+// Only here and in the app: the API itself never sets it.
+func gatewayKeyAdmin(out io.Writer, args []string) error {
+	usage := fmt.Errorf("usage: magpie gateway-key admin <id> [off | local | any]")
+	if len(args) == 0 || len(args) > 2 {
+		return usage
+	}
+	id := args[0]
+	if len(args) == 2 {
+		if _, err := access.CleanAdmin(args[1]); err != nil {
+			return usage
+		}
+		if _, err := access.Update("admin-key", access.Change{Key: id, Admin: args[1]}); err != nil {
+			return err
+		}
+	}
+	keys, err := access.List()
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(keys, func(k access.Key) bool { return k.ID == id })
+	if i < 0 {
+		return fmt.Errorf("Key not found")
+	}
+	k := keys[i]
+	switch k.Admin {
+	case access.AdminLocal:
+		_, err = fmt.Fprintf(out, "%s: may manage magpie (/v1/magpie/admin/) from this computer\n", k.Name)
+	case access.AdminAny:
+		_, err = fmt.Fprintf(out, "%s: may manage magpie (/v1/magpie/admin/) from this computer and, while magpie is shared, from other machines\n", k.Name)
+	default:
+		_, err = fmt.Fprintf(out, "%s: may not manage magpie\n", k.Name)
 	}
 	return err
 }

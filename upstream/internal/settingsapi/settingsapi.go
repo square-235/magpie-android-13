@@ -31,11 +31,11 @@ var Keys = []string{
 	"theme", "colorblind", "reduceMotion", "noBird", "lang", "uiFont", "codeFont",
 	// the tray, the Dock and this computer
 	"tray", "dock", "dockWindow", "dockNever", "lightweight", "keepAwake", "keepAwakeDisplay",
-	"noWSLAgents", "sessionTerminal", "signInLinkOnly", "quitNoAsk",
+	"noWSLAgents", "sessionTerminal", "signInLinkOnly", "quitNoAsk", "restoreOnQuit",
 	// the menu bar's allowance cards
 	"trayUsages", "trayUsage", "trayUsageEvery", "trayNoLogos", "trayNoBird", "trayNoNumber", "trayPace", "trayNoCost", "trayWindows",
 	// usage and alerts
-	"currency", "chineseUnits", "usageAlert", "balanceAlert", "resetReminder", "turnDoneAlert", "maskAlert",
+	"currency", "chineseUnits", "dayStart", "usageAlert", "balanceAlert", "resetReminder", "turnDoneAlert", "maskAlert",
 	// network
 	"proxy", "pluginProxy", "updateProxy",
 	// privacy
@@ -66,6 +66,7 @@ var Choices = map[string][]string{
 	"codexWarmup":    {"off", "week", "all"},
 	"claudeWarmup":   {"off", "week", "all"},
 	"trayUsageEvery": ints(settings.TrayEvery),
+	"dayStart":       {"0", "1", "2", "3", "4", "5", "6"},
 	"updateChannel":  {settings.UpdateStable},
 	"updateEvery":    ints(settings.UpdateEveries),
 	"searchFirst":    {settings.SearchFirstModel, settings.SearchFirstAPI},
@@ -241,6 +242,10 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	if _, sent := fields["quitNoAsk"]; !sent {
 		in.QuitNoAsk = cur.QuitNoAsk
 	}
+	// nor whether a quit puts the agents back as they were
+	if _, sent := fields["restoreOnQuit"]; !sent {
+		in.RestoreOnQuit = cur.RestoreOnQuit
+	}
 	// nor what a reply's model name says, which they sent as memberModel:
 	// a change of it is that, and else the name stays as it is (vendor
 	// too, which they can't show). memberModel itself is only ever
@@ -319,10 +324,11 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.RequestArchiveLocal, in.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
 	// used or left is the Usage page's toggle as much as Settings', set on its own
 	in.QuotaLeft = cur.QuotaLeft
-	in.QuotaReads = cur.QuotaReads   // set on its own (quota-reads)
-	in.SearchAll = cur.SearchAll     // set on its own (search-all)
-	in.SearchCount = cur.SearchCount // and so is this (search-count)
-	in.UsageOrder = cur.UsageOrder   // the Usage page's, dragged there
+	in.QuotaReads = cur.QuotaReads           // set on its own (quota-reads)
+	in.SearchAll = cur.SearchAll             // set on its own (search-all)
+	in.SearchCount = cur.SearchCount         // and so is this (search-count)
+	in.UsageOrder = cur.UsageOrder           // the Usage page's, dragged there
+	in.PluginPageOrder = cur.PluginPageOrder // the sidebar plugin pages, dragged there
 	// and what the tray panel's Allowances tab leaves out, set there
 	in.PanelUsageHidden = cur.PanelUsageHidden
 	// and the clients the Usage page's Agents list leaves out, set there
@@ -364,9 +370,12 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	// in their Agents rows
 	in.CodexSubagentModel = cur.CodexSubagentModel
 	in.DesktopSubagentModel = cur.DesktopSubagentModel
+	in.DesktopGateway = cur.DesktopGateway     // Desktop's address, set in its row
 	in.CodexServiceTier = cur.CodexServiceTier // codex-service-tier
 	// and the model DeepSeek Harness compacts on, set in its row
 	in.DshCompactModel = cur.DshCompactModel
+	// and the model Codex compacts on, set in its row
+	in.CodexCompactModel = cur.CodexCompactModel
 	// and the model for requests masking would change (redact-route)
 	in.RedactRouteTo = cur.RedactRouteTo
 	in.DesktopSubagentEffort = cur.DesktopSubagentEffort

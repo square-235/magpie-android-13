@@ -840,6 +840,8 @@ function routingPage(part) {
   function noneWhy(r) {
     if (!r.done) return r.phase === "redact"
       ? t("magpie is masking this request before routing it (Settings › Privacy), so who takes it isn't picked yet.")
+      : r.phase === "queue"
+      ? t("This request waits for the turn before it on an account near its usage cap, so it goes out when that one is done.")
       : t("magpie hasn't routed this request yet, so who takes it isn't picked yet.");
     if (r.error) return t("Nothing took this request: {error}", { error: r.error });
     return t("Nothing could take {model}.", { model: r.model });
@@ -1357,7 +1359,7 @@ function routingPage(part) {
   // this browser doesn't know it
   function zoneOffset(zone, at = new Date()) {
     try {
-      const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: zone, ...hourClock(), year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
         .formatToParts(at).map((x) => [x.type, x.value]));
       return Math.round((Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - Math.floor(at.getTime() / 1000) * 1000) / 60000);
     } catch { return null; }
@@ -1446,6 +1448,22 @@ function routingPage(part) {
       add("vendor", "Streaming", (tr.ms || 0) - tr.ttft);
     } else add("vendor", "Reading the reply", (tr.ms || 0) - head);
     return out;
+  }
+  // why a run was claude -p, by gateway.claudePrint's code
+  const ENTRY_WHY = {
+    off: "the interactive mode is turned off",
+    os: "this system can't run the interactive mode",
+    "no-shim": "this system can't run the interactive mode",
+    missing: "Claude Code isn't installed on this computer",
+    image: "the request has an image known by its URL, which only claude -p takes",
+    "third-party": "the interactive mode was turned away over this agent's system prompt",
+    "cache-marks": "the client's cache marks keep history that a fresh interactive run would write again",
+  };
+  // entryNote: what a try's entry point chip says (Try.Entry)
+  function entryNote(tr) {
+    if (tr.entry === "tui") return t("Claude Code ran this request in its interactive mode (TUI)");
+    const why = ENTRY_WHY[tr.entryWhy];
+    return t("Claude Code ran this request as claude -p") + (why ? ": " + t(why) : "");
   }
   const WHO = { magpie: "magpie {ms}", net: "network {ms}", vendor: "vendor {ms}" };
   // why a try that went out some other way has no split (gateway.sentBy)
@@ -3006,7 +3024,7 @@ function routingPage(part) {
           : b === "sooner" && soon ? quota(w, "{n} used · renews in {d} · one renewing sooner goes first", "{n} left · renews in {d} · one renewing sooner goes first", { d: dur(soon - n) })
           : b === "expires" && soon ? quota(w, "{n} used · renews in {d} · one whose credits expire sooner goes first", "{n} left · renews in {d} · one whose credits expire sooner goes first", { d: dur(soon - n) })
           : soon ? quota(w, "{n} used · renews in {d}", "{n} left · renews in {d}", { d: dur(soon - n) }) : quota(w, "{n} used", "{n} left");
-      } else if (w.kind === "account") s = t("what's left not known yet");
+      } else if (w.kind === "account") s = (!day && winsOf(w)[0]) || t("what's left not known yet");
       else if (w.routing === "usage") s = t("{n} tokens lately", { n: tokens(w.tokens || 0) });
       else if (w.aside) s = t("{api} only · after the others", { api: API[w.speaks] || w.speaks || t("any API") });
       else if (w.speaks) s = t("{api} only", { api: API[w.speaks] || w.speaks });
@@ -3815,7 +3833,7 @@ function routingPage(part) {
   // (Settings → Privacy, the gateway's "redact" phase), or being routed
   // (fremontdango on Discord: a long request read as routing while it
   // was masked)
-  const waitWord = (r) => t(r.phase === "redact" ? "masking…" : "routing…");
+  const waitWord = (r) => t(r.phase === "redact" ? "masking…" : r.phase === "queue" ? "queued…" : "routing…");
 
   // who answered a request, or what its agent got
   function outcome(r) {
@@ -4274,7 +4292,7 @@ function routingPage(part) {
     // all the row says, and its titles
     const title = reqTitle(r, how, tr);
     const sig = JSON.stringify([lang, said, how, title, r.time, r.agent, name, ag?.icon, r.model, r.provider, tagKind(r), r.effort,
-      tr?.effort, tr?.picked, tr?.fixed, tr?.fast, tr?.swapped && tr.done && tryOk(tr) ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tryOk(tr) ? tr.served : 0, tr?.done && tryOk(tr) ? tr.upstream : 0, meta, metrics, cost]);
+      tr?.effort, tr?.picked, tr?.fixed, tr?.fast, tr?.entry, tr?.entryWhy, tr?.swapped && tr.done && tryOk(tr) ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tryOk(tr) ? tr.served : 0, tr?.done && tryOk(tr) ? tr.upstream : 0, meta, metrics, cost]);
     s = { lang, shows, name, icon, cost, said, how, tr, ag, meta, metrics, title, sig };
     rowSaid.set(r, s);
     return s;
@@ -4608,6 +4626,12 @@ function routingPage(part) {
       ft.title = t("Sent in its vendor's fast mode, as the group says");
       to.append(ft);
     }
+    if (tr?.entry) {
+      // how Claude Code ran it, whose cost to the plan differs (Anotiaww on X)
+      const en = el("span", "ef", tr.entry === "tui" ? "TUI" : "-p");
+      en.title = entryNote(tr);
+      to.append(en);
+    }
     if (tr?.swapped && tr.done && tryOk(tr)) to.append(swapTag(tr, true)); // beside the model asked for
     else if (tr?.routed && tr.done && tryOk(tr)) to.append(routedTag(tr));
     if (tr?.upstream && tr.done && tryOk(tr)) { to.append(upstreamTag(tr)); to.classList.add("upstreamed"); }
@@ -4874,7 +4898,7 @@ function routingPage(part) {
       // a provider's own row: its model, the provider's name is the heading
       if (w.kind === "provider") name.append(el("b", "", w.model || w.name));
       else name.append(el("b", "", who(w)), el("span", "", planName(w.plan) || (w.kind === "key" ? t("API key") : "")));
-      let st, cls = "", asOf = "";
+      let st, cls = "", asOf = "", carded = false;
       const resting = a.rest && at(a.rest.until) > n;
       // its models resting alone, while the account answers its others:
       // a line of their own, naming them, under what the account has left
@@ -4890,8 +4914,14 @@ function routingPage(part) {
         // when it was read is on hover: the line says what is left and
         // when it renews, on one line in every language (danzi002)
         if (!(soon && soon <= n)) asOf = t("as of {time}", { time: clock(a.at) });
-      } else if (w.kind === "account") st = t("what's left not known yet");
-      else st = "";
+      } else if (w.kind === "account") {
+        // routing weighs no figure for it (every window of its card is set
+        // aside, as a plugin's pooled Cursor plan is), but the Usage page
+        // read what it has left: that is said, not "not known" (X)
+        const card = day ? [] : winsOf(w);
+        if (card.length) { st = card[0]; carded = true; }
+        else st = t("what's left not known yet");
+      } else st = "";
       const tally = el("div", "tally");
       // refused for its sign-in, and not answered since: it is to be signed
       // in again, here where the card says so. Answered since, the
@@ -4910,7 +4940,7 @@ function routingPage(part) {
       // routing went by, the others on hover and on the Usage page. Live
       // only: a kept day's requests were weighed by readings long gone.
       const ws = day ? [] : [...winsOf(w).map((text) => ({ text })), ...remoteWinsOf(w)];
-      const figure = !!st && (resting || w.known || w.unlisted || w.noURL);
+      const figure = !!st && (resting || w.known || w.unlisted || w.noURL || carded);
       if (resting && restTip(a.rest)) stEl.title = restTip(a.rest);
       else if (figure && (ws.length || asOf)) stEl.title = [...ws.map((x) => x.text), asOf].filter(Boolean).join("\n");
       row.append(name, stEl);
@@ -5398,7 +5428,7 @@ function routingPage(part) {
   }
   function replayBar(p, fast) {
     const d = new Date(p.real);
-    rClock.textContent = d.toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + "." + Math.floor(d.getMilliseconds() / 100);
+    rClock.textContent = d.toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourClock() }) + "." + Math.floor(d.getMilliseconds() / 100);
     const day = d.toDateString() === new Date().toDateString() ? t("today") : d.toLocaleDateString(intlLang(), { weekday: "short", month: "short", day: "numeric" });
     setText(rDay, day);
     // a quiet stretch cut short: the clock runs fast through it, whatever
@@ -5426,7 +5456,7 @@ function routingPage(part) {
       const [said] = outcome(r);
       row.append(el("span", "rp-n", t("request {i} of {n}", { i: g.n, n: p.plan.length })), sw,
         el("b", "", callerName(r)), el("code", "mdl", r.model), ...rowTags(r), el("span", "rp-to", "→ " + said),
-        el("span", "rp-at", t("sent {time}", { time: new Date(r.time).toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) })));
+        el("span", "rp-at", t("sent {time}", { time: new Date(r.time).toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourClock() }) })));
       row.onclick = () => { cur = r; renderLog(); };
       return row;
     }) : [el("span", "rp-wait", t("starting…"))]));
@@ -6055,7 +6085,7 @@ function routingPage(part) {
       .map(([id, m]) => [id, Object.fromEntries(Object.entries(m).filter(([a, b]) => words.includes(a) && words.includes(b)))]));
     const group = (g) => ({ ...g, id: String(g.id ?? ""), name: typeof g.name === "string" && g.name ? g.name : String(g.id ?? ""),
       members: ids(g.members), memberInfo: objs(g.memberInfo), holds: ids(g.holds), offers: ids(g.offers), shared: ids(g.shared), patterns: objs(g.patterns),
-      match: opt(g.match, ids), matched: opt(g.matched, ids), off: opt(g.off, ids), fast: opt(g.fast, ids), levels: opt(g.levels, ids), weights: opt(g.weights, weightsOf), effortMaps: opt(g.effortMaps, effortMapsOf), keys: opt(g.keys, ids),
+      match: opt(g.match, ids), matched: opt(g.matched, ids), off: opt(g.off, ids), fast: opt(g.fast, ids), ultra: opt(g.ultra, ids), levels: opt(g.levels, ids), weights: opt(g.weights, weightsOf), effortMaps: opt(g.effortMaps, effortMapsOf), keys: opt(g.keys, ids),
       rules: opt(g.rules, (rs) => objs(rs).map((r) => ({ ...r, agents: opt(r.agents, ids), folders: opt(r.folders, ids), exceptFolders: opt(r.exceptFolders, ids), where: opt(r.where, objs) }))) });
     const refs = (v) => objs(v).filter((m) => typeof m.id === "string");
     return { ...x, groups: objs(x.groups).filter((g) => typeof g.id === "string" && g.id).map(group),
@@ -6202,7 +6232,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, note: g.note || "", members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], redact: g.redact || "", routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], where: (r.where || []).map((c) => ({ ...c })), time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, note: g.note || "", members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], ultra: [...(g.ultra || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, effortMaps: Object.fromEntries(Object.entries(g.effortMaps || {}).map(([id, m]) => [id, { ...m }])), accounts: [...(g.accounts || [])], keys: [...(g.keys || [])], redact: g.redact || "", routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: sinkModeOf(g), unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: g.patience || 0, context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], where: (r.where || []).map((c) => ({ ...c })), time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -6626,11 +6656,15 @@ function routingPage(part) {
     smart: ["Hard to strong, easy to cheap", "A hard task goes to the strongest model, an easy one and compaction to a cheap one"],
     thrifty: ["Cheap first", "A cheap model first; the strongest for high reasoning, or when the cheap ones fail"],
     steady: ["Never stuck", "The strongest model of each provider, each behind the other: one down doesn't stop the agent"],
+    plan: ["Plan first", "Subscriptions and token plans first, pay-as-you-go keys only after them"],
+    fast: ["Fastest first", "Whichever provider has answered fastest lately goes first"],
+    even: ["Spread evenly", "The strongest model, taken in turn over every provider and account that serves it"],
   };
   const tplName = (tp) => t(TPL[tp.kind]?.[0] || tp.group.name);
   // what a template that can't be made is missing (provider.Need*)
   const tplNeed = (tp) => tp.need === "providers" ? t("Needs models from two providers: {name} is the only one", { name: tp.of })
     : tp.need === "cheap" ? t("Needs a model cheap beside {name}", { name: tp.of })
+    : tp.need === "plan" ? t("Needs a subscription or token plan")
     : tp.need ? t("Add a provider first") : "";
   const tplMembers = (tp) => tp.group.members.map((id) => memberName(id)).join(" → ");
   async function addTemplate(tp) {
@@ -6646,7 +6680,7 @@ function routingPage(part) {
     if (groupDirty() && !(await confirmDiscard())) return;
     const g = tp.group;
     gSel = null;
-    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], where: (r.where || []).map((c) => ({ ...c })), time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
+    gEdit = { id: "", draft: { name: tplName(tp), slug: g.id, members: [...g.members], match: [], matched: [], fast: [], ultra: [], off: [], routing: g.routing || "", affinity: "", rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [], exceptFolders: [], where: (r.where || []).map((c) => ({ ...c })), time: null })), classifier: g.classifier || "", effort: "", levels: [] } };
     renderGroups();
     const ed = gList.querySelector(".rt-gedit");
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -7029,7 +7063,7 @@ function routingPage(part) {
         closeProtoMenu();
         if (v === cur || (groupDirty() && !(await confirmDiscard()))) return b.focus({ preventScroll: true });
         const n = opts.find(([id]) => id === v)?.[1] || v;
-        await groupAction("save", { id: g.id, name: g.name, note: g.note || "", members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
+        await groupAction("save", { id: g.id, name: g.name, note: g.note || "", members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], ultra: g.ultra || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
           t("{name}: {routing}", { name: g.name, routing: t(n) }));
         // the rows were drawn anew: the keyboard stays on this one's routing
         gList.querySelector(`.rt-group[data-id="${CSS.escape(g.id)}"] .rt-groute`)?.focus({ preventScroll: true });
@@ -7091,6 +7125,9 @@ function routingPage(part) {
       // the group as text for someone else's magpie (laincatx on X)
       { name: "Copy to share", icon: OUT, tip: t("{name} as text to paste into another magpie: its models, routing and rules, no key", { name: g.name }),
         run: () => shareGroup(g) },
+      // the card's own Remove, with its own question first (jimlee0824v2 on X)
+      { name: "Remove", icon: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4", sep: true,
+        run: () => groupAction("delete", { id: g.id }, t("{name} removed", { name: g.name })) },
     ], at);
   }
   // nextTo: where a group moved one up (-1) or down goes, among them all:
@@ -7162,7 +7199,7 @@ function routingPage(part) {
       b.onclick = (e) => {
         e.stopPropagation(); // the card opens the editor; this picks
         if (on) return;
-        groupAction("save", { id: g.id, name: g.name, note: g.note || "", members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
+        groupAction("save", { id: g.id, name: g.name, note: g.note || "", members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, noSink: !!g.noSink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], ultra: g.ultra || [], off: g.off || [], weights: g.weights || {}, effortMaps: g.effortMaps || {}, accounts: g.accounts || [], unlists: !!g.unlists },
           t("{name}: every request to {model}", { name: g.name, model: memberName(id) }));
       };
       box.append(b);
@@ -7174,7 +7211,7 @@ function routingPage(part) {
     // whoever opened it, a draft has what the editor and Add read: a group
     // made from a model (newGroupWith) had no fast, and Add threw on it
     // and did nothing (悠悠哥 on Discord)
-    for (const k of ["members", "match", "matched", "fast", "off", "rules", "accounts", "keys"]) if (!Array.isArray(d[k])) d[k] = [];
+    for (const k of ["members", "match", "matched", "fast", "ultra", "off", "rules", "accounts", "keys"]) if (!Array.isArray(d[k])) d[k] = [];
     if (!d.weights || typeof d.weights !== "object") d.weights = {};
     if (!d.effortMaps || typeof d.effortMaps !== "object") d.effortMaps = {};
     const ed = el("div", "editor rt-gedit");
@@ -7428,6 +7465,7 @@ function routingPage(part) {
             d.matched = d.matched.filter((x) => x !== from); // named now, at its own reasoning
             for (const r of d.rules) setUses(r, rUses(r).map((x) => x === from ? to : x));
             d.fast = d.fast.map((x) => x === from ? to : x);
+            d.ultra = d.ultra.map((x) => x === from ? to : x);
             d.off = d.off.map((x) => x === from ? to : x);
             if (d.weights[from]) { d.weights[to] = d.weights[from]; delete d.weights[from]; }
             // a map goes with it while it follows the group; one fixed at
@@ -7480,16 +7518,26 @@ function routingPage(part) {
           // its vendor's fast mode, where the model has one: priority
           // processing, Claude's fast mode (provider.CanFast)
           if (m?.canFast) {
+            // usual -> fast -> Ultrafast, where an account offers it -> usual
             const on = d.fast.includes(id);
-            const fb = el("button", "rt-cond rt-fixed rt-fast" + (on ? " on" : ""), t(on ? "Fast" : "Standard speed"));
+            const ultra = on && !!m.ultraOK && d.ultra.includes(id);
+            const fb = el("button", "rt-cond rt-fixed rt-fast" + (on ? " on" : ""), t(ultra ? "Ultrafast" : on ? "Fast" : "Standard speed"));
             fb.type = "button";
             fb.setAttribute("aria-pressed", String(on));
             // on a provider the user added (provider.OwnFast, #1615) it is
             // only asked for: magpie can't know the provider serves it
-            fb.title = m.ownFast
+            fb.title = ultra ? t("Sent Ultrafast where the account offers it, and fast where it doesn't, whatever the agent asks. Click to send it at the usual speed")
+              : m.ownFast
               ? (on ? t("Asked for OpenAI's fast mode (service_tier \"priority\") whatever the agent asks: quicker, at a higher price, where your provider serves it. One that turns it away is asked without it") : t("Sent as the agent asks; click to ask your provider for OpenAI's fast mode (service_tier \"priority\")"))
-              : (on ? t("Sent in its vendor's fast mode whatever the agent asks: quicker, at a higher price") : t("Sent at its vendor's usual speed; click to send it in fast mode"));
-            fb.onclick = () => { d.fast = on ? d.fast.filter((x) => x !== id) : [...d.fast, id]; draw(); };
+              : (on ? t(m.ultraOK ? "Sent in its vendor's fast mode whatever the agent asks: quicker, at a higher price. Click to send it Ultrafast, where the account offers it" : "Sent in its vendor's fast mode whatever the agent asks: quicker, at a higher price") : t("Sent at its vendor's usual speed; click to send it in fast mode"));
+            fb.onclick = () => {
+              const next = ultra || (on && !m.ultraOK) ? "" : on ? "ultra" : "fast";
+              d.fast = d.fast.filter((x) => x !== id);
+              d.ultra = d.ultra.filter((x) => x !== id);
+              if (next) d.fast = [...d.fast, id];
+              if (next === "ultra") d.ultra = [...d.ultra, id];
+              draw();
+            };
             row.append(fb);
           }
           // the one account or key it is sent on (EastonXvii on X: account
@@ -7728,6 +7776,7 @@ function routingPage(part) {
       // a rule keeps the models still here; it goes with its last
       d.rules = d.rules.filter((r) => { setUses(r, rUses(r).filter((x) => d.members.includes(x))); return !!r.use; });
       d.fast = d.fast.filter((x) => d.members.includes(x));
+      d.ultra = d.ultra.filter((x) => d.fast.includes(x));
       d.off = d.off.filter((x) => d.members.includes(x));
     }
     const pbox = el("div", "fallback rt-pats");
@@ -8777,7 +8826,7 @@ function routingPage(part) {
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), note: (d.note || "").trim(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, redact: d.redact || "follow", unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), note: (d.note || "").trim(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: d.sink === "sink" && sinkable(d.routing), noSink: d.sink === "", firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), ultra: d.ultra.filter((x) => d.fast.includes(x) && d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), effortMaps: Object.fromEntries(Object.entries(d.effortMaps).filter(([x, m]) => d.members.includes(x) && Object.keys(m).length)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), keys: d.keys, redact: d.redact || "follow", unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing
@@ -8851,7 +8900,7 @@ function routingPage(part) {
     if (!groups) await loadGroups();
     if (!groups) return;
     if (groupDirty() && !(await confirmDiscard())) return;
-    gEdit = { id: "", draft: { name: name || modelOf(id)?.name || id.split("/").pop(), members: [id], fast: [], routing: "", affinity: "", rules: [] } };
+    gEdit = { id: "", draft: { name: name || modelOf(id)?.name || id.split("/").pop(), members: [id], fast: [], ultra: [], routing: "", affinity: "", rules: [] } };
     renderGroups();
     const ed = gList.querySelector(".rt-gedit");
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -8861,7 +8910,7 @@ function routingPage(part) {
   async function newGroup(ev) {
     if (groupDirty() && !(await confirmDiscard())) return;
     gSel = null;
-    gEdit = { id: "", draft: { name: "", members: [], match: [], matched: [], fast: [], off: [], routing: "", affinity: "", rules: [] } };
+    gEdit = { id: "", draft: { name: "", members: [], match: [], matched: [], fast: [], ultra: [], off: [], routing: "", affinity: "", rules: [] } };
     renderGroups();
     if (!ev) return;
     const ed = gList.querySelector(".rt-gedit");
@@ -9255,7 +9304,7 @@ function routingPage(part) {
     const asked = el("span", "pr-a");
     asked.append(icon(ag?.icon || "generic"), el("span", "pr-who", callerName(r)), el("code", "m", r.model));
     asked.append(...rowTags(r));
-    const when = el("span", "at", new Date(r.time).toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }));
+    const when = el("span", "at", new Date(r.time).toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit", second: "2-digit", ...hourClock() }));
     // where it went: the provider, the account or key, and the model that
     // answered — marked when the reply names another than the one sent
     const to = el("span", "pr-to");

@@ -369,7 +369,14 @@ type Exclusion struct {
 // signed in here (a magpie serve under another HOME, say).
 func Excluded() []Exclusion {
 	var out []Exclusion
+	forgot := map[string]bool{}
+	for _, p := range storedFile().Providers {
+		forgot[p.ID] = p.Forgot
+	}
 	for _, a := range Hidden() {
+		if forgot[a.ID] {
+			continue
+		}
 		x := Exclusion{Agent: a.Account.Agent, Provider: a.ID, Why: "You removed it from magpie.", Quiet: a.Quiet, Tucked: a.Tucked}
 		if a.IsPlugin() {
 			x.Name = a.Name
@@ -1810,6 +1817,9 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 				Supports struct {
 					Efforts []string `json:"reasoning_effort"`
 				} `json:"supports"`
+				Limits struct {
+					Prompt int `json:"max_prompt_tokens"`
+				} `json:"limits"`
 			} `json:"capabilities"`
 			Policy *struct {
 				State string `json:"state"`
@@ -1877,7 +1887,11 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 		default:
 			continue // not the account's to enable: it answers 403
 		}
-		out = append(out, catalog.Model{ID: m.ID, Name: m.Name, Efforts: m.Capabilities.Supports.Efforts, APIs: copilotAPIs(m.Endpoints)})
+		out = append(out, catalog.Model{ID: m.ID, Name: m.Name, Efforts: m.Capabilities.Supports.Efforts, APIs: copilotAPIs(m.Endpoints),
+			// the prompt this account's Copilot takes for the model (936K
+			// for gemini-4-carbon), not models.dev's window for the id
+			// (1048576): over it Copilot answers 400 (codealc on X)
+			Context: catalog.Window(m.Capabilities.Limits.Prompt)})
 	}
 	// Auto, which Copilot's clients offer every account beside the models
 	// it lists, and the only choice a Student plan has: an account whose

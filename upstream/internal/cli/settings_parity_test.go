@@ -385,6 +385,7 @@ var notYet = map[string]string{
 	"POST /api/library/bili":                     L,  // library.go
 	"POST /api/library/bili/install":             L,  // library.go
 	"POST /api/library/market/about":             L,  // library.go
+	"POST /api/library/mcp-account":              L,  // library.go
 	"POST /api/library/mcp-signin":               L,  // library.go
 	"POST /api/library/mcp-signin/{id}/cancel":   L,  // library.go
 	"POST /api/library/mcp-signout":              L,  // library.go
@@ -427,6 +428,7 @@ var notYet = map[string]string{
 	"GET /api/plugin-pages":                      W,  // pluginpage.go
 	"GET /api/plugin-panels":                     W,  // pluginpage.go
 	"POST /api/plugin-pages/image":               W,  // pageimage.go
+	"POST /api/plugin-pages/arrange":             W,  // pluginpage.go: the sidebar's order of plugin pages, dragged
 	"POST /api/plugin-pages/options":             W,  // pluginpage.go
 	"POST /api/plugin-pages/read":                W,  // pluginpage.go
 	"GET /api/plugins/agents":                    P,  // plugins.go

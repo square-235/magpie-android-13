@@ -296,6 +296,10 @@ type Group struct {
 	// beside Members, not in their ids, so a version before it still
 	// routes to them, only not fast.
 	Fast []string `json:"fast,omitempty"`
+	// Ultra are the members of Fast sent in the vendor's faster mode
+	// still (Codex's Ultra Fast, kdajenks on X), where the account
+	// offers it and priority where not. Always a part of Fast.
+	Ultra []string `json:"ultra,omitempty"`
 	// Weights are the members' shares (as Members spells them) when the
 	// group routes by weight (Weighted, #1910): one weighing 3 takes three
 	// requests for every one a member weighing 1 takes. One not in it
@@ -402,6 +406,8 @@ type Member struct {
 	// Fast is set on a member the group sends in its vendor's fast mode
 	// (Group.Fast), where its model has one.
 	Fast bool
+	// Ultra is set on a Fast member the group sends in the faster mode.
+	Ultra bool
 	// Account is the one account or key of Provider the member is sent
 	// on, "<provider>/<stable id>", as Group.Accounts has them
 	// ("provider/model#<id>", groupaccount.go); "" for every one the
@@ -473,7 +479,7 @@ func (m Member) Groups() []string {
 // Below is the member as the group at depth (0 the group itself, 1 the
 // group in it Path[0] names, …) has it.
 func (m Member) Below(depth int) Member {
-	out := Member{ID: m.Path[depth], Path: m.Path[depth:], Via: m.Via[depth:], Redact: m.Redact, Provider: m.Provider, Model: m.Model, Effort: m.Effort, Levels: m.Levels, EffortMap: m.EffortMap, Fast: m.Fast, Account: m.Account, At: m.At}
+	out := Member{ID: m.Path[depth], Path: m.Path[depth:], Via: m.Via[depth:], Redact: m.Redact, Provider: m.Provider, Model: m.Model, Effort: m.Effort, Levels: m.Levels, EffortMap: m.EffortMap, Fast: m.Fast, Ultra: m.Ultra, Account: m.Account, At: m.At}
 	// its other places in the same group at depth
 	for _, o := range m.Also {
 		if len(o.Path) > depth && slices.Equal(o.Path[:depth], m.Path[:depth]) {
@@ -539,7 +545,7 @@ func cloneGroups(gs []Group) []Group {
 	out := make([]Group, len(gs))
 	for i, g := range gs {
 		g.Members, g.Match, g.Matched, g.Placed = slices.Clone(g.Members), slices.Clone(g.Match), slices.Clone(g.Matched), slices.Clone(g.Placed)
-		g.Off, g.Levels, g.Fast = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast)
+		g.Off, g.Levels, g.Fast, g.Ultra = slices.Clone(g.Off), slices.Clone(g.Levels), slices.Clone(g.Fast), slices.Clone(g.Ultra)
 		g.Accounts, g.Seen, g.Keys = slices.Clone(g.Accounts), slices.Clone(g.Seen), slices.Clone(g.Keys)
 		g.Former = slices.Clone(g.Former)
 		g.Weights = maps.Clone(g.Weights)
@@ -647,6 +653,7 @@ func withoutRemoved(g Group, have map[string]bool) Group {
 	g.Members = kept
 	g.Off = slices.DeleteFunc(slices.Clone(g.Off), gone)
 	g.Fast = slices.DeleteFunc(slices.Clone(g.Fast), gone)
+	g.Ultra = slices.DeleteFunc(slices.Clone(g.Ultra), gone)
 	g.Weights = renamedWeights(g.Weights, func(m string) string {
 		if gone(m) {
 			return ""
@@ -735,6 +742,7 @@ func (g Group) own() Group {
 	g.Off = slices.Clone(g.Off)
 	g.Levels = slices.Clone(g.Levels)
 	g.Fast = slices.Clone(g.Fast)
+	g.Ultra = slices.Clone(g.Ultra)
 	g.Accounts = slices.Clone(g.Accounts)
 	g.Keys = slices.Clone(g.Keys)
 	g.Seen = slices.Clone(g.Seen)
@@ -1050,6 +1058,26 @@ func FindGroup(id string) (Group, []Member, bool) {
 	return GroupFinder()(id)
 }
 
+// GroupHasNative says whether the group id has a member found now that
+// speaks api natively, kept across requests while the files stay the same
+// (keptOf, a minute at most). Pi's Drift asks it of the model an agent is
+// set to on every /api/drift poll, and finding the members was ~3.4 MB a
+// poll with real accounts, four of five bytes the window allocated a minute.
+func GroupHasNative(id string, api Protocol) bool {
+	return keptOf("group native "+string(api)+" "+id, func() bool {
+		_, ms, ok := GroupFinder()(id)
+		if !ok {
+			return false
+		}
+		for _, m := range ms {
+			if m.Provider.Native(m.Model) == api {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // FallbackGroup is the routing group a provider's fallback entry names
 // ("group/<id>", 01huadalang on Discord), as the gateway routes it (Live),
 // with its members ready now. ok is false for an entry naming a model,
@@ -1193,12 +1221,21 @@ func GroupFinder() func(id string) (Group, []Member, bool) {
 			all, find = sharedGroupsIn(entries), heldFrom("entries by", entries, entriesBy)
 		}
 		if g, ok := routedGroupOf(all, gid); ok && !g.Disabled {
+			groupsFound.Add(1)
 			g = cloneGroup(g)
 			return g, membersFound(entries, find, all, g, disabledNow(), nil), true
 		}
 		return Group{}, nil, false
 	}
 }
+
+// groupsFound counts the groups GroupFinder found members for, for a test
+// that counts them.
+var groupsFound atomic.Int64
+
+// GroupsFound is how many times a group's members were found, for another
+// package's test that counts them.
+func GroupsFound() int64 { return groupsFound.Load() }
 
 // FindDrawingGroup is FindGroup for a drawing (the gateway's images API):
 // a member that is one of its provider's image models, as draws says, is
@@ -1324,7 +1361,7 @@ func membersFound(entries []Entry, find entryOf, all []Group, g Group, off func(
 			key := WithMemberAccount(WithMemberEffort(p.ID+"/"+m, effort), acct)
 			here := append(slices.Clone(path), id)
 			fixed, levels := MemberLevels(effort)
-			mem := Member{ID: here[0], Path: here, Via: via, Redact: redact, Provider: p, Model: m, Effort: fixed, Levels: levels, Fast: g.IsFast(id), Account: acct, At: at}
+			mem := Member{ID: here[0], Path: here, Via: via, Redact: redact, Provider: p, Model: m, Effort: fixed, Levels: levels, Fast: g.IsFast(id), Ultra: g.IsUltra(id), Account: acct, At: at}
 			if fixed == "" && levels == nil {
 				mem.EffortMap = g.MemberEffortMap(id)
 			}
@@ -1480,10 +1517,14 @@ func buildGroupEntries(entries []Entry) []Entry {
 			var efforts []string
 			images, thinks, ctx, output := false, false, 0, 0
 			var imageInput *bool
+			// the kinds of input and output the member's source listed
+			// (video, audio and pdf beside image, #1595)
+			var inputs, outputs []string
 			unknown, reasonless, typed := false, false, false
 			if j := find(m.Provider.ID, m.Model); j >= 0 {
 				x := &entries[j]
 				efforts, images, thinks, ctx, output, imageInput = x.Efforts, x.Images, x.Reasoning, x.Context, x.Output, x.ImageInput
+				inputs, outputs = x.Inputs, x.Outputs
 				typed = x.WindowSet
 				unknown, reasonless = levelsUnknown(*x), x.Reasonless
 			}
@@ -1510,6 +1551,14 @@ func buildGroupEntries(entries []Entry) []Entry {
 			// group of DeepSeek V4.1 Flash with a text-only member in it
 			// turned every image away, though its other members see)
 			e.Images = e.Images || images
+			// and every other kind a member takes or gives, a video among
+			// them: the gateway sends a request with a video only to the
+			// members that take one (videoInput in the gateway), as it does
+			// an image. Left nil, Modalities fell back to text and image,
+			// and a group of MiniMax M3.1 Flash, which takes video, was
+			// listed as not taking it (#2898, #6135)
+			e.Inputs = unionKinds(e.Inputs, inputs)
+			e.Outputs = unionKinds(e.Outputs, outputs)
 			// the window agents are told is the largest a member has:
 			// a conversation too long for one member goes on to a member
 			// with room for it (#700, withRoom in the gateway), so the
@@ -1627,6 +1676,26 @@ func buildGroupEntries(entries []Entry) []Entry {
 		}
 		e.Family = g.Family
 		out = append(out, e)
+	}
+	return out
+}
+
+// unionKinds is every kind a or b lists, in the order given; nil when
+// neither lists any, which is not an empty list: Modalities falls back to
+// text and image on nil (an entry whose source said nothing), and reads a
+// list as it is.
+func unionKinds(a, b []string) []string {
+	if a == nil && b == nil {
+		return nil
+	}
+	out := slices.Clone(a)
+	if out == nil {
+		out = []string{}
+	}
+	for _, k := range b {
+		if !slices.Contains(out, k) {
+			out = append(out, k)
+		}
 	}
 	return out
 }

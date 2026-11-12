@@ -387,8 +387,7 @@ it has stayed so for 300ms (`ready`, `trustSettle`). Pressing Enter blind
 chose "No, exit" in the real gateway, and no run started.
 
 Every run is `-p` only when the Claude Code editor's "Claude Code runs
-as" row is on claude -p (`claudePrintMode`; magpie web as a gateway
-switches it with the editor's *Claude Code's interactive mode* row), or in the gateway's own
+as" row is on claude -p (`claudePrintMode`; the one row, in the editor and, in magpie web as a gateway, there too), or in the gateway's own
 tests, whose fake Claude Codes are `-p` ones (`claudeTUIRuns`, code
 `no-shim`). With it On, nothing ever runs as `-p` (the owner, 11-01): the
 plan counts a `-p` request as another client's, at about twice the
@@ -410,7 +409,9 @@ any more (`claudePrint` keeps an image known by its URL, which
 
 The one exception to "nothing runs as `-p`" with it On is a turn Anthropic
 refuses in the interactive mode as a third-party app's: a 400 "Third-party
-apps now draw from your extra usage" (#4503). Anthropic judges the agent's
+apps now draw from your extra usage" (#4503), or on a Team or
+Enterprise workspace "draw from extra usage" with no "your" (#5645; both
+wordings are `thirdPartyIn`). Anthropic judges the agent's
 own system prompt, as a whole, there and serves the same prompt to `-p`
 (isjiajia01's controlled tests; Raven on Discord: Pi in Cindy through
 `group/auto`, every turn refused). When the refusal comes with nothing of
@@ -516,6 +517,13 @@ the cache again (3 to 10 times the cost;
 `TestClaudeTUIToolLoopCarriesEachBatchsSafeguards`,
 `TestTapPutsTheGuardFilesSafeguards`). A changed safety beta, or
 safeguards appearing or going, still restarts.
+
+The level a remote client asks reaches `--effort` from every route: Messages
+(`thinking` budget, `output_config.effort`, and the last turn's
+`output_config` when the request's own names none), Chat (`reasoning_effort`,
+else `reasoning.effort`, `output_config.effort` or a `thinking` budget, as a
+relay turning a Claude client's request into Chat may put it) and Responses
+(`reasoning.effort`) (`TestClaudeBridgeTakesTheEffortOfEveryRoute`).
 
 A turn asking another effort goes on in its run too (#5584). The `-p`
 run is told it by `apply_flag_settings` (`setEffort`, #502). The
@@ -713,10 +721,11 @@ each, which they remove: `-p` asks nothing about trust.
 The Claude Code provider editor's "Claude Code runs as" row
 (`claudeModeRow` in app.js, drawn by claudemode.js, which it loads with
 its first read) is a switch between Interactive mode (TUI) and claude
--p: pressing one saves `claudePrintMode` as Settings' row does
-(`savePrefs`) and reads the mode again. In magpie web it is the
-gateway's, and only its own Settings change it, so the switch is
-disabled. Hovering or focusing it opens what tells the two apart. It
+-p: pressing one saves `claudePrintMode` (`savePrefs`) and reads the mode again.
+It is the only control for it: Settings' second row, which wrote the same
+setting and was the one that worked in magpie web (the editor's was
+disabled there, and read as a switch that doesn't switch), is gone
+(Anotiaww on X, `claude-tui-setting.test.cjs`). Hovering or focusing it opens what tells the two apart. It
 reads `GET /api/claude/mode` (`gateway.ClaudeModeNow`) as the page
 opens, kept 30 seconds and dropped when the setting changes, not in
 `/api/providers`' polls. What decides it for every run on the machine is
@@ -836,6 +845,16 @@ branches carried none, and their runs went back to an hour under a 5m
 pick (linkaww); `everyRunKept5m` in the fork, busy-retry and side
 question tests.
 
+`branch` also takes a side request that sends the conversation whole with the
+calls its run still waits on dropped, and the words before them kept: Claude
+Code's AgentSummary (#6128). The last reply then has no call to find a line
+by, so the run is the one with a call line whose conversation is the one
+before that reply, and the session is cut before its first call line
+(`cutBefore`). Before, such a request was told the whole transcript by a new
+Claude Code (90K to 160K cache tokens written for a label). When no branch is
+found the log says why, by structure only: `no branch of a run's session for
+this request: <reason>`.
+
 A new run (and one started from a transcript, `replaySession`) picks its
 lifetime with `runTTLFor`:
 
@@ -850,7 +869,10 @@ lifetime with `runTTLFor`:
   `caller.claudeHere`), it is this computer's, read as `claudeRunTTL`
   reads it. For a request another magpie passed on, it is what that
   magpie named in `X-Magpie-Claude-Cache-TTL` (`ClaudeCacheTTLHeader`):
-  `5m`, `1h`, or `default` for no pick. `passOnCaller` sends it on every
+  `5m`, `1h`, or `default` for no pick. Claude Desktop (`claude-desktop`)
+  with no such header is `default` too: its gateway key makes Claude Code
+  mark 5 minutes with no ttl, which says no pick (`TestClaudeDesktopRunKeepsAnHour`).
+  `passOnCaller` sends it on every
   request to a Remote magpie whose caller is Claude Code here, or that
   came with it. `callerFrom` takes it from a `magpie/` request alone, and
   `withCaller` takes it off what comes in, so no vendor is sent it.
@@ -1873,8 +1895,25 @@ waits for the bridge's turns, and for none of the gateway's other requests
 the new one serves once it has the socket; a `claude-mcp` token the new one
 doesn't know is forwarded to the old one's callback socket
 (`ForwardCallbacks`, `forwardCallback`), which serves it until it quits
-(`ServeCallbacks`). A run idle between turns ends with the old process,
-and the next turn starts a run in the new one, as after any restart.
+(`ServeCallbacks`). A run idle between turns ends with the old process, but
+its session does not (#6292, recih on X): as the gateway ends
+(`abortAll`), `keepShelf` shelves every idle run and writes the shelf to
+`claude-shelf.json` beside the settings (temp and rename;
+[`claude_persist.go`](../../internal/gateway/claude_persist.go)). Each entry
+has the conversation's fingerprint (`turnKey`, which holds the account, the
+model and the settings), Claude Code's session id, its project folders (the
+config folder, so HOME, and the work folder), the account, the tools it was
+told of, and the cache marks. The next gateway's `unshelve`, when its shelf
+has nothing for a turn, reads the file once it changed (`loadShelf`, which
+takes the file away, so a session that went on in a run is never resumed
+from a record of where it stood) and the turn starts Claude Code with
+`--resume`, told the turn alone. A file that doesn't parse whole, another
+version, an entry whose session file is gone, whose folder isn't a Claude
+Code project folder, or that waited longer than `idleLongest` is unknown,
+and the turn is told whole to a new run, as after a crash (no file is
+written then). A conversation a client rewrote (`looseTurn`) is not kept,
+and a run in a turn or parked on tool results at the stop is not either.
+`TestClaudeIdleRunSurvivesARestart`, `TestClaudeShelfFileUnreadableFallsBackToReplay`.
 
 ## Verification
 
@@ -1901,3 +1940,28 @@ go test -tags nogui ./internal/gateway/ -run 'TestClaudeTaskNotification|TestWit
 rule that keeps another conversation out; `claude_lost_media_test.go` does
 the same for images taken out, from Hana's request bodies. `claude_resume_test.go`'s harness
 stands in for Claude Code with a script that keeps sessions as it does.
+
+## Which entry a request used
+
+Each request the bridge answers notes how its run started: `startRun` calls
+`noteEntry(ctx, tui, code)` beside `noteClaudeRun`, which is the process's
+last mode and so says nothing of one request. The note rides the request's
+context (`withEntry`, `claude_entry.go`) and `serve` copies it onto the try
+(`Try.Entry` "tui" or "print", `Try.EntryWhy` the `claudePrint` code that
+chose -p: off, os, missing, no-shim, image, third-party, cache-marks). The
+Routing page's request row shows a TUI or -p chip with the reason in its
+title (`entryNote` in the routing plugin's client.js), so the plan cost of
+a request can be told from how it ran (Anotiaww on X,
+`TestEntryNoted`, `routing-entry.test.cjs`).
+
+## Claude Code on a remote magpie
+
+A local Claude Code that uses a remote magpie holding the account sends its
+whole history each turn to the remote gateway, as any API client does. The
+remote bridge keeps the run's session and resumes it (`--resume`), typing
+only the turn that is new (`from.since`), so Anthropic is not sent the
+history twice. A new run (first request, a restart, a branch, a session that
+isn't found) replays the conversation once as one message, with a cache
+miss. The remote Claude Code adds its own system prompt (about 1K tokens,
+cached) beside the caller's, which the Short Claude system prompt setting
+(`claudeLeanPrompt`) removes (Tossipe on X).
