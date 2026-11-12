@@ -140,6 +140,7 @@ line; agents connected to magpie lose it when it quits.
 | QwenPaw      | each agent's `agent.json` in its workspace (`~/.qwenpaw/workspaces/<agent>`, the agents listed in `config.json`), under `$QWENPAW_WORKING_DIR`, else a legacy `~/.copaw`, else `~/.qwenpaw` | model (a `magpie` custom provider in `providers/custom/magpie.json` under QwenPaw's secret folder, `$QWENPAW_SECRET_DIR` or `~/.qwenpaw.secret`, OpenAI Chat at the gateway with magpie's models; the agent's `active_model` set to it, what was there put back on Disconnect; one row per agent, `qwenpaw` the default and `qwenpaw#<id>` the others; an agent on an ACP backend isn't listed; restart QwenPaw after the first connect), effort (the agent's `thinking_level`; magpie's models with reasoning levels are declared `thinking_param_style: "effort"` so QwenPaw applies it) |
 | OpenClaw     | `openclaw.json` in `~/.openclaw` (`$OPENCLAW_CONFIG_PATH`, `$OPENCLAW_STATE_DIR`, `~/.openclaw-<profile>` for `$OPENCLAW_PROFILE`, `~` as `$OPENCLAW_HOME`) | model (a `magpie` provider in `models.providers`, `openai-completions`, with magpie's models in it; `agents.defaults.model`'s primary set to it, what was there put back on Disconnect; `magpie/*` added to a `modelPolicy.allow` that would refuse it; the user's own keys in the provider and its models kept; a chat already on a model keeps it until `/model default`) |
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
+| Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting) |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`, or the folder the desktop app moved it to) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
@@ -444,7 +445,9 @@ vendor's reply said it ran at, empty when the reply doesn't say. The
 ChatGPT backend (Codex signed in with ChatGPT) says `auto` and `default`
 whether Fast ran or not, so from it those are left empty too. The JSON
 log keeps them as `tier_asked`, `tier_sent` and `tier_served`, and each
-try in `/v1/magpie/route` has `tier` and `tier_served`. The last column,
+try in `/v1/magpie/route` has `tier` and `tier_served`. A request's row
+on the Requests page shows them as Service tier (asked, sent when it
+differs, answered). The last column,
 `upstream_stop`, is why the upstream said its reply ended, in its own
 words (`stop`, `tool_calls`, `end_turn`, a Responses reply's
 `completed`), empty when it said none. A request's row on the Requests
@@ -669,6 +672,7 @@ magpie gateway-key remove <id>         # revokes remote access
 magpie gateway-key limit <id> week --tokens 2m --cost 5   # its own limit
 magpie gateway-key limit <id> list     # each limit, used, left and reset
 magpie gateway-key limit <id> 10d --tokens 5m   # every 10 days, from now
+magpie gateway-key limit <id> total --cost 300  # $300 in total, until reset
 magpie gateway-key limit <id> 5h --tokens 200k  # every 5 hours, from now
 magpie gateway-key limit <id> add week --cost 20   # one more limit; all must pass
 magpie gateway-key limit <id> add month --cost 20 --model openai/*   # a limit of only OpenAI's models
@@ -686,13 +690,17 @@ magpie gateway-key groups set Work codex/me@example.com   # every key naming Wor
 magpie gateway-key mcp <id> github fs/read_file   # only these MCP servers and tools
 magpie gateway-key mcp <id> none        # no MCP server (all: every one)
 magpie gateway-key quotas <id> on      # told the quotas of what it may use
+magpie gateway-key admin <id> local     # may manage magpie through /v1/magpie/admin/, from this computer (any: from the network too; off)
 ```
 
 Each gateway key can have its own **limit**: a token total, an estimated
 cost in US$, or both, per day, week or month (calendar windows in local
 time: from midnight, from Monday, from the 1st), every N days (#1509;
 N from 1 to 3650) or every N hours (#2102; N from 1 to 8760, such as 5 for
-a subscription's 5-hour pace). An N-day or N-hour cycle starts when the
+a subscription's 5-hour pace), or **in total** (`total`, @Cyrus_4433 on X):
+a limit that never resets by the clock, counted from when it is set and
+started again only by **Reset usage** (`magpie gateway-key limit <id> total
+--cost 300`); its 429 says it stays refused until it is reset or raised. An N-day or N-hour cycle starts when the
 limit is set and runs N×24 or N hours, then the next one starts where it
 ended, so a restart, a time-zone change or a daylight-saving shift doesn't
 move it. Changing only
@@ -1025,6 +1033,22 @@ gateway calls on under mTLS (call the gateway's own port); there is no
 `.p12` for a browser yet (`openssl pkcs12 -export -in client.pem -inkey
 client-key.pem -out laptop.p12` makes one).
 
+**A self-signed certificate.** A Remote magpie, a provider of your own,
+or a preset pointed at a server of yours (Ollama or LM Studio on another
+computer behind `https://`), on a domain whose certificate this computer
+doesn't trust, such as a self-signed one, or one macOS calls "not
+standards compliant", can be trusted as it is (Zhangzhangi on X): Advanced → Server certificate → Trust
+its certificate… shows the certificate the server answers with, its
+SHA-256 fingerprint, names and dates. Check the fingerprint against the
+server's (`openssl x509 -in cert.pem -noout -fingerprint -sha256`) and
+Trust it. From then on that provider's own host is taken with that one
+certificate alone, its chain, name and dates unchecked, and any other
+certificate is refused; the editor says so in red. A certificate renewed
+later has to be trusted again. Verify it again takes the pin off. It is
+off by default and kept for that provider alone. A preset's own vendor
+addresses never take one: the row shows only for an `https://` address
+at a host the preset doesn't name.
+
 Caddy is the alternative that also gets the certificate for you: run
 `relay.example.com { reverse_proxy 127.0.0.1:3425 }` with sharing on and a
 gateway key per client. A proxy on this computer adds forwarding headers,
@@ -1064,7 +1088,11 @@ at `/v2/models`.
 Alibaba's Token Plan is sold in two places, each with its own `sk-sp-` key
 that only its own host takes: on the Qwen AI platform as `qwen-token-plan`
 (`token-plan.maas.qianwenaiapi.com`), and on Alibaba Cloud Bailian as
-`bailian-token-plan` (`token-plan.cn-beijing.maas.aliyuncs.com`). Both serve
+`bailian-token-plan` (`token-plan.cn-beijing.maas.aliyuncs.com`). Alibaba Cloud's international
+plan is `alibaba-token-plan` (`token-plan.ap-southeast-1.maas.aliyuncs.com`),
+and the two at aliyuncs.com show the plan's windows on the Usage page once the
+provider's editor is given the Alibaba Cloud account's AccessKey ID and Secret
+(the `sk-sp-` key cannot read them). All serve
 Chat Completions at `/compatible-mode/v1` and Anthropic Messages at
 `/apps/anthropic`, and carry the plans' documented text models for when the
 host lists none. Bailian's also answers its decision model,
@@ -1090,6 +1118,41 @@ default, `us-east-1`, `eu-central-1`, `ap-northeast-1`, `cn-hongkong` and
 `sk-sp-` keys), with the plan's documented text models. Both serve Chat
 Completions at `/compatible-mode/v1` and Anthropic Messages at
 `/apps/anthropic`.
+
+### Management API
+
+A script or a provisioning tool manages providers, accounts, gateway keys and
+account groups with no hand-edited file (ljayic on X). The routes are under
+`/v1/magpie/admin/` and are the app's own handlers, so a page and a script
+can't drift:
+
+| Route | What it does |
+| --- | --- |
+| `GET providers` | the Providers list, as the app shows it (keys masked) |
+| `POST provider/{action}` | `save`, `delete`, `on`, `off`, `name`, `efforts`, `images`, `arrange`, `route`, `affinity`, `sink`, `usefirst`, `test`, `models`, `list`, and each key's or account's setting (`accountcap`, `accountname`, `windowcap`, `accountweight`, `keyspendcap`, `keyexpiring`, …) |
+| `POST keys/{action}`, `POST login/{action}`, `GET login/usage` | a provider's keys, and its signed-in accounts |
+| `POST signin` `{"agent": …}`, `GET signin/{id}`, `POST signin/{id}/cancel`, `POST signin/{id}/callback` | OAuth sign-in: the answer holds the vendor's page and the code to type there. Nothing is opened on this computer and no password is taken |
+| `GET gateway-keys[/models\|/mcp]`, `POST gateway-keys/{action}` | gateway keys: `add-key`, `rename-key`, `rotate-key`, `limit-key`, `models-key`, `accounts-key`, `mcp-key`, `access-key`, `on-key`, `off-key`, `remove-key`, … |
+| `GET account-groups`, `POST account-groups/{action}` | named account groups |
+
+Bodies are the app's own JSON. A route or action not listed is a 404. Never
+served: a provider's saved key, a gateway key's secret after its `add-key` or
+`rotate-key` answer, exporting sign-ins, and what changes this computer's
+other apps (moving, showing, restarting).
+
+Who may call it: a gateway key set with `magpie gateway-key admin <id>
+local|any`. `local` is from this computer only; `any` also from the network
+when sharing is on. Only a key the user made can have it: a read-only,
+Magpie Browser, issued or expiring key, and the default sharing key, can't,
+and the API can't set the level on any key, so it can't raise its own
+caller. A request with no key is 401, a key without the level 403
+(`gateway_key_not_admin`). Browsers never call it, with or without a key:
+any request with `Origin` (`null`, a foreign page, a listed page or
+`*.localhost` among them) or `Sec-Fetch-*` is 403, and so is one that
+reached loopback under another name (a rebound page's GET has neither).
+Answers are `Cache-Control: no-store`. This first part leaves out Routing
+Groups (the Routing page) and the import and export of sign-ins; they are
+tracked in [#6307](https://github.com/yetone/magpie/issues/6307).
 
 ### Embeddings and rerank
 
@@ -1931,6 +1994,7 @@ magpie model api relay/claude-opus-5-5 relay/claude-sonnet-5 anthropic   # sever
 magpie model api relay/gpt-5.5 --reset                          # auto again: the vendor's list and every URL
 magpie model apis                                               # the models you set an API for
 magpie model apis relay                                         # each of relay's models and its API
+magpie model tier relay/gpt-5.5 ultrafast                      # fast, ultrafast or usual: the speed every request for it is sent at
 ```
 
 It is saved as the editor's Save saves it (`provider.SetModelPrefs`, into
@@ -3242,6 +3306,17 @@ magpie update --mirror https://mirror.example/
 No mirror is used unless you give one, and the SHA-256 every download is
 checked against still comes from usemagpie.ai, never from the mirror.
 
+On a network that lets github.com through and not usemagpie.ai (a company
+allow list), the app and `magpie update` need no setting: when the feed
+fails, the newest release is read from `yetone/magpie-releases` itself
+(`api.github.com/repos/yetone/magpie-releases/releases/latest`, or the
+release page's redirect when the API is rate-limited), with its
+`SHA256SUMS` and `SHA256SUMS.sig` from github.com. They go through the same
+check as the feed's: the ed25519 signature against the key built into the
+binary, the version in the signed message, each file's hash from the signed
+list. A release read this way must be signed whatever its version. The
+Stable channel and a `MAGPIE_UPDATE_FEED` of your own don't fall back.
+
 Release files are downloaded from usemagpie.ai's copy on Cloudflare R2
 (`usemagpie.ai/files/<tag>/<file>`). Every five minutes the site copies the
 newest release and the Stable one from GitHub into R2, which takes a file
@@ -3270,6 +3345,36 @@ downloads a new version in the background and installs it when you restart
 (*Restart to Update* in the menu) or quit; `magpie update` does the same from
 a terminal. Every release is on
 [yetone/magpie-releases](https://github.com/yetone/magpie-releases/releases).
+
+### Signed releases
+
+usemagpie.ai's feed only carries a release; it is not what magpie trusts. From
+v0.1.3862 on, release CI in `yetone/magpie-releases` signs each release's
+`SHA256SUMS` with an ed25519 key and publishes the signature as
+`SHA256SUMS.sig` (base64). The signed text is the line `magpie release
+<version>` followed by `SHA256SUMS`, so a signature is good for one version
+only. The private key is the `UPDATE_SIGNING_KEY` secret of
+`yetone/magpie-releases`, nowhere else. The public key is built into magpie
+(`internal/update/signed.go`).
+
+The feed hands the app that `SHA256SUMS` and signature (`signed`). The app
+checks the signature against its key, takes every file's SHA-256 from the
+signed list, and refuses the update when the signature is missing or does not
+match, or when the feed's own hash for a file differs from the signed one.
+That holds for the Mac app, `magpie update`, the background update and the
+Windows and Linux builds alike, so a changed feed, a mirror or a proxy can no
+longer swap a file together with its hash. On the Mac the new app's signing
+team is still checked too.
+
+Transition: a magpie that has the key refuses any release at or above
+v0.1.3862 that is not signed. Releases below it were never signed, and a
+magpie older than the key (it ignores `signed`) still updates by the feed's
+SHA-256 as before, so nobody is cut off; the first update that lands on a
+signed release is trusted that way once, and every one after it is verified.
+`MAGPIE_UPDATE_FEED`, which points updates at a server of your own for
+testing, lifts the requirement (a signature the server does give is still
+checked). `install.sh` does not verify the signature: its first download is
+trusted to the site over HTTPS and the SHA-256 the site gives.
 
 ### Update channel
 
@@ -3733,6 +3838,7 @@ magpie settings get usageAlert
 magpie settings set noBird on   # checked and saved as the window saves it
 magpie settings set redactWords acme,globex
 magpie settings reset theme     # back to its default
+magpie settings set dayStart 4   # a day starts at 4:00 (0 to 6): the Usage page and daily and monthly key caps cut days there; the Sessions page does not yet
 
 magpie quota                    # what is left of every subscription, plan and key balance
 magpie quota refresh codex      # read Codex's cards again now (once per 30s)

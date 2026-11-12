@@ -361,6 +361,23 @@ card's "Show … accounts" button keeps its room but is hidden and inert, so
 the strip stays where it was. A menu bar cell asking for one of the
 accounts unfolds them (`focusQuotaCard`). See `usage-all-fold.test.cjs`.
 
+The Usage page's allowances are cards, or a table when the reader picks
+Table in the Allowances head (`#quotaView`; zysicyj on X: a dozen-plus
+accounts were hard to scan as cards). The pick is kept in localStorage
+`magpie.quotaView` on this computer and nothing is written until it is
+made, so the default stays cards. The table (`quotaTable` in
+`quotatable.js`, which app.js imports once it is picked) has a row per
+account in the cards' order, so what the cards hide or merge is hidden or
+merged here too, with the subscription, the account, the four windows most
+accounts have (each as its used or left share, a bar and when it resets,
+from the same `quotaFill` and `quotaText` as the cards, so Used/Left turns
+both) and the rest of an account's windows in a last column; a failed read
+and a balance say so across the windows. A head sorts by it (most used first
+for a window, A first for a name), again the other way, a third time back
+to the cards' order; accounts with nothing in that column stay last. It
+scrolls in its own box at a narrow width, the subscription held at the left.
+See `usage-quota-table.test.cjs`.
+
 ### The Sessions page's folders
 
 The Sessions page lists an agent's project folders as one list, newest
@@ -811,6 +828,25 @@ that one keeps serving the agents and the Quit goes on).
   Ask before quitting (`#quitAskRow`, the app's only) shows it as On/Off
   and saves `quitNoAsk` through `POST /api/settings`, which keeps it when a
   page doesn't send it.
+- Put agents back when quitting (tudjam17795 on X: after magpie quits,
+  the harness it was connected to can't go on) is Settings › General ›
+  `#restoreQuitRow`, the app's only, Off by default: a connected agent
+  keeps magpie as it quits, which is what this page's question names. On
+  (`settings.RestoreOnQuit`, `restoreOnQuit`), `OnShutdown` runs
+  `agent.RestoreOnQuit` over the agents with magpie in their config
+  (`restoreAgentsOnQuit`), only when this process serves the gateway: each
+  agent's own `Disconnect`, so its files come back as they were before
+  magpie, `*.before-magpie` byte for byte. Unlike the Disconnect button it
+  leaves no `.disconnected` mark, and it records the ids it put back in the
+  stash (`quit.restored`). The next start (`rewireAgentsOnStart`, unless
+  the gateway is paused) connects exactly those again
+  (`agent.RewireOnStart`, once: the record is taken out first), skipping
+  one the user disconnected meanwhile (the mark) or connected by hand. An
+  agent the user disconnected before the quit is neither touched nor
+  connected again. `quitAtOnce` quits without asking while it is on, as
+  nothing is left to cut off. `TestRestoreOnQuitAndRewireOnStart`,
+  `TestRestoreOnQuitLeavesUserDisconnected`, `TestRestoreAgentsOnQuit`,
+  `TestRestoreOnQuitKeptUnlessSent` and `restore-on-quit.test.cjs`.
 - Not asked: a restart to update, Uninstall, a browser's page (`magpie
   web`), logging out or shutting down, and the Dock's Quit (AppKit's
   `terminate:`).
@@ -854,6 +890,27 @@ page's Resume gateway, all through `POST /api/gateway/pause {"on": bool}`
 See `TestGatewayPauseAndResume`, `TestGatewayPauseRollsBack`,
 `TestGatewayResumesOnWire`, `TestGatewayPauseFileUnreadable`,
 `TestTrayMenuLabels` and `gateway-pause.test.cjs`.
+
+### The Update pill waits until it is news
+
+A release comes every few minutes, so a newer one is nearly always out and
+downloaded, and a pill lit for each was never out (certhon520, jkd6688,
+Yuyuaneth and milianxinqi on X, 11-12). The header's Update pill (window and
+tray panel alike) lights only when `/api/update` has no `quiet`:
+this version has been behind for `update.Quiet` (3 days, the Stable
+channel's soak), counted from the first newer version seen and kept across
+restarts in `update-behind.json` (`update.Behind`, for the version running,
+so an update starts it over), or an urgent release is out (a line starting
+"**Urgent release:**" in the latest's notes, or in any release between this
+one and it, `urgentBetween`). An urgent release lights the pill at once and
+a dismissal does not hide it. Dismissing with the × hides that version and
+starts the quiet over (`quietAgain`), so the pill is not back with the next
+release. The pill waiting changes nothing else: Settings › Version, the
+tray's Restart to update, quitting and Restart automatically work at any
+time. Plugin updates have their own dot on Plugins, which lights only for
+a plugin that does not update by itself. See `TestPillWaitsForTheQuiet`,
+`TestUrgentLightsThePillAtOnce`, `TestDismissalStartsTheQuietOver`,
+`TestUpdateQuietUntilBehindAWhile` and `update-quiet.test.cjs`.
 
 ### A restart to update hands the gateway over
 
@@ -1209,3 +1266,5 @@ still follows the existing Not set up folding rules. The dialog explains that
 restoring visibility does not pin an unconfigured agent into the main list.
 See `agent-bulk-visibility.test.cjs` for persistence, partial selection, failed
 saves, narrow layouts and all five languages in Chromium and WebKit.
+
+- A gateway port another program holds names that program (pluoki on X). `gateway.NoteHeld` reads the holder with `proc.PortHolder` (lsof on the Mac, /proc on Linux, Get-NetTCPConnection on Windows) and, when the daemon is root's and unreadable, falls back to `tailscale serve status --json` for the port. Tailscale's line carries `tailscale serve --https=<other> http://127.0.0.1:<port>`. The sentence (`PortHeld.Sentence`) goes to the `magpie serve` standby line and bind error, the app's log, `gatewayHeld` in `/api/state` (Gateway page) and Start's `taken` answer. A holder that can't be read says nothing, and the old wording stands. Nothing is killed or touched. See `TestWhoHolds`, `TestListenErrorNamesTheHolder`, `TestPortHolderNamesTheProgram` and `gateway-port-holder.test.cjs`.

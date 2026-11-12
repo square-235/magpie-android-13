@@ -411,6 +411,7 @@ func Run(version string, showMain bool, link string) error {
 	var gw *gateway.Server
 	if ownPage {
 		gw = startBackend()
+		go rewireAgentsOnStart()
 		handler = Handler(h, gw)
 	}
 	// Linux: the magpie before holds the app's D-Bus name until it quits,
@@ -422,6 +423,7 @@ func Run(version string, showMain bool, link string) error {
 	// a quiet start joins the Dock once started (below): Wails activates
 	// an app that starts in it
 	policy := dockPolicy(settings.Load().Dock && !quiet)
+	webView2Prepare()
 	h.app = application.New(application.Options{
 		// Windows and Linux start a new process for a magpie:// link (or a
 		// second launch); it hands its arguments to the running one and quits.
@@ -469,10 +471,11 @@ func Run(version string, showMain bool, link string) error {
 			// Codex's own, for the threads no Codex has open: with magpie
 			// gone they still go on (LukeMa on X)
 			agent.PortCodexRollouts(3 * time.Second)
+			restoreAgentsOnQuit()
 			updates.install(false)
 		},
 		// Wails exits on some webview errors; say why before it does.
-		ErrorHandler: func(err error) { log.Println("magpie:", err) },
+		ErrorHandler: func(err error) { webView2Failed(h.app, err) },
 	})
 	// Windows without the WebView2 runtime can make no window: Wails would
 	// exit on the first, with nothing on screen to say why (#1806). The
@@ -704,7 +707,13 @@ func Run(version string, showMain bool, link string) error {
 		h.main.OnWindowEvent(events.Windows.WebViewNavigationCompleted, func(*application.WindowEvent) { markReady() })
 	} else {
 		h.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-			plainTitlebar(h.main) // Linux: the page's header is the title bar; the Mac: a plain one's corners
+			if runtime.GOOS != "darwin" {
+				plainTitlebar(h.main) // Linux: the page's header is the title bar
+			}
+			// The Mac's is done as the window is first shown (reveal): it
+			// makes a window of its own (toolbarRounder), which deadlocks the
+			// main thread while a hidden background launch (an update's
+			// relaunch) is still inside FBSWorkspaceScenesClient on macOS 26.
 			nameWindow(h.panel, panelTitle)
 			ownFrame(h.panel) // KDE: no title bar of KWin's on it (#1283)
 			markReady()
