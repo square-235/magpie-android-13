@@ -401,6 +401,8 @@ type AgentView struct {
 	ProjectSkills string `json:"projectSkills,omitempty"`
 	// ProjectMCP is the file, in a project, it reads MCP servers from
 	ProjectMCP string `json:"projectMCP,omitempty"`
+	// ProjectSubagents is the folder in a project it reads subagents from
+	ProjectSubagents string `json:"projectSubagents,omitempty"`
 	// ProjectNoSSE: its project file can't take a server over SSE
 	ProjectNoSSE bool `json:"projectNoSSE,omitempty"`
 	// ProjectOff and ProjectSkillOff: a server, or a skill, it has from
@@ -429,7 +431,8 @@ type AgentView struct {
 	Hub string `json:"hub,omitempty"`
 	// SkillRouter, with the skill router on, is "on" for an agent whose
 	// skills folder is given magpie-skills, or why it keeps each skill's
-	// own link (routerWhy): copies, liveagent, shared, taken or own
+	// own link (routerWhy): copies, liveagent, shared, taken or own; or
+	// "none" for an agent whose folder takes it and has no skill to list
 	SkillRouter string `json:"skillRouter,omitempty"`
 	// How is the way it is given its skills, link or copy, and HowOwn its
 	// own over the library's; MustCopy is one that can only take copies
@@ -623,7 +626,7 @@ func readView(problems []Problem, glance bool) (*View, error) {
 	v := &View{Agents: []AgentView{}, Servers: []ServerView{}, Skills: []SkillView{}, FoundSkills: []FoundSkill{}, Instructions: l.instructionsView(targets, asleep), Dir: Dir(), Backups: BackupDir(), CopySkills: l.CopySkills, SharedSkills: l.SharedSkills, SharedDir: sharedSkillsDir(), MCPHub: l.MCPHub, SkillRouter: l.SkillRouter, HubPath: gateway.HubMCPPath, HubNote: settings.Shared().RouterNote, HubName: gateway.HostName(), HubAllTools: settings.Shared().RouterAllTools, Partial: glance}
 	for _, t := range targets {
 		av := AgentView{ID: t.Agent.ID, Name: t.Agent.Name, Icon: t.Agent.Icon, Instructions: t.Instructions, Skills: t.Skills,
-			SkillsAlso: t.SkillsAlso, Note: t.Note, MCPVia: t.MCPVia, ProjectSkills: ProjectSkillsDir(t.Agent.ID), ProjectMCP: ProjectMCPFile(t.Agent.ID),
+			SkillsAlso: t.SkillsAlso, Note: t.Note, MCPVia: t.MCPVia, ProjectSkills: ProjectSkillsDir(t.Agent.ID), ProjectMCP: ProjectMCPFile(t.Agent.ID), ProjectSubagents: ProjectSubagentsDir(t.Agent.ID),
 			ProjectOff: slices.Contains(projectOffAgents, t.Agent.ID), ProjectSkillOff: slices.Contains(projectSkillOffAgents, t.Agent.ID),
 			ProjectNoSSE: ProjectNoSSE(t.Agent.ID)}
 		if t.Skills != "" {
@@ -636,6 +639,10 @@ func readView(problems []Problem, glance bool) (*View, error) {
 				av.SkillRouter = "on"
 				if why := l.routerWhy(t, av.How == HowCopy); why != "" {
 					av.SkillRouter = why
+				} else if a := l.Applied[t.Agent.ID]; !t.Gone && (a == nil || !a.Router) {
+					// the folder takes it, yet no skill is listed there:
+					// none is ticked for the agent, or each is kept direct
+					av.SkillRouter = routerNone
 				}
 			}
 		}

@@ -207,6 +207,10 @@ type Provider struct {
 	// sync's copy of the provider on the other computer points at a
 	// magpie that is not that one (hanslin1666 on Discord).
 	KeepSelf bool `json:"keepSelf,omitempty"`
+	// ThisDevice keeps the provider on this computer: sync never sends it
+	// out, and what another computer's sync brings neither replaces nor
+	// removes it. For a local model that exists only here (treydtw on X).
+	ThisDevice bool `json:"thisDevice,omitempty"`
 
 	// MaxConcurrency is how many requests may be out at the vendor at once
 	// on each of its keys or accounts (Discord, Lemon: a Codex account is
@@ -509,6 +513,19 @@ type Provider struct {
 	// usual. Taken where TakesClientCert is; see Via and PeekServerCert.
 	ServerPin string `json:"serverPin,omitempty"`
 
+	// Resolve connects a host name of the provider's own base URLs to
+	// the places listed, as curl's --resolve does (quantum_lsfc on X: a
+	// managed network sends some domains to an internal L4 SNI gateway,
+	// an IP in the base URL fails, and /etc/hosts can't be edited): only
+	// the TCP connection moves, the URL's name stays for TLS and Host. A
+	// place is an IP address (with a port if it has its own) or
+	// "dns:<name>", looked up at each connection; they are tried in
+	// order, and when none connects the name is dialled as usual. Not
+	// used through a proxy, which connects to the name itself. Taken where
+	// TakesResolve is; a plugin's requests are made by its host, which has
+	// no way to be told. See netproxy.WithResolve and CheckResolve.
+	Resolve map[string][]string `json:"resolve,omitempty"`
+
 	// Proxy is the proxy magpie's requests to this provider go through
 	// (#237: Codex through one, a vendor at home without): "" follows
 	// the global one (Settings' Proxy, the environment's, the system's),
@@ -575,6 +592,11 @@ type Provider struct {
 	// key's card shows it less what magpie priced its calls at since
 	// (see key_balance_own.go).
 	KeyOwnBalances map[string]OwnBalance `json:"keyOwnBalances,omitempty"`
+	// KeyPriceRates is, for a provider of API keys, the price rate of each
+	// key that bills at its own (@tnt12231 on X: one relay, keys in groups
+	// at 0.5× and 1.2×), by its KeyID. A key not in it bills at PriceRate
+	// (see key_rate.go).
+	KeyPriceRates map[string]float64 `json:"keyPriceRates,omitempty"`
 
 	// BalanceURL, when set, is where the vendor tells what is left on a
 	// key, asked with the key the way a chat request carries it; BalancePath
@@ -917,6 +939,8 @@ func store(f file) error {
 	pruneIcons(f)
 	// what agents were handed of the catalog may be out of date now
 	catalog.Touched()
+	// and a request waiting to ask a provider again asks it as saved now
+	editedNow()
 	return nil
 }
 
@@ -980,6 +1004,7 @@ func (p Provider) clone() Provider {
 	p.AccountNames = maps.Clone(p.AccountNames)
 	p.KeySpendCaps = maps.Clone(p.KeySpendCaps)
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
+	p.KeyPriceRates = maps.Clone(p.KeyPriceRates)
 	if p.AccountWindowCaps != nil {
 		m := make(map[string]map[string]int, len(p.AccountWindowCaps))
 		for k, v := range p.AccountWindowCaps {
@@ -1303,6 +1328,16 @@ func Save(p Provider) error {
 		}
 		if p.InsecureTLS && !p.TakesInsecureTLS() {
 			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
+		}
+		if len(p.Resolve) > 0 {
+			if !p.TakesResolve() {
+				return fmt.Errorf("%s: a connect address is only for a provider you added with a base URL of its own, or a preset you pointed at your own server", p.ID)
+			}
+			r, err := netproxy.CheckResolve(p.Resolve)
+			if err != nil {
+				return fmt.Errorf("%s: %w", p.ID, err)
+			}
+			p.Resolve = r
 		}
 		if p.HTTP1 && !p.TakesInsecureTLS() {
 			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can be held to HTTP/1.1", p.Name)
@@ -1834,6 +1869,7 @@ func normalize(p Provider) Provider {
 	p.AccountNames = normalAccountNames(p.AccountNames)
 	p.KeySpendCaps = normalKeySpendCaps(p.KeySpendCaps)
 	p.KeyOwnBalances = normalKeyOwnBalances(p.KeyOwnBalances)
+	p.KeyPriceRates = normalKeyPriceRates(p.KeyPriceRates)
 	if len(p.Models) > 0 {
 		p.NoModels = false // a pick is no longer Select none
 	}
@@ -1861,10 +1897,9 @@ func normalize(p Provider) Provider {
 	}
 	p.remoteMagpieEndpoints()
 	for _, u := range []*string{&p.Chat, &p.Responses, &p.Anthropic, &p.Gemini, &p.Decide, &p.Website, &p.KeysURL} {
-		*u = strings.TrimRight(strings.TrimSpace(*u), "/")
-		if *u != "" && !strings.Contains(*u, "://") {
-			*u = "https://" + *u
-		}
+		// a scheme already there stays (WithScheme), whatever its case; one
+		// saved twice by an older editor is one again
+		*u = strings.TrimRight(WithScheme(*u, "https"), "/")
 	}
 	// the Anthropic base is the root /v1/messages is asked at: one given as
 	// .../v1 or .../v1/messages, as vendors' docs often show it, would have
@@ -2152,7 +2187,7 @@ func (p Provider) Base(proto Protocol) string {
 		if p.IsVertex() {
 			return p.vertexBase()
 		}
-		return p.Gemini
+		return GeminiAsked(p.Gemini)
 	}
 	return ""
 }

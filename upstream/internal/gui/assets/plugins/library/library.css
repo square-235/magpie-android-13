@@ -282,6 +282,8 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 
 /* an agent's instructions, opened */
 .lib-detail { padding: 4px 14px 14px 50px; background: var(--card-2); display: flex; flex-direction: column; gap: 8px; border-top: 0 !important; animation: content-in .2s var(--ease); }
+/* open before the render that drew it again: no second entrance */
+.lib-detail.kept { animation: none; }
 .lib-lab { font-size: 11.5px; color: var(--muted); }
 .lib-detail .lib-aside { margin: 0; }
 .lib-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -358,13 +360,13 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
    it never move. The cards are dealt out one after another, the one with
    the furthest to go first, so none passes over another, and go back
    together, quicker. Transform stays free for the press. */
-.lib-row > .lib-agents .lib-ag[data-agent] { translate: calc(var(--k, 0) * (var(--lib-fan) - var(--lib-stack))) 0; }
-.lib-row > .lib-agents:hover .lib-ag[data-agent], .lib-row > .lib-agents:focus-within .lib-ag[data-agent] { translate: 0 0; transition-delay: 0s, 0s, 0s, 0s, 0s, calc((var(--lib-agent-count, 1) - 1 - var(--k, 0)) * var(--lib-step)); }
+.lib-row > .lib-agents .lib-ag[data-agent], .lib-row > .lib-agents .lib-ag[data-members] { translate: calc(var(--k, 0) * (var(--lib-fan) - var(--lib-stack))) 0; }
+.lib-row > .lib-agents:hover .lib-ag[data-agent], .lib-row > .lib-agents:focus-within .lib-ag[data-agent], .lib-row > .lib-agents:hover .lib-ag[data-members], .lib-row > .lib-agents:focus-within .lib-ag[data-members] { translate: 0 0; transition-delay: 0s, 0s, 0s, 0s, 0s, calc((var(--lib-agent-count, 1) - 1 - var(--k, 0)) * var(--lib-step)); }
 .lib-row > .lib-agents .lib-ag { flex: none; width: 24px; min-width: 0; height: 24px; padding: 0 0 0 4px; justify-content: flex-start; background: var(--card); border-color: var(--line-2); box-shadow: none; transition: background .14s, border-color .14s, transform .14s var(--ease), outline-color .2s, box-shadow .2s, translate .22s cubic-bezier(.32, .72, 0, 1); }
 .lib-row > .lib-agents:hover .lib-ag, .lib-row > .lib-agents:focus-within .lib-ag { transition-duration: .14s, .14s, .14s, .2s, .2s, .3s; transition-timing-function: ease, ease, var(--ease), ease, ease, cubic-bezier(.23, 1, .32, 1); }
 .lib-row > .lib-agents { --lib-step: min(16ms, calc(120ms / max(1, var(--lib-agent-count, 1) - 1))); }
 @media (prefers-reduced-motion: reduce) {
-  .lib-row > .lib-agents .lib-ag[data-agent], .lib-row > .lib-agents:hover .lib-ag[data-agent], .lib-row > .lib-agents:focus-within .lib-ag[data-agent] { transition-duration: .14s, .14s, .14s, .2s, .2s, 0s; transition-delay: 0s; }
+  .lib-row > .lib-agents .lib-ag[data-agent], .lib-row > .lib-agents:hover .lib-ag[data-agent], .lib-row > .lib-agents:focus-within .lib-ag[data-agent], .lib-row > .lib-agents .lib-ag[data-members], .lib-row > .lib-agents:hover .lib-ag[data-members], .lib-row > .lib-agents:focus-within .lib-ag[data-members] { transition-duration: .14s, .14s, .14s, .2s, .2s, 0s; transition-delay: 0s; }
 }
 .lib-row > .lib-agents .lib-ag .ic { width: 14px; height: 14px; }
 /* the ring in the card's colour that cuts each chip out of the one under
@@ -474,6 +476,8 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-pair input:first-child { flex: .8; }
 .lib-x { width: 24px; height: 24px; padding: 0; display: inline-grid; place-items: center; flex: none; }
 .lib-addpair { padding-left: 0; }
+.lib-cmdbox { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; }
+.lib-cmdbox .lib-cmd { width: 100%; }
 .lib-addpair:hover { background: none; }
 .lib-editor .lib-picks { grid-column: 1 / -1; max-height: 320px; }
 .lib-editor .lib-keep { grid-column: 1 / -1; margin: 0 -6px; }
@@ -796,6 +800,10 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-plugin > .who { flex-basis: 240px; }
 .lib-plugin.off .name, .lib-plugin.off .lib-subagentdesc { opacity: .55; }
 .lib-plugin .lib-plparts, .lib-plpick .lib-plparts { white-space: normal; overflow-wrap: anywhere; }
+.lib-pldetail > :is(p, details, .hint), .lib-pldetail .ebody > :is(p, details, .hint) { grid-column: 1 / -1; margin: 0; }
+.lib-pldetail p { font-size: 12.5px; line-height: 1.5; }
+.lib-pldetail .lib-plgroup > summary { cursor: pointer; font-size: 12.5px; color: var(--fg-2); }
+.lib-pldetail .lib-plgroup .lib-plnames { margin-top: 4px; font-size: 12px; }
 .lib-pldetail .lib-plnames, .lib-pldetail .lib-plsource { white-space: normal; overflow-wrap: anywhere; }
 .lib-subagentedit .lib-menu { max-width: 100%; height: 28px; color: var(--fg); }
 .lib-subagentedit .lib-menu > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

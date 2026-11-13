@@ -74,6 +74,9 @@ type Asset struct {
 	// site's copy on R2): where a download goes on when URL fails, and
 	// what a mirror the user gave is put in front of.
 	GitHub string `json:"github,omitempty"`
+	// attest is set by Release.verify for a file of a release that carries
+	// GitHub build attestations (attest.go): download checks it.
+	attest bool
 }
 
 // client asks the feed and downloads a release through the proxy the rest
@@ -141,6 +144,9 @@ func LatestEvery(ctx context.Context, lang string) (*Release, error) {
 }
 
 func latestAt(ctx context.Context, feed, lang string) (*Release, error) {
+	if githubOnly() {
+		return githubLatest(ctx, lang)
+	}
 	if !fallsBack(ctx) {
 		return latestFrom(ctx, feed, lang)
 	}
@@ -1205,6 +1211,10 @@ func download(ctx context.Context, a Asset, path string) error {
 	if a.SHA256 == "" {
 		return errors.New("the release lists no checksum for " + filepath.Base(path))
 	}
+	// the attestation of the signed checksum, before the bytes are fetched
+	if err := attestedFile(ctx, a, filepath.Base(path)); err != nil {
+		return err
+	}
 	// a file left by an earlier run is no part of this one; one that can't
 	// go is said so here, not asked to go on from its end (416)
 	if err := clearFile(path); err != nil {
@@ -1220,6 +1230,16 @@ func download(ctx context.Context, a Asset, path string) error {
 	on, viaAPI := a, false
 	toGitHub := a.GitHub != "" && a.GitHub != a.URL
 	toAPI := mirrorOf(ctx) == ""
+	// Settings' update source (source.go): GitHub only starts at github.com
+	// and goes on to its API route; the site only goes to no other
+	switch Source() {
+	case settings.UpdateSourceGitHub:
+		if toGitHub {
+			on.URL, toGitHub = a.GitHub, false
+		}
+	case settings.UpdateSourceSite:
+		toGitHub, toAPI = false, false
+	}
 	var before []string // each route left, and how it failed
 	for try := 0; try <= len(retryWaits); try++ {
 		if try > 0 {

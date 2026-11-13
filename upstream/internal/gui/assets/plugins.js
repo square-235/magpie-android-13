@@ -641,10 +641,19 @@
     const h = el("div", "pm-sechead");
     h.append(el("h3", "", title));
     if (hint) h.append(el("span", "", hint));
-    const g = el("div", "pm-grid");
-    for (const l of list) g.append(card(l));
-    box.append(h, g);
+    box.append(h, cardGrid(list));
     return box;
+  }
+
+  // a long list draws only the rows near the view (plugingrid.js); until
+  // that has come, and for a short list, every card is drawn
+  let vg;
+  const vload = () => vload.p = vload.p || import("./plugingrid.js").then(() => vg = pmVirtualGrids(page, card, () => body, drawBody), () => {});
+  function cardGrid(list) {
+    const g = el("div", "pm-grid");
+    if (list.length >= vg?.min) return vg.grid(g, list);
+    for (const l of list) g.append(card(l));
+    return g;
   }
 
   // Discover is one market (#owner, 11-09): every plugin, whoever wrote
@@ -866,9 +875,7 @@
       more.onclick = () => { kindPick = k; drawBody(); page.scrollTo({ top: 0 }); };
       h.append(el("span", "grow"), more);
     }
-    const g = el("div", "pm-grid");
-    for (const l of list.slice(0, limit)) g.append(card(l));
-    box.append(h, g);
+    box.append(h, cardGrid(list.slice(0, limit)));
     return box;
   }
   function market(all) {
@@ -997,12 +1004,14 @@
 
   let body = null;
   function draw() {
+    vload();
     const scroll = page.scrollTop;
     // the body is made once, so the GitHub section's field stays in the page
     body = body || el("div", "lib-body pm-body");
     replaceKeeping(page, [head(), body]);
     drawBody();
     page.scrollTop = scroll;
+    vg?.now();
   }
 
   function drawBody() {
@@ -1037,6 +1046,7 @@
         import("./registry.js").then(() => pmRegistry(regBox, mine, askNPM), statusTErr);
       }
       replaceKeeping(body, out);
+      vg?.now();
       if (agentsFor && body.querySelector(".pm-agents")) {
         // after the view is put back where the reader was, as showing it
         // does; the section then is the one drawn last (npm's answers draw
@@ -1065,12 +1075,11 @@
     else {
       const list = hits.list.filter((x) => !known.has(x.package));
       if (!list.length) box.append(el("p", "pm-note", ls.length ? t("Nothing else on npm") : t("No plugin called “{q}”", { q: query.trim() })));
-      const g = el("div", "pm-grid");
-      for (const x of list) g.append(card({ package: x.package, name: x.package, npm: x }));
-      box.append(g);
+      box.append(cardGrid(list.map((x) => ({ package: x.package, name: x.package, npm: x }))));
     }
     out.push(box);
     replaceKeeping(body, out);
+    vg?.now();
   }
 
   // what a plugin is to the reader, and how one is written, under the list

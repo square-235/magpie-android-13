@@ -3,6 +3,7 @@ package edit
 import (
 	"maps"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -69,8 +70,10 @@ func dropTOMLParses() {
 // tomlAnswers, empty.
 type tomlAnswers struct {
 	sync.Mutex
-	top    map[string]tomlTop
-	tables map[string]map[string]string // nil for a table the file hasn't
+	top       map[string]tomlTop
+	tables    map[string]map[string]string // nil for a table the file hasn't
+	names     []string                     // TOMLTables' answer, once haveNames
+	haveNames bool
 }
 
 type tomlTop struct {
@@ -124,4 +127,46 @@ func (a *tomlAnswers) setTable(name string, t map[string]string) {
 		a.tables = map[string]map[string]string{}
 	}
 	a.tables[name] = maps.Clone(t)
+}
+
+// getNames is TOMLTables' kept answer, shared, so read only.
+func (a *tomlAnswers) getNames() ([]string, bool) {
+	a.Lock()
+	defer a.Unlock()
+	return a.names, a.haveNames
+}
+
+// setNames keeps a copy of names that holds no piece of the file's text.
+// The copies share one buffer: Codex's config.toml names ~11k tables, one
+// allocation each, rounded up to its size class, for as long as magpie
+// runs (#2278).
+func (a *tomlAnswers) setNames(names []string) {
+	var kept []string
+	if names != nil {
+		kept = packStrings(names)
+	}
+	a.Lock()
+	defer a.Unlock()
+	a.names, a.haveNames = kept, true
+}
+
+// packStrings copies ss into one buffer; the copies share nothing with ss.
+func packStrings(ss []string) []string {
+	n := 0
+	for _, s := range ss {
+		n += len(s)
+	}
+	var b strings.Builder
+	b.Grow(n)
+	for _, s := range ss {
+		b.WriteString(s)
+	}
+	all := b.String()
+	out := make([]string, len(ss))
+	off := 0
+	for i, s := range ss {
+		out[i] = all[off : off+len(s)]
+		off += len(s)
+	}
+	return out
 }

@@ -771,7 +771,17 @@ with the account that answered: Kimi Code's are the ones whose
 `usage.record`s in every agent's `wire.jsonl` under
 `$KIMI_CODE_HOME/sessions` (else `~/.kimi-code`), protocols 1.4 and 1.5;
 a fork repeats its parent's records, so each is keyed by agent, time,
-model and usage and counted once. Pi's and omp's calls are the session
+model and usage and counted once. The Kimi desktop app's Work (Daimon,
+which runs the Kimi Code runtime; CNSA0422 on X,
+[`kimi_work.go`](../../internal/sessions/kimi_work.go)) keeps the same
+files under `<share>/daimon/runtime/kimi-code/home/sessions`, its share
+being `kimi-desktop/daimon-share` in Electron's userData, the absolute
+`shareDir` of `daimon-storage.json` there, or `~/.kimi`; they count as
+Kimi Code's. A record's model there is Daimon's alias, read as its
+`model` in the runtime's `config.toml`, and a call whose alias's provider
+`base_url` is a loopback address (magpie's kimi-desktop plugin bridge) is
+the gateway's. That file is the current setting only
+(`TestKimiWorkCalls`). Pi's and omp's calls are the session
 files' assistant messages, and the calls beside them that Sessions counts
 too ("usage" and omp's "model_usage" entries, a compaction's, a branch
 summary's and a tool result's usage, on the model and provider in use);
@@ -1288,3 +1298,35 @@ row's model, usage, cost and kind.
 Compaction is already included in Codex's total consumption, so this marker
 does not add tokens or cost. This is Codex-only; Claude behavior and the POST
 `/v1/magpie/usage/requests` ingest allowlist are unchanged.
+
+### The request feed
+
+`GET /v1/magpie/usage/requests?cursor=` (#6060, rdsaltbo on X) reads the
+ledger as changes for a program keeping a ledger of its own. The contract is
+in [reference.md](../reference.md); the code is
+[`internal/usage/feed.go`](../../internal/usage/feed.go) (state and ids) and
+[`internal/usageapi/feed.go`](../../internal/usageapi/feed.go) (the shape).
+
+- **Ids.** `feedKey` makes a row's id from fields its record never mends
+  (time, route, session, the ids it carries), not from a name the user can
+  rename or a figure that is mended; `feedID` hashes it, with a count for two
+  identical lines. A native row is keyed by what the agent's file gave
+  (`Record.MessageID` comes from the call's `Msg` and is not persisted).
+  Adding a field to a key changes every id: don't.
+- **Changes.** Every read runs the whole-ledger `LedgerOfAt(All, …)` (memo
+  only for the next page of a read that had more), compares each id's
+  `feedVersion` (tokens, outcome, names; not the price) with the journal's,
+  and gives each new or changed id the next `seq`; an id no longer in the
+  ledger becomes a tombstone (a native row matched to a gateway row, a
+  clear). A native call a file brings late is just a new id.
+- **Journal.** `usage-feed.jsonl` next to `usage.jsonl`: a header (epoch,
+  floor, seq) and one appended, synced line per change, written before the
+  read answers so a cursor is never ahead of the file. A torn last line is
+  dropped; a bad line elsewhere is a new epoch (`cursor_reset`). Tombstones
+  older than `FeedKeep` (30 days) are dropped, the floor raised, and a cursor
+  under the floor is `cursor_expired`.
+- **Cost.** A read costs a ledger read; poll in minutes. Not tried: a very
+  long history (700k+ requests) on the first read, and the journal's size.
+- **Scope.** A cursor carries a fingerprint of its filter and key. A held key
+  sees its own rows and tombstones only. `TestUsageRequestsFeedOverGateway`
+  and the `TestFeed…` tests in `internal/usage/feed_test.go` guard these.
