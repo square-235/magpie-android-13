@@ -197,7 +197,7 @@ var presets = []PresetDef{
 		Website: "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models",
 		NoList:  true,
 		Models: []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-			"gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+			"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
 			"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 			"deepseek-ai/deepseek-v4.1-flash-maas", "zai-org/glm-5.2-maas", "openai/gpt-oss-120b-maas",
 			"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2", "claude-fable-5-1"},
@@ -252,14 +252,14 @@ var presets = []PresetDef{
 		Website: "https://platform.minimaxi.com", KeysURL: "https://platform.minimaxi.com/user-center/basic-information/interface-key"},
 	// a Step Plan is served at its own endpoints (step_plan/…), its key
 	// refused at the pay-as-you-go ones
-	{ID: "stepfun", Name: "StepFun", Icon: "stepfun-color", Kind: KindVendor, Catalog: "stepfun-ai-step-plan, stepfun-ai",
+	{ID: "stepfun", Name: "StepFun", Icon: "stepfun", Kind: KindVendor, Catalog: "stepfun-ai-step-plan, stepfun-ai",
 		Chat: "https://api.stepfun.ai/step_plan/v1", Anthropic: "https://api.stepfun.ai/step_plan",
 		Website: "https://platform.stepfun.ai", KeysURL: "https://platform.stepfun.ai/interface-key",
 		RegionLabel: "Plan", KeyPlans: true, Regions: []Region{
 			{ID: "plan", Name: "Step Plan", Chat: "https://api.stepfun.ai/step_plan/v1", Anthropic: "https://api.stepfun.ai/step_plan"},
 			{ID: "api", Name: "Pay as you go", Chat: "https://api.stepfun.ai/v1", Anthropic: "https://api.stepfun.ai"},
 		}},
-	{ID: "stepfun-cn", Name: "StepFun (China)", Icon: "stepfun-color", Kind: KindVendor, Catalog: "stepfun-step-plan, stepfun",
+	{ID: "stepfun-cn", Name: "StepFun (China)", Icon: "stepfun", Kind: KindVendor, Catalog: "stepfun-step-plan, stepfun",
 		Chat: "https://api.stepfun.com/step_plan/v1", Anthropic: "https://api.stepfun.com/step_plan",
 		Website: "https://platform.stepfun.com", KeysURL: "https://platform.stepfun.com/interface-key",
 		RegionLabel: "Plan", KeyPlans: true, Regions: []Region{
@@ -972,10 +972,22 @@ func (p *Provider) atRegionOf(pr *PresetDef, r Region) {
 }
 
 // IconForCatalog names the logo of the vendor behind a models.dev
-// provider id, or "" when no preset covers it.
+// provider id, or "" when no preset covers it. A preset names several
+// catalogs ("stepfun-ai-step-plan, stepfun-ai"), so an id is also found in
+// that list; a preset whose catalog is exactly the id comes first, so
+// Azure's "azure, openai" never gives OpenAI's models Azure's logo.
 func IconForCatalog(catalogID string) string {
+	if catalogID == "" {
+		return ""
+	}
 	for _, p := range presets {
 		if p.Catalog == catalogID || slices.ContainsFunc(p.Regions, func(r Region) bool { return r.Catalog == catalogID }) {
+			return p.Icon
+		}
+	}
+	for _, p := range presets {
+		if slices.Contains(Provider{Catalog: p.Catalog}.Catalogs(), catalogID) ||
+			slices.ContainsFunc(p.Regions, func(r Region) bool { return slices.Contains(Provider{Catalog: r.Catalog}.Catalogs(), catalogID) }) {
 			return p.Icon
 		}
 	}

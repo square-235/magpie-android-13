@@ -284,6 +284,12 @@ type Group struct {
 	// as the members change (Mikan on Discord), so the agent compacts
 	// before any member would turn the conversation away.
 	Context int `json:"context,omitempty"`
+	// Compact is where Codex and Claude Code compact a conversation on the
+	// group, in tokens (NovaStudiosss on X): over what its members' own
+	// thresholds (settings.ModelCompacts) and Long conversations say, so a
+	// group carries both its window (Context) and its compaction and no
+	// provider needs either set for it. 0 leaves it to those.
+	Compact int `json:"compact,omitempty"`
 	// Levels are the reasoning levels agents are offered for the group,
 	// lowest first, when the user names them (#295): rather than those
 	// every member has, so that a member with few doesn't take the rest
@@ -906,7 +912,7 @@ func AutoStandInFor(agent, id string) (string, bool) {
 		if AutoGroupOf(e.Provider.ID, e.Model) != gid {
 			continue
 		}
-		if ownAgent(e.Provider, agent) {
+		if ownAgent(*e.Provider, agent) {
 			return e.ID, true
 		}
 		if kept == "" && !slices.Contains(f.AutoGroupSkip, e.Provider.ID) {
@@ -1422,6 +1428,31 @@ func ResolveRoute(id string) (Provider, string, bool) {
 	return p, m, true
 }
 
+// Unpicked reports whether id, "provider/model", names a model the user
+// has since unchecked in that provider's list (unpicked), and which
+// provider: Resolve still takes it, so an agent left on it goes on asking
+// the vendor for the old model, while the user picked the provider's
+// others (JNDliuliuM on X: Codex CLI still on it after a restart).
+func Unpicked(id string) (pid string, ok bool) {
+	entries := providerEntries()
+	p, m, found := resolveIn(entries, ThroughSelf(strings.TrimSuffix(strings.TrimSpace(id), "[1m]")))
+	if !found {
+		return "", false
+	}
+	find := func(pid, model string) int {
+		for i := range entries {
+			if entries[i].Provider.ID == pid && entries[i].Model == model {
+				return i
+			}
+		}
+		return -1
+	}
+	if !unpicked(find, p, m) {
+		return "", false
+	}
+	return p.ID, true
+}
+
 // groupEntries are the catalog's groups: each with a member ready, named
 // as the user named it, answering for its first member when an agent asks
 // what the model can do, and reasoning when any member does — a member
@@ -1499,7 +1530,7 @@ func buildGroupEntries(entries []Entry) []Entry {
 		if len(ms) == 0 || DecisionGroup(ms) {
 			continue // a decision group answers System One, no agent's conversation
 		}
-		e := Entry{ID: g.Ref(), Model: ms[0].Model, Name: g.Name, Provider: ms[0].Provider, Group: g.ID, Named: !g.Auto}
+		e := Entry{ID: g.Ref(), Model: ms[0].Model, Name: g.Name, Provider: &ms[0].Provider, Group: g.ID, Named: !g.Auto}
 		var fixed []string // the efforts members are fixed at
 		levelled := false  // a member that follows the agent's effort was met
 		// Codex's ultra (max, with Codex handing parts of the task to agents
@@ -1813,6 +1844,7 @@ func SaveGroup(g Group) error {
 	if g.Context < 0 {
 		g.Context = ContextSmallest
 	}
+	g.Compact = max(g.Compact, 0)
 	// the members it names and its patterns, without what the patterns
 	// matched when it was read: those are found again below, and stored
 	// never

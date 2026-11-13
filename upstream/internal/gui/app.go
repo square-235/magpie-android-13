@@ -233,10 +233,11 @@ func (h *host) fitPanel(height int, g Glide) {
 		return
 	}
 	h.glides.Add(1)
-	h.panel.SetSize(h.panelW(), height)
 	if windowOpen(h.panel) {
-		_ = h.tray.PositionWindow(h.panel, 6)
+		h.sizeOpenPanel(h.panel, h.panelW(), height)
+		return
 	}
+	h.panel.SetSize(h.panelW(), height)
 }
 
 // zoom is the text size the pages are drawn at, as a factor.
@@ -302,10 +303,11 @@ func (h *host) zoomWindows() {
 		return
 	}
 	setPageZoom(h.panel, z)
-	h.panel.SetSize(w, ht)
 	if windowOpen(h.panel) {
-		_ = h.tray.PositionWindow(h.panel, 6)
+		h.sizeOpenPanel(h.panel, w, ht)
+		return
 	}
+	h.panel.SetSize(w, ht)
 }
 
 // windowsOptions are the app's Windows options. Portable, WebView2 keeps
@@ -515,8 +517,20 @@ func Run(version string, showMain bool, link string) error {
 		e.Cancel()
 	})
 
-	h.panel = h.makePanel()
-	h.main = h.makeMain("/?" + theme)
+	// The Mac's panel is made the first time it is opened (panelWin): made
+	// here, its page and WebContent process (~67 MB) sat hidden for as long
+	// as magpie ran, for a user who never opens it too. Elsewhere it is made
+	// now, as the made-again path hasn't been run in a real window there.
+	if !panelOnFirstOpen(runtime.GOOS) {
+		h.panel = h.makePanel()
+	}
+	// So is its main window, when magpie starts without it (at login,
+	// `magpie tray`, or for the panel): it is made by openMain when first
+	// shown, the way lightweight mode makes one again, and its page's
+	// WebContent process (~69 MB) isn't kept until then.
+	if !mainOnFirstOpen(runtime.GOOS, showMain) {
+		h.main = h.makeMain("/?" + theme)
+	}
 	onFonts = h.fontsChanged
 
 	// the menu in the page's language, relabelled when that changes (#301)
@@ -635,7 +649,9 @@ func Run(version string, showMain bool, link string) error {
 		})
 	}
 	h.tray.SetMenu(menu)
-	h.tray.AttachWindow(h.panel).WindowOffset(6)
+	if h.panel != nil { // one made later hangs itself on the icon (makePanel)
+		h.tray.AttachWindow(h.panel).WindowOffset(6)
+	}
 	// before Wails removes the item as the app quits, which would forget
 	// where the user put the icon (trayshown_darwin.go; nothing elsewhere)
 	h.app.OnShutdown(func() { keepTrayPlace() })
@@ -714,8 +730,10 @@ func Run(version string, showMain bool, link string) error {
 			// makes a window of its own (toolbarRounder), which deadlocks the
 			// main thread while a hidden background launch (an update's
 			// relaunch) is still inside FBSWorkspaceScenesClient on macOS 26.
-			nameWindow(h.panel, panelTitle)
-			ownFrame(h.panel) // KDE: no title bar of KWin's on it (#1283)
+			if h.panel != nil { // one made later is named as it is (madeAgain)
+				nameWindow(h.panel, panelTitle)
+				ownFrame(h.panel) // KDE: no title bar of KWin's on it (#1283)
+			}
 			markReady()
 		})
 	}
@@ -780,9 +798,8 @@ func singleInstance(h *host) *application.SingleInstanceOptions {
 	if runtime.GOOS == "darwin" || !sessionBus() {
 		return nil
 	}
-	sum := sha256.Sum256([]byte(settings.Dir()))
 	return &application.SingleInstanceOptions{
-		UniqueID: "ai.usemagpie.app.i" + hex.EncodeToString(sum[:6]),
+		UniqueID: instanceID(),
 		OnSecondInstanceLaunch: func(d application.SecondInstanceData) {
 			args := d.Args
 			if len(args) > 0 {
@@ -803,6 +820,12 @@ func singleInstance(h *host) *application.SingleInstanceOptions {
 			}
 		},
 	}
+}
+
+// instanceID is the single instance's id, the config dir's.
+func instanceID() string {
+	sum := sha256.Sum256([]byte(settings.Dir()))
+	return "ai.usemagpie.app.i" + hex.EncodeToString(sum[:6])
 }
 
 // flap plays trayFlap on the tray icon, a frame every 30ms as they were
