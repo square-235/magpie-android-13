@@ -105,6 +105,44 @@ type modelJSON struct {
 	// vendor's list's, else models.dev's, within Listed; Model settings'
 	// Max output shows it when none is set (sayagoodbyeplz on Discord)
 	ListedOutput int `json:"listedOutput,omitempty"` // absent when Output
+	// Keys are the ids of the provider's keys in use whose own list has
+	// the model, in the keys' order, when some of them don't (cliddO11 on
+	// X): absent when every key lists it. At most keysShown, with KeyCount
+	// how many there are when more.
+	Keys     []string `json:"keys,omitempty"`
+	KeyCount int      `json:"keyCount,omitempty"`
+}
+
+// keysShown is the most key ids a model of the editor names: past that the
+// editor says how many, and a provider of a thousand keys sends no list of
+// them with each model.
+const keysShown = 6
+
+// keysApart is which of on (the provider's keys in use, in order; at is
+// each one's place in it) listed a model, by listed (catalog.Model.Keys),
+// and how many: none when every one of them did or none did, or when on is
+// a single key.
+func keysApart(listed, on []string, at map[string]int) ([]string, int) {
+	if len(on) < 2 || len(listed) == 0 {
+		return nil, 0
+	}
+	idx := make([]int, 0, len(listed))
+	for _, id := range listed {
+		if i, ok := at[id]; ok {
+			idx = append(idx, i)
+		}
+	}
+	slices.Sort(idx)
+	idx = slices.Compact(idx)
+	if len(idx) == 0 || len(idx) == len(on) {
+		return nil, 0
+	}
+	n := len(idx)
+	ids := make([]string, 0, min(n, keysShown))
+	for _, i := range idx[:min(n, keysShown)] {
+		ids = append(ids, on[i])
+	}
+	return ids, n
 }
 
 type providerJSON struct {
@@ -281,6 +319,9 @@ type providerJSON struct {
 	// a StepFun provider's Step Plan windows, told only to a platform
 	// sign-in: which site's, and whether one is kept
 	StepPlan *stepPlanJSON `json:"stepPlan,omitempty"`
+	// a Qwen AI platform Token Plan's windows, told only to a sign-in on
+	// the platform: whether magpie has one, and whose
+	QianwenPlan *qianwenPlanJSON `json:"qianwenPlan,omitempty"`
 	// a Zhipu or Z.ai key's team, for a team's GLM Coding Plan (#236):
 	// set, if empty, for those providers alone, which the editor asks it of
 	ZhipuTeam *provider.ZhipuTeam `json:"zhipuTeam,omitempty"`
@@ -441,8 +482,12 @@ type providerJSON struct {
 	// (provider.HiddenVideomakers)
 	FilmIDs           []string `json:"filmIds,omitempty"`
 	HiddenVideomakers []string `json:"hiddenVideomakers,omitempty"`
-	Unlisted          bool     `json:"unlisted"` // its models serve only through routing groups
-	NoModels          bool     `json:"noModels"` // Select none: none of its models served (#1818)
+	// what the user said those image and video models make
+	// (provider.ModelKind), by id: they aren't among Models, whose kind is
+	// said there, and a chip's right-click starts from it (iceloon on X)
+	MediaKinds map[string]string `json:"mediaKinds,omitempty"`
+	Unlisted   bool              `json:"unlisted"` // its models serve only through routing groups
+	NoModels   bool              `json:"noModels"` // Select none: none of its models served (#1818)
 	// Best in family: with nothing picked, only the newest model of each
 	// family it lists is served (provider.Provider.BestInFamily)
 	BestInFamily bool `json:"bestInFamily"`
@@ -526,6 +571,13 @@ type stepPlanJSON struct {
 	SignedIn    bool   `json:"signedIn"`
 	URL         string `json:"url"`
 	Bookmarklet string `json:"bookmarklet"`
+}
+
+// qianwenPlanJSON: whether magpie has a sign-in to the Qwen AI platform
+// for the provider, and its account
+type qianwenPlanJSON struct {
+	SignedIn bool   `json:"signedIn"`
+	Account  string `json:"account,omitempty"`
 }
 
 type accountJSON struct {
@@ -971,6 +1023,9 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 	if site := provider.StepFunSite(p); site != "" {
 		out.StepPlan = &stepPlanJSON{site, provider.StepFunSignedIn(p.ID), provider.StepFunSignInURL(site), provider.StepFunBookmarklet()}
 	}
+	if provider.QianwenPlan(p) {
+		out.QianwenPlan = &qianwenPlanJSON{provider.QianwenSignedIn(p.ID), provider.QianwenAccount(p.ID)}
+	}
 	out.Key.Set = p.Key != ""
 	out.Key.Masked = provider.Mask(p.Key)
 	out.ProxyGone = provider.ProxyGone(p)
@@ -1112,6 +1167,17 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 	// each model's provider/model ref, made once: the settings' maps and
 	// every agent's hidden list are looked up by it
 	var refs []string
+	// the keys in use, whose lists say which model each has (fetchPerKey)
+	var onKeys []string
+	for _, k := range out.KeyList {
+		if k.On {
+			onKeys = append(onKeys, k.ID)
+		}
+	}
+	keyAt := make(map[string]int, len(onKeys))
+	for i, id := range onKeys {
+		keyAt[id] = i
+	}
 	named := func(m catalog.Model, on bool) modelJSON {
 		ref := p.ID + "/" + m.ID
 		refs = append(refs, ref)
@@ -1128,6 +1194,9 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		j := modelJSON{ID: m.ID, Name: m.Name, Efforts: provider.EffortsOf(m), On: on, Context: window, Output: provider.OutputWithin(window, p.ReplyLimitIn(m, set)), Listed: provider.ListedWindow(m), ListedOutput: provider.OutputWithin(provider.ListedWindow(m), p.ReplyLimitIn(m, settings.Settings{})), Max: m.MaxContext, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Images: images, ImageSet: imageSet, Own: own, Best: newest[m.ID], Inputs: mediaInputs(m.InputModalities)}
 		list, listed, free := pricer.Prices(set, m.ID)
 		j.Zero = !m.Free && free
+		if j.Keys, j.KeyCount = keysApart(m.Keys, onKeys, keyAt); j.KeyCount == len(j.Keys) {
+			j.KeyCount = 0
+		}
 		// a plugin reports a model's load by its own id, not one the user
 		// lists it by (axelburks on Discord)
 		ownID := p.OwnModelID(m.ID)
@@ -1309,6 +1378,14 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 			out.HiddenVideomakers = append(out.HiddenVideomakers, m.ID)
 		}
 	}
+	for _, id := range append(slices.Clone(out.DrawIDs), out.FilmIDs...) {
+		if k := p.ModelKind(id); k != "" {
+			if out.MediaKinds == nil {
+				out.MediaKinds = map[string]string{}
+			}
+			out.MediaKinds[id] = k
+		}
+	}
 	if t, ok := p.Listed(); ok {
 		out.Fetched = &t
 	}
@@ -1443,7 +1520,7 @@ func providersState() providersJSON {
 	}
 	cat, models := provider.CatalogGroups()
 	s.Gateway = gatewayJSON{URL: gateway.URL(), OnNetwork: gateway.OnNetwork(), Models: models, Calls: []gateway.Call{}, Groups: []gwGroupJSON{}}
-	s.Gateway.LAN = settings.Load().LAN || s.Gateway.OnNetwork
+	s.Gateway.LAN = settings.Shared().LAN || s.Gateway.OnNetwork
 	if s.Gateway.LAN {
 		s.Gateway.LANURLs = gateway.LANURLs()
 		s.Gateway.LANPublic = gateway.PublicURLs(s.Gateway.LANURLs)
@@ -1711,6 +1788,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			http.NotFound(rw, r)
 			return
 		}
+		if ctype == "" {
+			ctype = assetType(f)
+		}
 		if ctype != "" {
 			rw.Header().Set("Content-Type", ctype)
 		}
@@ -1888,6 +1968,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the provider's (#474)
 			Account string   `json:"account"`
 			Allow   []string `json:"allow"`
+			// AllKeys, for key: every key the provider holds, one a line,
+			// for Copy all keys (provider.AllKeys)
+			AllKeys bool `json:"allKeys"`
 			// Cap, for accountcap: the share (1–99) of its windows the
 			// account is used to at most, 0 for no cap; for windowcap, the
 			// share of Window alone (1–99, 100 for none on it), 0 to have
@@ -2602,7 +2685,18 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the saved key, for the editor's Show button; it never
 			// leaves this machine (the panel is served on loopback).
 			// With Account, the key of that id: each of several keys'
-			// rows copies its own (#1480).
+			// rows copies its own (#1480). With AllKeys, every one of
+			// them, one a line, as Paste several takes them in another
+			// magpie (@emilochen on X); never logged.
+			if req.AllKeys {
+				keys, err := provider.AllKeys(in.ID)
+				if err != nil {
+					fail(rw, err)
+					return
+				}
+				writeJSON(rw, map[string]any{"key": strings.Join(keys, "\n"), "count": len(keys)})
+				return
+			}
 			if req.Account != "" {
 				k, err := provider.KeyOf(in.ID, req.Account)
 				if err != nil {
@@ -3490,6 +3584,62 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		if err := provider.SignOutStepFun(id); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeProvidersJSON(rw, providersState())
+	})
+	// the Qwen AI platform's Token Plan windows: a sign-in to the
+	// platform, approved in the user's browser, the provider's own
+	qianwenOf := func(rw http.ResponseWriter, r *http.Request) (string, bool) {
+		p, err := provider.Find(r.PathValue("id"))
+		if err != nil || !provider.QianwenPlan(*p) {
+			http.NotFound(rw, r)
+			return "", false
+		}
+		return p.ID, true
+	}
+	mux.HandleFunc("POST /api/qianwen/{id}/signin", func(rw http.ResponseWriter, r *http.Request) {
+		id, ok := qianwenOf(rw, r)
+		if !ok {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		u, err := provider.StartQianwenSignIn(ctx, id)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, struct {
+			URL string `json:"url"`
+		}{u})
+	})
+	mux.HandleFunc("GET /api/qianwen/{id}/signin", func(rw http.ResponseWriter, r *http.Request) {
+		id, ok := qianwenOf(rw, r)
+		if !ok {
+			return
+		}
+		state, why := provider.QianwenSignInState(id)
+		writeJSON(rw, struct {
+			State string `json:"state"`
+			Error string `json:"error,omitempty"`
+		}{state, why})
+	})
+	mux.HandleFunc("POST /api/qianwen/{id}/signin/cancel", func(rw http.ResponseWriter, r *http.Request) {
+		id, ok := qianwenOf(rw, r)
+		if !ok {
+			return
+		}
+		provider.CancelQianwenSignIn(id)
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/qianwen/{id}/signout", func(rw http.ResponseWriter, r *http.Request) {
+		id, ok := qianwenOf(rw, r)
+		if !ok {
+			return
+		}
+		if err := provider.SignOutQianwen(id); err != nil {
 			fail(rw, err)
 			return
 		}

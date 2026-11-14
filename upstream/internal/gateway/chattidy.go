@@ -155,20 +155,20 @@ func (t *chatTidy) lines(b []byte) []byte {
 // needsTidy reports whether a line carries any of the shapes chatTidy
 // mends.
 func needsTidy(line []byte) bool {
-	return bytes.Contains(line, emptyReasoning) ||
-		bytes.Contains(line, emptyFinishReason) ||
-		bytes.Contains(line, emptyToolName) ||
-		bytes.Contains(line, emptyToolCalls) ||
-		bytes.Contains(line, contentParts) ||
-		bytes.Contains(line, contentPartsSpace) ||
-		bytes.Contains(line, toolCallsField) ||
-		bytes.Contains(line, functionCallField)
+	return bodyHasBytes(line, emptyReasoning) ||
+		bodyHasBytes(line, emptyFinishReason) ||
+		bodyHasBytes(line, emptyToolName) ||
+		bodyHasBytes(line, emptyToolCalls) ||
+		bodyHasBytes(line, contentParts) ||
+		bodyHasBytes(line, contentPartsSpace) ||
+		bodyHasBytes(line, toolCallsField) ||
+		bodyHasBytes(line, functionCallField)
 }
 
 // needs is needsTidy, a finish_reason once a choice made a call, and a
 // usage that may tell its cache in names OpenAI's clients don't read.
 func (t *chatTidy) needs(b []byte) bool {
-	return needsTidy(b) || len(t.called) > 0 && bytes.Contains(b, finishReasonField) || mayMendUsage(b)
+	return needsTidy(b) || len(t.called) > 0 && bodyHasBytes(b, finishReasonField) || mayMendUsage(b)
 }
 
 var (
@@ -185,11 +185,11 @@ var (
 // prompt_tokens_details' own. A usage in OpenAI's names alone, every
 // OpenAI reply, is left unread.
 func mayMendUsage(b []byte) bool {
-	if !bytes.Contains(b, usageField) {
+	if !bodyHasBytes(b, usageField) {
 		return false
 	}
 	for _, f := range otherCacheFields {
-		if bytes.Contains(b, f) {
+		if bodyHasBytes(b, f) {
 			return true
 		}
 	}
@@ -721,8 +721,8 @@ func (t *chatWhole) write(b []byte) []byte {
 func (t *chatWhole) flush() []byte {
 	b := t.buf
 	t.buf = nil
-	parts := bytes.Contains(b, contentParts) || bytes.Contains(b, contentPartsSpace)
-	if !parts && !mayWriteCalls(b, t.names) && !bytes.Contains(b, toolCallsField) && !mayMendUsage(b) {
+	parts := bodyHasBytes(b, contentParts) || bodyHasBytes(b, contentPartsSpace)
+	if !parts && !mayWriteCalls(b, t.names) && !bodyHasBytes(b, toolCallsField) && !mayMendUsage(b) {
 		return b
 	}
 	var reply map[string]json.RawMessage
@@ -893,11 +893,11 @@ func asReasoningContent(m map[string]json.RawMessage, think string) {
 // reasoning_content alone) and sends it again on every later turn. A body
 // without such a turn comes back byte for byte.
 func silentAssistantsOut(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"assistant"`)) {
+	if !bodyHas(body, `"assistant"`) {
 		return body
 	}
 	var q map[string]json.RawMessage
-	if decodeJSON(body, &q) != nil || !anySilentAssistant(q["messages"]) {
+	if decodeJSONView(body, &q) != nil || !anySilentAssistant(q["messages"]) {
 		return body
 	}
 	dec := json.NewDecoder(bytes.NewReader(q["messages"]))
@@ -1028,27 +1028,30 @@ func withoutMessageReasoning(body []byte, fields []string) []byte {
 // editMessages hands each message of a Chat request whose JSON names any
 // of fields to edit, and puts back those edit reports it changed; every
 // other message keeps its bytes. The body comes back as it was if nothing
-// changed.
+// changed. What it decodes shares body's bytes (decodeJSONView): an edit
+// replaces a member, never writes into one, and keeps none past its
+// return, and a changed body is marshalled anew. A copy of each level
+// was ~3.8 MB a request for a 2 MB Chat conversation.
 func editMessages(body []byte, fields []string, edit func(m map[string]json.RawMessage) bool) []byte {
 	has := false
 	for _, f := range fields {
-		has = has || bytes.Contains(body, []byte(`"`+f+`"`))
+		has = has || bodyHas(body, `"`+f+`"`)
 	}
 	if !has {
 		return body
 	}
 	var q map[string]json.RawMessage
-	if decodeJSON(body, &q) != nil {
+	if decodeJSONView(body, &q) != nil {
 		return body
 	}
 	var msgs []json.RawMessage
-	if decodeJSON(q["messages"], &msgs) != nil {
+	if decodeJSONView(q["messages"], &msgs) != nil {
 		return body
 	}
 	changed := false
 	for i, raw := range msgs {
 		var m map[string]json.RawMessage
-		if decodeJSON(raw, &m) != nil || !edit(m) {
+		if decodeJSONView(raw, &m) != nil || !edit(m) {
 			continue
 		}
 		if nb, err := marshalPlain(m); err == nil {
@@ -1143,7 +1146,10 @@ func mistralThinking(body []byte) []byte {
 // join into one first, as joinSplitCalls does for the translations. A
 // body whose exchange pairs comes back byte for byte.
 func toolPairsOut(body []byte) []byte {
-	if !bytes.Contains(body, []byte(`"tool`)) {
+	if !bodyHas(body, `"tool`) {
+		return body
+	}
+	if paired, ok := rawToolsPaired(body); ok && paired {
 		return body
 	}
 	var q map[string]json.RawMessage
@@ -1236,6 +1242,111 @@ func toolsPaired(msgs []map[string]any) bool {
 		}
 	}
 	return closed()
+}
+
+// rawToolsPaired is toolsPaired read from the body as it came, without
+// decoding the conversation into maps: what nearly every request with
+// tools needs, since its calls are paired already. ok is false for any
+// shape the decoding path would read differently or turn away (a message
+// that isn't an object, tool_calls that aren't a list of objects), which
+// leaves the answer to that path. A key named twice counts as its last,
+// as decoding into a map does.
+func rawToolsPaired(body []byte) (paired, ok bool) {
+	msgs, found, valid := topMember(body, "messages")
+	if !valid || !found || len(msgs) == 0 || msgs[0] != '[' {
+		return false, false
+	}
+	type msg struct {
+		role, toolID string
+		ids          []string
+	}
+	str := func(v []byte) string {
+		if len(v) == 0 || v[0] != '"' {
+			return ""
+		}
+		s, _ := unquoteJSON(v)
+		return s
+	}
+	var list []msg
+	ok = true
+	eachElement(msgs, func(el []byte) bool {
+		if el[0] != '{' {
+			ok = false
+			return false
+		}
+		var m msg
+		var calls []byte
+		eachMember(el, func(k, v []byte) bool {
+			switch {
+			case keyIs(k, "role"):
+				m.role = str(v)
+			case keyIs(k, "tool_call_id"):
+				m.toolID = str(v)
+			case keyIs(k, "tool_calls"):
+				calls = v
+			}
+			return true
+		})
+		if len(calls) > 0 && string(calls) != "null" {
+			if calls[0] != '[' {
+				ok = false
+				return false
+			}
+			m.ids = []string{}
+			eachElement(calls, func(c []byte) bool {
+				if c[0] != '{' {
+					ok = false
+					return false
+				}
+				id := ""
+				eachMember(c, func(k, v []byte) bool {
+					if keyIs(k, "id") {
+						id = str(v)
+					}
+					return true
+				})
+				m.ids = append(m.ids, id)
+				return true
+			})
+		}
+		list = append(list, m)
+		return ok
+	})
+	if !ok {
+		return false, false
+	}
+	var pending map[string]bool
+	closed := func() bool {
+		for _, open := range pending {
+			if open {
+				return false
+			}
+		}
+		pending = nil
+		return true
+	}
+	for _, m := range list {
+		if m.role == "tool" {
+			if !pending[m.toolID] {
+				return false, true
+			}
+			pending[m.toolID] = false
+			continue
+		}
+		if !closed() {
+			return false, true
+		}
+		if m.role == "assistant" && len(m.ids) > 0 {
+			pending = map[string]bool{}
+			for _, id := range m.ids {
+				if _, twice := pending[id]; twice {
+					return false, true
+				}
+				pending[id] = true
+			}
+		}
+	}
+	return closed(), true
 }
 
 // joinSplitChatCalls joins a turn's calls split over consecutive

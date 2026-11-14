@@ -407,7 +407,7 @@ path or isn't macOS, Linux or Windows. Nothing a request asks is refused
 any more (`claudePrint` keeps an image known by its URL, which
 `serveClaudeSubscription` has downloaded before any run, below).
 
-The one exception to "nothing runs as `-p`" with it On is a turn Anthropic
+The first exception to "nothing runs as `-p`" with it On is a turn Anthropic
 refuses in the interactive mode as a third-party app's: a 400 "Third-party
 apps now draw from your extra usage" (#4503), or on a Team or
 Enterprise workspace "draw from extra usage" with no "your" (#5645; both
@@ -427,6 +427,49 @@ with tool results as a `-p` run does (`wantTUI`). A `-p` run's refusal, a
 turn whose reply had begun, and Off are never asked again
 (`thirdPartyRefused` says why). Settings' own value is not changed.
 `claude_tui_refusal_test.go` holds each case.
+
+A second exception is a turn whose message the interactive mode didn't
+take (ok123now on X: magpie v0.1.3901, Windows 10 LTSC 21H2, Claude Code
+2.1.316; text worked, a 64×64 PNG was a 502 every try, and the client
+asked again and again). The helper pastes an image as its file's path,
+and Claude Code takes it as an image only when the paste reaches it as a
+paste; a console that passes it on as typing leaves the path as words,
+and the helper waited out `pasteWait` and ended. The reporter's lead was
+a console that drops the bracketed-paste marks. Claude Code on Windows
+reads its console as VT input (`ENABLE_VIRTUAL_TERMINAL_INPUT`; mode
+0x208 read from a real claude.exe 2.1.316), and it takes one read of over
+800 characters as a paste with or without the marks (`$X=800` in 2.1.316,
+`q6=800` in 2.1.281), a path with spaces after it as the image alone.
+Windows 10's conhost (10.0.19041) does drop the marks on the way in
+(#5061, #5205, measured on 19044 and 19045), and it loses 1024-byte
+blocks of a longer write (#5205). So on Windows the helper sends the
+path with spaces after it up to 900 characters, over Claude Code's 800
+and under 1024 bytes, and no marks (`imagePad`, `imagePaste`,
+`TestImagePasteWindowsLength`); elsewhere it stays bracketed. With a
+real claude.exe 2.1.316 in a ConPTY on Windows 11 26200, the bracketed
+path and the padded one were each taken as `[Image #1]`, and the bare
+path with no marks stayed words, as the reporter saw; the helper itself
+on that claude.exe, padded and bracketed, put the image in the
+transcript. Windows 10 itself is not tried; the padded path doesn't
+need the marks. Long pasted text there still loses blocks (#5205),
+which this doesn't change. If the interactive mode still doesn't take the image, the
+turn goes to `-p` as below, which the plan counts at about twice the
+interactive mode's and which starts without the interactive run's
+cache; the Routing chip's reason says so. Then the helper answers such a
+turn with an error result beginning `claudetui.Unpastable` (the words
+`claudetui.ImageNotTaken` for the image; a block it can't paste begins
+the same), and the helper ends. With nothing of the reply said, `relay`
+hands it back as `redoAsPrint` and the turn is asked again once as `-p`,
+which is sent the image itself (`unpastedSaid`, `Request.unpasted`,
+`claudePrint` code `unpasted`). An image not taken is kept on the bridge
+for 12 hours (`subscriptionBridge.unpasted`, `unpastedFor`): this
+machine's turns with an image anywhere in their messages start as `-p`
+then, and text alone is still the interactive mode's. When the redo can't
+run (Off meanwhile, the client gone) the failure is a 400, not a 502
+(`bridgeFailed`), so neither the client nor the fallback asks it again.
+`claude_tui_unpasted_test.go` holds each case, and
+`TestShimPaddedImageTakenWithoutMarks` the padded paste on a console that
+drops the marks.
 
 The other exception is Claude Code's auto mode classifier when its own
 cache marks keep a long transcript (#5585, #5655; `keptByPrint`,
@@ -1446,11 +1489,17 @@ An ask that finds no room (`take`):
    as a run pushed past `idleMost` is, so its conversation's next turn
    resumes it (`--resume`) and is told only the new messages.
 2. otherwise lets go of the run parked longest on tool results, once it has
-   waited `parkLongest`. Busy runs, and runs waiting on tool calls made
-   recently, are never let go.
+   waited `roomParkLongest` (1 minute, shorter than `claudeRoomWait`). A
+   lead conversation waits on its parallel subagents' Task calls for as
+   long as they work, and each subagent needs a Claude Code of its own:
+   kept until `parkLongest` (5 minutes), the lead held a place while a
+   subagent waited 2 minutes and got the 503 (Wing8Aqua on X, a 768 MiB
+   `memory.high` that holds 4). The lead's results then go to a new run
+   told the whole conversation. Busy runs, and runs waiting on tool calls
+   made within the minute, are never let go.
 3. otherwise waits for one to end: woken when a process exits or a run
    goes idle (`nudge`), and it looks again every `roomLook` (5s) for a
-   parked run that has come to wait `parkLongest`.
+   parked run that has come to wait `roomParkLongest`.
 
 A run being ended counts as `leaving`, so several waiting asks don't each
 let one go for the same room. After `claudeRoomWait` (2 minutes), or once
@@ -1537,7 +1586,14 @@ It knows four ways of naming it:
 - Claude Code: "Primary working directory: X";
 - Codex: `<cwd>X</cwd>`;
 - OpenCode: "Working directory: X";
-- pi: "Current working directory: X".
+- pi: "Current working directory: X", and from pi 1.x a `<cwd>` section
+  with the folder on a line of its own (`<cwd>\nX\n</cwd>`).
+
+The path's `&`, `<` and `>` may come as entities (Codex, Claude Code) and
+are read as the characters. A `<cwd>` read only on one line missed pi
+1.x's: its runs started in magpie's shared folder under the temp folder,
+and its model was told both folders (fysly on X), so `clientWorkDir` reads
+`<cwd>` as the folder rules' `workDirIn` does.
 
 The first text counts, not the last, so a conversation keeps one folder.
 Claude Code says a move (`cd`) as a later "# Environment update" message,
@@ -1620,11 +1676,32 @@ removed there by its id, when it ends or is discarded (`removeSession`).
 A session that a stopped gateway left there, and its temp files, stay
 there as the user's own sessions do; a sweep can't tell them apart.
 
+Every session a run saves is named by `bridgesid.New`: a new run's
+(`--session-id`, in `-p` and in the interactive mode, whose helper keeps
+the id it is given), a replayed transcript's (`replaySession`) and a
+branch's copy (`cutSession`). The id is a version 4 UUID whose last six
+bytes are a keyed hash of its first ten, the key a random file of this
+computer's (`<config>/claude-bridge-session-key`), so to Anthropic, which
+Claude Code tells the session id, it is as random as any. The
+local-session readers (`listCCFiles` in `internal/sessions`, through
+`bridgesid.Is`) leave such a session and its sub-agents' files out: read
+as a session of the user's Claude Code, each call the gateway counted
+under the agent that asked was listed and counted again as "Claude Code ·
+Local session", in the request log, the usage ledger, cost totals and
+the Sessions page (iwinux on X). A session saved before 11-14 has a plain
+random id and is still read until it is removed (when its run ends, or
+by the sweep); a stopped gateway's leftover in a caller's folder stays
+until the user removes it. `TestClaudeRunSessionsAreTheBridges`,
+`TestClaudeCutSessionIsTheBridges` and `TestBridgeSessionsAreNotLocal`
+hold it.
+
 ## Files a run leaves
 
 - Its session: `<config>/projects/<work project>/<session>.jsonl`, for
   `--resume` (`claudeSessions`). It is removed when the run ends unless
-  shelved, and when a saved session is discarded (`removeSession`).
+  shelved or kept for a branch ([A run that ended during a
+  turn](#a-run-that-ended-during-a-turn-6528)), and when a saved session
+  is discarded (`removeSession`).
   `sweepSessions` removes those a stopped gateway left in magpie's own
   work folder's project, once older than `idleLongest`; a caller's folder
   is never swept (`clientWorkDir`).
@@ -1707,6 +1784,59 @@ the one the run answered. Then, and when the cut or the resume fails, the
 run is told the whole conversation as before.
 `TestClaudeCutSessionCopiesAsFarAsTheLine` and
 `TestClaudeForkBranchesOffTheLeadsSession` holds it.
+
+### A run that ended during a turn (#6528)
+
+A run can end in a turn the client still goes on with. It waited on the
+client's AskUserQuestion past `runTimeout` ("it waited as long as it
+may"), or its client went away mid-reply in a turn that can't be taken
+back (`letGo`: the interactive mode, or calls in the client's hands).
+Before, its session went with it (`removeRun`), and what came after found
+no run and was told whole to a new Claude Code. recih saw an answer given
+two minutes after the timeout write 118K tokens to the cache, and a
+tunnel drop's two retried sub-agents and their delayed AgentSummary write
+305K.
+
+Now `removeRun` keeps such a run's session for a branch to be cut from
+(`keepEnded`, [`claude_ended.go`](../../internal/gateway/claude_ended.go)),
+in the same `b.mu` section that takes it out of `runs`, so no request
+between finds it in neither. The run object is kept as it ended: its
+session id and folders, the call lines (`lines`, each with the
+conversation its reply answered), `told`, `convKey`, `backLine` and
+`backMsg`, and its mode, owner and prompt flags. Kept: a session on disk
+with a call line or a turn start to cut at (`keepable`). Not kept: a run
+on the shelf (its file is the shelf's), one whose turn was taken back
+(`rewound`), one with the client's own cache marks, one whose account was
+handed over to Claude Code, and every run as the gateway stops
+(`abortAll` sets `stopping` and removes the kept ones; they are not
+written to `claude-shelf.json`, and `sweepSessions` takes what a crash
+left). Each is kept `endedLongest` (`idleLongest`, the cache's hour), and
+`endedMost` (16) at most, the oldest let go first; letting one go removes
+its files.
+
+`branch` and `retryBranch` look at the kept runs after the live ones, the
+one that ended last first, with the same rules except that a kept run is
+closed. Tool results that come after (the late answer, or a retry of a
+continuation) are cut after the call's line and told the results; a
+delayed AgentSummary on the history before them is cut before the calls
+(`cutBefore`); a turn sent again after its run ended answering it (a
+retry after a dropped connection) is cut before the turn
+(`backLine`/`backMsg`) and told the turn. A kept session is never taken
+or written: each branch cuts a copy of its own, so the AgentSummary after
+a recovery still branches. The log says the run ended, when, and why
+("the run this conversation goes on from ended 2m0s ago (it waited as long
+as it may); its session, kept since, is branched").
+
+Claude Code 2.1.316 writes a reply's text and `tool_use` lines when the
+reply has streamed, before the tool runs, in both modes; killed (SIGTERM)
+while an MCP call is held, it adds only `cost-state` lines, no result and
+no interrupt marker (tried on 11-13 with a mock Anthropic and an MCP tool
+that never answers). So the kept file has the call line, and a cut after
+it leaves the reply's call open for the results the branch is told. No
+tool is run again: the branch is told the client's results.
+`TestClaudeAnswerAfterTheRunEndedBranchesOffItsKeptSession`,
+`TestClaudeEndedRunsSessionsAreBounded`,
+`TestClaudeTurnSentAgainAfterItsRunEndedBranchesOffItsSession`.
 
 ## The user's words beside tool results (#872, #1878)
 
@@ -1968,6 +2098,7 @@ go test -tags nogui ./internal/gateway/ -run '^TestClaudeRunsNamesEachProcess$' 
 go test -tags nogui ./internal/settings/ -run '^TestClaudeRunsMostIsMachineLocal$' -count=1
 go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle|ClaudeSideQuestion|ClaudeInteractiveSideQuestion|ClaudeCutSession|ClaudeForkBranches|ClaudeToolChoiceNone|ClaudeAside|ClaudeNoRunSaysWhy|ClaudeToolResultsNoRunSaysWhy|ClaudePromptToldUserText|ClaudePromptKeepsInstructions|ClaudeToolResultsGoOnWithTheUsersWords|ClaudeToolResultsKeepInstructions|ToolResultKeepsUserTextSentMidTurn|ClaudeTextToolCalls|ClaudeTextCallsHoldsOnlyTheLine|ClaudePromptSaysPastCallsAreARecord' -count=1
 go test -tags nogui ./internal/gateway/ -run 'TestClaudeTaskNotification|TestWithTaskNotices|TestClaudeTurnToldTheTaskNotification' -count=1
+go test -tags nogui ./internal/gateway/ -run 'TestClaudeAnswerAfterTheRunEnded|TestClaudeEndedRuns|TestClaudeTurnSentAgain|TestClaudeBranchFor' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each
@@ -1982,7 +2113,8 @@ Each request the bridge answers notes how its run started: `startRun` calls
 last mode and so says nothing of one request. The note rides the request's
 context (`withEntry`, `claude_entry.go`) and `serve` copies it onto the try
 (`Try.Entry` "tui" or "print", `Try.EntryWhy` the `claudePrint` code that
-chose -p: off, os, missing, no-shim, image, third-party, cache-marks). The
+chose -p: off, os, missing, no-shim, image, third-party, unpasted,
+cache-marks). The
 Routing page's request row shows a TUI or -p chip with the reason in its
 title (`entryNote` in the routing plugin's client.js), so the plan cost of
 a request can be told from how it ran (Anotiaww on X,

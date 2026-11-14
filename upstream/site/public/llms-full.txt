@@ -4662,6 +4662,8 @@ The catalog lists a model at each of its reasoning levels, so the app’s own pi
 
 On a gateway, Antigravity uses no Google sign-in and its backend asks Google for nothing. What Google turns on for your account, its experiments and commands such as `/boost`, `/teamwork`, `/plugin` and `/generative_ui`, is gone while it is on magpie. Taking the row off magpie gives it back.
 
+The models your own sign-in gave the app leave its picker too. To have them back on magpie, sign the same Google account in under magpie’s Antigravity subscription in the Providers tab: its models are then in the app’s list, served on that account’s quota, beside any other Google account you add there.
+
 ## The agy CLI
 
 `agy` follows the app’s gateway unless it is connected on its own row. Connected there, it runs on magpie through the Gemini API: magpie keeps its models in `magpie-settings.json`, beside agy’s own `~/.gemini/antigravity-cli/settings.json`, and starts agy with that file, `GOOGLE_GEMINI_BASE_URL`, `GEMINI_API_KEY` and `--model` for that session. So that typing `agy` just works, magpie adds a function named `agy` to each shell’s profile while agy is on one of its models. A terminal opened before takes the command from the row. Your `settings.json` stays yours, so `agy remote-control` still runs on your Google sign-in.
@@ -9860,7 +9862,7 @@ A relay sells many vendors' models on one key, often at its own prices and under
 
 ## Add a relay
 
-1. **A preset relay..** AiHubMix, PipeLLM, 302.AI, CherryIN and 鱼鱼连线 are presets: give an API key. 鱼鱼连线 also takes an Auto, Global or China Mainland line.
+1. **A preset relay..** AiHubMix, PipeLLM, 302.AI, CherryIN, 鱼鱼连线 and AIGoCode are presets: give an API key. 鱼鱼连线 also takes an Auto, Global or China Mainland line.
 2. **Any other relay..** Give its addresses: `url=` for an OpenAI-compatible base, `anthropic=` for an Anthropic-compatible one, both when it has both, and `responses=` when Responses has an address of its own.
 
 ```
@@ -9920,7 +9922,7 @@ magpie provider auto-include relay 'gpt-*' 're:claude-.*'
 
 ### Can magpie use an API relay?
 
-Yes. AiHubMix, PipeLLM, 302.AI, CherryIN and 鱼鱼连线 are presets that take a key; any other relay is added with magpie provider add and its OpenAI- and Anthropic-compatible addresses.
+Yes. AiHubMix, PipeLLM, 302.AI, CherryIN, 鱼鱼连线 and AIGoCode are presets that take a key; any other relay is added with magpie provider add and its OpenAI- and Anthropic-compatible addresses.
 
 ### Why does caching miss for Claude models through a relay?
 
@@ -10197,6 +10199,16 @@ Switching between the three keeps the others' settings and credentials for switc
 ## A computer keeping its own
 
 A change to an agent's model on one computer reaches the others. When sync changes one on a computer and you set it back there, that computer keeps its own: the others' picks no longer change it, and its picks stay there, while everything else keeps syncing. Kept on this computer lists those fields, and Follow the others takes the synced value again.
+
+## Pick what syncs, preview, undo
+
+Under What syncs in the sync's form, untick what each computer should keep as its own: providers, settings, agents' models, the library or memory (profiles, usage and sign-ins are under Advanced). A part not ticked is neither sent nor taken: this computer keeps its own, and the server keeps the others'. Ticked again later, it is joined like a first sync, with this computer's copy kept in the sync folder first. Preview a sync lists what would come here and what would go to the server, item by item, before anything changes; Sync now there runs that sync only if nothing changed since. Undo the last sync puts back what the last sync brought in, on this computer only.
+
+```
+magpie webdav set providers=no settings=no agents=no   # only the library and memory sync
+magpie webdav preview                                 # what syncing now would change
+magpie webdav undo-sync                               # put back what the last sync brought in
+```
 
 ## A one-off backup and restore
 
@@ -12135,7 +12147,7 @@ The app writes a log of what it did, `app.log`, in `~/Library/Logs/magpie` on ma
 
 magpie asks its own site for a few things, whatever the privacy settings say, as any app asks its update server. None of these requests carries the install id or an account.
 
-- `/api/latest`: the update feed, every 6 hours unless `noAutoUpdate` is on, with `?lang=` for the notes in your language, and `?channel=stable` when Settings → About → Update channel is Stable. Neither says who you are. `/api/notes` gives What’s new after an update.
+- `/api/latest`: the update feed, every 6 hours unless `noAutoUpdate` is on, with `?lang=` for the notes in your language, and `?channel=stable` when Settings → About → Update channel is Stable; a fresh install asks `?channel=stable` once too, to stay on Stable when it is Stable’s version. Neither says who you are. `/api/notes` gives What’s new after an update.
 - `/files/<version>/<file>`: the release files an update and the installer download, served from Cloudflare R2. A file the site doesn’t hold is sent on to github.com. Nothing is counted.
 - `/api/partners`: the add sheet’s partner list, every 6 hours. One fetch in ten is counted as a `magpie partners fetch` event, with the country Cloudflare gives, while a partner is listed.
 - `/go/<partner>/site` and `/go/<partner>/keys`: a partner’s website and key-page links, opened in your browser, are counted (the partner, which link, a region, a country) as `magpie partner go` before you are sent on.

@@ -1616,9 +1616,9 @@ with the same JSON: `param-override` (`param_override`), `model-map`
 `think-tags` (strip `<think>…</think>`, or `thinking_to_content`), and
 `antigravity-cloak`, which keeps words Antigravity turns a system prompt
 away for out of what it sends Antigravity alone (magpie itself already
-breaks up the lines it knows of: Codex's, Claude Code's, Hermes' earlier
-persona; `magpie provider set antigravity prompt=as-written` turns that
-off). A
+rewords the lines it knows of: Codex's, Claude Code's, Hermes' earlier
+persona, omp's; `magpie provider set antigravity prompt=as-written` turns
+that off). A
 middleware's entry in the community `registry.json` has
 `"kind": "middleware"` and no `providers`.
 
@@ -3206,7 +3206,11 @@ press *Arrange* at the foot of the panel's tab and move the rows there. The
 same *Arrange* hides a subscription from the panel's tab (*Hide*, *Show*
 puts it back), and the tab's foot says how many are hidden. Hiding is the
 panel's only: routing, caps, the Usage page and the menu bar's own cells
-still have it, and a menu bar cell for it still opens its card. Both are
+still have it, and a menu bar cell for it still opens its card. A card or
+quota row hidden on the Usage page (its card's *Hide from Overview*) is left
+out of the panel's tab too, and of `magpie tui`'s Usage page; a
+subscription hidden there whole shows as hidden in the panel's *Arrange*,
+whose *Show* brings it back on the Usage page too. Both are
 kept in magpie's settings (`usageOrder`, `panelUsageHidden`). Which
 allowances the menu bar itself shows beside its icon is picked in Settings.
 The same list has *Tokens and cost today* and *Tokens and cost, last 7
@@ -3512,6 +3516,14 @@ A version installed from the site can be newer than Stable's; the app
 keeps it and waits until Stable passes it. While it waits, the Version
 row says *Up to date on Stable*, names the newest version out on Every
 version, and offers to switch to Every version.
+
+The site's downloads offer Stable's version beside the newest
+(`usemagpie.ai/download/stable/<platform>`). A fresh install of it (no
+magpie run on this computer before) takes Stable before its first update
+check, so it isn't offered the newest at once: it asks the feed for
+Stable's version and the newest, and when it is Stable's and a newer one
+is out, sets `"updateChannel": "stable"`. A channel you set is kept, and a
+version that is both Stable's and the newest stays on Every version.
 
 The update feed works this out from the release list
 (`https://usemagpie.ai/api/latest?channel=stable`); nothing is promoted
