@@ -244,6 +244,11 @@ type Request struct {
 	// such prompts, with the interactive mode on all the same
 	// (thirdPartyPrint)
 	tuiRefused bool
+	// unpasted, for the Claude bridge, is a request whose message Claude
+	// Code's interactive mode didn't take, or one with images on a
+	// machine where it didn't take an image (ok123now on X): its run is
+	// claude -p, with the interactive mode on all the same
+	unpasted bool
 	// hourMarks has the cache marks magpie adds on Anthropic's Messages
 	// (anthropicBody) last an hour: a Responses client's (Codex's), whose
 	// turns are often more than five minutes apart and whose own vendor
@@ -296,6 +301,15 @@ type Request struct {
 	ThinkOff  bool
 	Parallel  *bool // parallel tool calls allowed
 	WebSearch bool  // the client offered its provider's own web search
+	// GoogleTools are Gemini's own tools other than googleSearch (which
+	// is WebSearch) that the client offered, each one tool object as
+	// Google spells it — {"urlContext":{}}, {"codeExecution":{}},
+	// {"googleMaps":{}} — for an upstream that speaks Gemini, inside
+	// Code Assist's envelope too (buildCodeAssistSent). A Gemini client's
+	// tools, or the same objects in a Chat request's tools. Left out, a
+	// client's URL context and code execution were dropped on every
+	// translated route (daoche_wuzui on X). No other API runs them.
+	GoogleTools []json.RawMessage
 	// Advisor is the model of Claude Code's advisor that magpie runs
 	// itself (advisor_serve.go), "" when it doesn't: its calls and results
 	// in the conversation are ToolCall and ToolResult parts then

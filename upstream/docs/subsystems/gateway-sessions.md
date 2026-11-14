@@ -90,7 +90,19 @@ header id of its own, and omp sends that id, not the main session's, in
 the gateway's `omp|<sub id>` is its own in the same places as Raft's `pi|`
 key, and is never a second session counted again (Jumy, Discord 10-30:
 `TestOmpSubagentsAreTheSessionsToTheGateway`,
-`TestOmpSubagentCountedOnceWithTheGateway`). A Claude Code session's
+`TestOmpSubagentCountedOnceWithTheGateway`). A Pi session stands for the
+subagents pi-subagents ran for it the same way: each runs as a Pi of its
+own, its file `<run id>/run-<n>/session.jsonl` (async and parallel runs a
+folder deeper) in the folder named for the lead's file, or under the
+`defaultSessionDir` of `extensions/subagent/config.json`, where its
+header's `parentSession` names the lead's file (`piFilesIn`,
+`piSubagentFiles` in [`pi.go`](../../internal/sessions/pi.go)). Its calls
+are the lead session's, on its own model and provider, and the lead's
+`subagent` tool result, which carries their usage summed, counts nothing
+once those files are read (`piSubagentsRead`). Before, a lead on magpie's
+entry left a DeepSeek subagent on no page: its files went unread and the
+sum went under the lead's model, the gateway's to count (nzvzbmz78932 on
+X, `TestPiSubagentCalls`). A Claude Code session's
 copies (`Copies`) are among its keys the same way. A ZCode session stands
 for its bare id too: a request names it by the id its database gives with
 a prefix stripped (`sess_…`, a subagent's `sess_subagent_agent_…`:
@@ -122,7 +134,8 @@ reads only the agent shown and the agents with gateway sessions (#2776).
 It answers before a first read of a long history (hey_boyce on X: the page
 stood on its placeholder rows on its first open). A file it would read whole
 (no parse kept, an older index, a file written over, or a Claude Code or
-Codex parse that can't be read on after a restart) is read behind the
+Codex parse that can't be read on after a restart because its window
+wasn't kept on disk) is read behind the
 answer once more than `quickBytes` (32 MB) of them is waiting; until then its
 row stands on the parse kept, or on a glance at its first 256 KB (id,
 folder, first prompt, start) and, for Claude Code, the titles in its last
@@ -132,6 +145,21 @@ glance is never saved in the index (`savable`) nor taken by a refresh as a
 parse (`parsed`). See
 [`internal/sessions/manage_quick.go`](../../internal/sessions/manage_quick.go),
 `TestManageAnswersBeforeFirstReads` and `sessions-pending-fill.test.cjs`.
+A file being written (changed within the hour, `workingRevision`) keeps
+what its reads have seen on disk with where they stopped, so after a
+restart the next line it gains is read on from there, not from its first
+line. A Claude Code session's is in `sessions.json` and its shard's `.rev`
+file (#3493). A Codex rollout's summary window goes in
+`codex-windows/<hash>.gob` beside `sessions.json`, written with it and
+taken away once the cache drops that window, and its calls' window
+(`cxRun`) in the shard's `.rev` file. Each names the parser and window
+versions it was written by, the size, offset and content hash of its read,
+and is taken only when all match. Before this, the first line a 100 MB
+rollout gained after a restart had it read whole twice, 2.2 s of the
+Sessions list on an M5 and over ten seconds on a slower Windows PC
+(shangyuan0818 on X). See
+[`internal/sessions/codex_window.go`](../../internal/sessions/codex_window.go)
+and `TestCodexSessionReadOnAfterRestart`.
 A Claude Code session's folder is its first line's `cwd`, unless
 Claude Code's `/cd` moved it: the file goes to the new folder's project
 directory with a `{"type":"relocated","relocatedCwd":…}` line, while the
@@ -266,6 +294,18 @@ the session file's call by session, tokens and end time, so under `sess_…` a
 call magpie had routed was counted again as a local session's whatever
 provider id ZCode wrote beside it (nori_tsukiji on X). Verification:
 `TestZCodeCallsPairWithTheGatewaysRecords`.
+
+The Claude subscription bridge's own Claude Code runs save their sessions
+in a Claude folder the readers list (the user's own, or a saved account's
+under `claude-accounts`), often in the caller's project. They aren't the
+user's: the gateway recorded each call under the agent that asked, and
+nothing paired the session file's call with that record, so every call was
+counted twice, once as "Claude Code · Local session" (iwinux on X). Their
+ids are the bridge's (`bridgesid`, see
+[the bridge](claude-subscription-bridge.md#the-runs-working-folder-clientworkdir)),
+and `listCCFiles` leaves such a session and its sub-agents' files out of
+every listing: calls, the ledger, the Sessions page, traces and WSL.
+Verification: `TestBridgeSessionsAreNotLocal`.
 
 A ZCode session's name is the app's: its task index
 (`v2/tasks-index.sqlite` in the data folder, `tasks.title` by `task_id`,
@@ -743,6 +783,28 @@ a large body shows as a burst. `TestTrafficCountsWhatRowsCount`,
 `TestTrafficCountsAStreamAsItFlows`, `TestSeriesPartsKeepBytes`,
 `TestUsageTrafficSaysWhatTheGatewayCounted` and `usage-traffic.test.cjs`
 cover it.
+
+What the bytes up were made of (theforeveriris on X: 8.6 GB up over 8169
+requests). Every request resends the whole conversation, so ~1 MB a request
+is a long context, not a leak. The prompt reader (`promptOf`, already run off
+the request path by `inspectPrompt`) adds each piece's length as it reads it
+into `Prompt.sent`: the system prompt (with skills and memory), the tools'
+definitions, images, and everything read (`all`). A tool result shared by the
+files it read counts once (`again`). `upParts` scales those to the bytes
+that went on the wire into the row's `UpParts`. A row gets none when its
+bytes up aren't its body's: a Responses WebSocket delta, a body whose images
+went as files, or a body not read. The request page keeps the parts in
+255ths of `UpBytes` in the packed row (`upMix`, flag `rowUpParts`, still 152
+bytes). `Totals` sum `UpCalls` (requests that sent any bytes), `UpMeasured`
+(the bytes of those with parts) and the three parts, per period and per
+agent, model or provider. The Requests card's ↑ opens `#ledUp`. It shows the
+bytes a request, a bar of the conversation, tools, system prompt, images and
+what wasn't measured, and the bytes of each agent and model. A request's
+details say "Made of". `TestPromptKnowsWhatItsBytesWere` (fails if a shared
+tool result is counted per file), `TestUpPartsScaleToTheWire`,
+`TestLedgerKeepsUpParts`, `TestRowUpPartsKept`, `TestTotalsSumUpParts` and
+`usage-upload.test.cjs` cover it. `BenchmarkPromptOfLargeBody` times the
+reader on a 1.2 MB body.
 
 ### Calls read from the agents' own files
 

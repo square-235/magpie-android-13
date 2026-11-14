@@ -406,7 +406,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			fail(rw, errors.New("no such session"))
 			return
 		}
-		if err := openTerminal(run, s.Title, settings.Load().SessionTerminal); err != nil {
+		if err := openTerminal(run, s.Title, settings.Shared().SessionTerminal); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -452,7 +452,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			fail(rw, errors.New("no command starts this agent"))
 			return
 		}
-		if err := agentTerminal(run, name, settings.Load().SessionTerminal); err != nil {
+		if err := agentTerminal(run, name, settings.Shared().SessionTerminal); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -487,7 +487,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		if in.Open {
-			if err := openTerminal(c.Command, s.Title, settings.Load().SessionTerminal); err != nil {
+			if err := openTerminal(c.Command, s.Title, settings.Shared().SessionTerminal); err != nil {
 				fail(rw, err)
 				return
 			}
@@ -858,12 +858,21 @@ func keepStatsWhileAsked() {
 // hands the pages back to the system at once; a range being read again
 // puts it off.
 func forgetIdleStats() {
+	if !letGoStats() {
+		keepStatsWhileAsked()
+		return
+	}
+	debug.FreeOSMemory()
+}
+
+// letGoStats is forgetIdleStats' letting go, which a range being read
+// puts off: it says whether they went.
+func letGoStats() bool {
 	statsMemo.Lock()
 	for _, k := range statsMemo.m {
 		if k.busy {
 			statsMemo.Unlock()
-			keepStatsWhileAsked()
-			return
+			return false
 		}
 	}
 	statsMemo.m = nil
@@ -875,7 +884,7 @@ func forgetIdleStats() {
 	statsTags.m = nil
 	statsTags.Unlock()
 	sessions.ForgetKeptRanges()
-	debug.FreeOSMemory()
+	return true
 }
 
 func combinedSessionStats(days int) sessions.Stats {
@@ -1078,6 +1087,7 @@ var tightGC struct {
 	was    int  // GOGC before the first
 	hooked bool // a retightenGC is waiting for the next collection
 	steady bool // steadyGCStart has run: retightenGC sets steadyPercent between reads
+	procs  bool // the first read narrowed GOMAXPROCS (narrowProcs); the last widens it
 }
 
 // tightenGC begins a read under a tight GC; undo ends it.
@@ -1090,6 +1100,7 @@ func tightenGC() (undo func()) {
 			debug.SetGCPercent(was)
 		}
 		tightGC.was = was
+		tightGC.procs = narrowProcs()
 		if tightGCRoom > 0 && !tightGC.hooked {
 			tightGC.hooked = true
 			afterNextGC(retightenGC)
@@ -1101,8 +1112,32 @@ func tightenGC() (undo func()) {
 		defer tightGC.Unlock()
 		if tightGC.n--; tightGC.n == 0 {
 			debug.SetGCPercent(tightGC.was)
+			if tightGC.procs {
+				tightGC.procs = false
+				runtime.SetDefaultGOMAXPROCS()
+			}
 		}
 	})
+}
+
+// tightProcs is the GOMAXPROCS a read under a tight GC runs with. A
+// collection every few MB wakes a thread on each idle P to mark (Go's idle
+// mark workers) and, with the reads' own workers, keeps them spinning
+// between: on an 18-core Mac a rebuild of the request index (a new catalog
+// price) spent ~2 s in pthread_cond_signal, ~1 s in usleep and ~0.5 s in
+// pthread_kill of its ~16 s. The reads use four workers each
+// (prefetchEach) or up to eight (decodeCache), and gain nothing from more.
+const tightProcs = 4
+
+// narrowProcs sets GOMAXPROCS to tightProcs, when it is more and the user
+// set none (GOMAXPROCS in the environment is theirs), and reports whether
+// it did: the last read under a tight GC then puts back Go's default.
+func narrowProcs() bool {
+	if os.Getenv("GOMAXPROCS") != "" || runtime.GOMAXPROCS(0) <= tightProcs {
+		return false
+	}
+	runtime.GOMAXPROCS(tightProcs)
+	return true
 }
 
 // tightGCPercent is a tenth. Under a quarter, a first start's footprint
@@ -1231,7 +1266,7 @@ func agentCommand(a *agent.Agent) string {
 // the app where one is installed, unless the setting codexOpen asks for the
 // terminal (Yink88564391 on X).
 func codexOpensApp() bool {
-	return settings.Load().CodexOpen != "terminal" && codexAppInstalled()
+	return settings.Shared().CodexOpen != "terminal" && codexAppInstalled()
 }
 
 // codexAppInstalled and codexAppOpener are the agent package's, vars so a

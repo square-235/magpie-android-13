@@ -369,9 +369,9 @@ type Provider struct {
 	// Google answers with a 429 "Resource has been exhausted" whatever
 	// quota is left (Claude Code's billing line, the Claude Agent SDK's
 	// identity line, Codex's GPT-5 identity lines, Hermes Agent's earlier
-	// default persona) go with a zero-width space inside them, which Google
-	// lets through and the model reads the same (gateway's
-	// antigravityCloak). Set with `magpie provider set antigravity
+	// default persona, oh-my-pi's RFC 2119 line) go reworded with the same
+	// meaning, the billing line left out, which Google lets through and the
+	// model reads the same (gateway's antigravityCloak). Set with `magpie provider set antigravity
 	// prompt=as-written`; prompt=default turns it back.
 	PromptAsWritten bool `json:"promptAsWritten,omitempty"`
 
@@ -1805,9 +1805,12 @@ func Delete(id string) error {
 	if err := store(f); err != nil {
 		return err
 	}
-	// its StepFun sign-in goes with it, not to a provider added later
-	// under the same id
-	return forgetStepFun(id)
+	// its StepFun and Qwen AI platform sign-ins go with it, not to a
+	// provider added later under the same id
+	if err := forgetStepFun(id); err != nil {
+		return err
+	}
+	return forgetQianwen(id)
 }
 
 // keyOptional is true for a server on this computer or on the user's own
@@ -1918,6 +1921,13 @@ func normalize(p Provider) Provider {
 		p.BaseAPI = ""
 	}
 	p.Models = cleanList(p.Models)
+	if p.ID == "devin" {
+		// picked from the built-in's list before its API was served
+		// (ce8d0e065), which had Adaptive and Fusion: Devin's chat API
+		// serves neither, and they were listed, and refused, ever after
+		p.Models = withoutDevinRouters(p.Models)
+		p.Delisted = withoutDevinRouters(p.Delisted)
+	}
 	p.Fallback = cleanList(p.Fallback)
 	// a provider saved under an id a preset carried before (presetAliases:
 	// qianfan's first day's, Tencent Cloud's plan and TokenHub's two) is
@@ -2368,14 +2378,34 @@ func (p Provider) Host() string {
 		return p.Account.wasHost // not plugin://<id>
 	}
 	for pr := range p.speaking {
-		if u := p.Base(pr); u != "" {
-			return HostOf(u)
+		if h, ok := p.baseHost(pr); ok {
+			return h
 		}
 	}
 	if p.Decide != "" {
 		return HostOf(p.Decide)
 	}
 	return ""
+}
+
+// baseHost is HostOf(Base(pr)), and whether Base(pr) is set, without
+// building the base: a Gemini base is asked at GeminiAsked, which parses
+// the saved URL and may add /v1beta, five allocations a look (#6479).
+// Neither the version nor the trimming changes the host, so the saved
+// URL's host is the asked one's.
+func (p Provider) baseHost(pr Protocol) (string, bool) {
+	if pr == Gemini && !p.FactoryGemini() && !p.IsVertex() {
+		// a URL with its scheme and a host: what GeminiAsked trims or adds
+		// is after the host; anything else is left to Base
+		u := strings.TrimSpace(p.Gemini)
+		if i := strings.Index(u, "://"); i > 0 && len(u) > i+3 && u[i+3] != '/' {
+			return HostOf(u), true
+		}
+	}
+	if u := p.Base(pr); u != "" {
+		return HostOf(u), true
+	}
+	return "", false
 }
 
 // Where is what the provider's calls go to, as usage keeps it: the API's

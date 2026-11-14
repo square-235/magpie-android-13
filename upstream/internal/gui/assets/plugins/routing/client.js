@@ -330,7 +330,7 @@ function routingPage(part) {
   }).observe(node);
   byWidth(box, { max560: (w) => w <= 560 });
   byWidth(list, { max460: (w) => w <= 460, max560: (w) => w <= 560 });
-  byWidth(more, { max520: (w) => w <= 520, min1150: (w) => w >= 1150 });
+  byWidth(more, { max520: (w) => w <= 520 });
   for (const col of [colA, colB]) byWidth(col, { max440: (w) => w <= 440, max760: (w) => w <= 760 });
   // A request's numbers on a line of their own, under where it went, where
   // they no longer fit their column on one line (#2288): a list of about
@@ -340,6 +340,10 @@ function routingPage(part) {
   // the frame is drawn: measured under, they can fit their column's share
   // and still wrap beside a wide model, and the row would flip each frame.
   // The rows are shorter on one line, so what scrolls keeps its place.
+  const metaWraps = () => [...reqs.querySelectorAll(".rt-req .meta:not([hidden])")].some((m) => {
+    const k = m.children;
+    return k.length > 1 && k[k.length - 1].getBoundingClientRect().top - k[0].getBoundingClientRect().top > 2;
+  });
   let metaFitting = 0;
   const metaFit = () => { if (!metaFitting) metaFitting = requestAnimationFrame(() => {
     metaFitting = 0;
@@ -349,10 +353,7 @@ function routingPage(part) {
     colA.classList.remove("meta-under");
     inMetaFit = true;
     fitCols(); // the rows' columns for the layout measured, not the one before
-    const wraps = [...reqs.querySelectorAll(".rt-req .meta:not([hidden])")].some((m) => {
-      const k = m.children;
-      return k.length > 1 && k[k.length - 1].getBoundingClientRect().top - k[0].getBoundingClientRect().top > 2;
-    });
+    const wraps = metaWraps();
     colA.classList.toggle("meta-under", wraps);
     fitCols();
     inMetaFit = false;
@@ -365,6 +366,40 @@ function routingPage(part) {
   // Out of sight (0 wide) is no new width: back, nothing is measured (#4652)
   let metaW = -1;
   new ResizeObserver(() => { const w = colA.clientWidth; if (w && w !== metaW) { metaW = w; metaFit(); } }).observe(colA);
+  // The accounts beside the requests (min1150) only where the requests
+  // still keep each on one line there: put beside by the page's width
+  // alone (1150px), a page kept to 1200px left the requests ~850px, and a
+  // wider window showed each request on two lines where a narrower one,
+  // the accounts under the requests, showed it on one (normalcoder_ on X).
+  // Tried beside and measured before the frame is drawn, as metaFit does;
+  // again when the page's width or the rows' shapes change.
+  let sideFitting = 0;
+  const sideFit = () => { if (!sideFitting) sideFitting = requestAnimationFrame(() => {
+    sideFitting = 0;
+    const w = more.clientWidth;
+    if (!w) return; // out of sight: the layout it had (#4652)
+    const was = more.classList.contains("min1150");
+    let side = w >= 1150;
+    if (side && reqs.offsetParent && !hist.classList.contains("solo") && reqs.querySelector(".rt-req")) {
+      const narrow = colA.classList.contains("max760"), under = colA.classList.contains("meta-under"), kept = [];
+      for (let p = reqs; p; p = p.parentElement) if (p.scrollTop) kept.push([p, p.scrollTop]);
+      more.classList.add("min1150");
+      inMetaFit = true;
+      colA.classList.toggle("max760", colA.clientWidth <= 760);
+      colA.classList.remove("meta-under");
+      fitCols();
+      side = !colA.classList.contains("max760") && !metaWraps();
+      colA.classList.toggle("max760", narrow);
+      colA.classList.toggle("meta-under", under);
+      more.classList.toggle("min1150", was);
+      fitCols();
+      inMetaFit = false;
+      for (const [p, top] of kept) if (p.scrollTop !== top) p.scrollTop = top;
+    }
+    if (side !== was) more.classList.toggle("min1150", side);
+  }); };
+  let sideW = -1;
+  new ResizeObserver(() => { const w = more.clientWidth; if (w && w !== sideW) { sideW = w; sideFit(); } }).observe(more);
 
   const path = () => { const p = document.createElementNS(NS, "path"); wires.appendChild(p); return p; };
   const setText = (e, s) => { if (e.textContent !== s) e.textContent = s; };
@@ -611,8 +646,12 @@ function routingPage(part) {
     const out = x ? runsOutText(x) : "";
     return out ? " · " + out : "";
   };
+  // the window the share is of before it, when the account has more than
+  // one (Weighed.UsedWindow): its fullest, which sets it aside under every
+  // routing, In turn's too: "7d 41% used", not a bare 41% read as its
+  // five hours (Wing8Aqua on X)
   const quota = (w, used, left, vars) => w.balance != null ? t(left, { n: balText(w), ...vars }) + lapses(w)
-    : (w.limit > 0 ? quotaCount(w) + " · " : "") + t(quotaLeft ? left : used, { n: pct(share(w)), ...vars });
+    : (w.usedWindow ? shortWindow(w.usedWindow) + " " : "") + (w.limit > 0 ? quotaCount(w) + " · " : "") + t(quotaLeft ? left : used, { n: pct(share(w)), ...vars });
   const fill = (w) => Math.max(0, Math.min(100, share(w))) + "%";
   const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood", sight: "images not taken", proxy: "proxy not reachable", offline: "network down", overloaded: "servers overloaded", effort: "reasoning effort not in its plan", overflow: "too long for its model", room: "reply asked past the window left", slow: "slow to start", prompt: "agent's prompt turned away", restricted: "account restricted by the vendor" };
   // a refusal the vendor called a rate limit, resting as out of quota
@@ -907,7 +946,7 @@ function routingPage(part) {
         // read it for this request (Weighed.price)
         const p = f.price;
         if (p) {
-          const price = t("{in} in, {out} out a million tokens", { in: fmtCost({ cost: p.input }), out: fmtCost({ cost: p.output }) });
+          const price = t("{in} in, {out} out a million tokens", { in: fmtCost({ cost: p.input }, f.provider), out: fmtCost({ cost: p.output }, f.provider) });
           if (p.peak) return restedTo(t("it costs least now, even at its peak price — {price}.", { price }))
             || t("Cheapest first: {model} costs least on {who} now, even at its peak price — {price}.", { model: f.model, who: w, price });
           return restedTo(t("it costs least now — {price}.", { price }))
@@ -1464,6 +1503,7 @@ function routingPage(part) {
     missing: "Claude Code isn't installed on this computer",
     image: "the request has an image known by its URL, which only claude -p takes",
     "third-party": "the interactive mode was turned away over this agent's system prompt",
+    unpasted: "the interactive mode here didn't take the message, or an image pasted into it; the plan counts claude -p at about twice the interactive mode's, and it starts without the interactive run's cache",
     "cache-marks": "the client's cache marks keep history that a fresh interactive run would write again",
   };
   // entryNote: what a try's entry point chip says (Try.Entry)
@@ -1528,10 +1568,13 @@ function routingPage(part) {
   // what it adds to the same 429 for Hermes Agent's earlier default persona
   // (antigravityHermesHint)
   const AG_HERMES = "Antigravity answers this 429 to Hermes Agent's earlier default persona (its SOUL.md) whatever quota is left, so it is not a quota and waiting won't help; Hermes' current default persona goes through, so put it in SOUL.md, or use another provider for these chats";
+  // what it adds to the same 429 for oh-my-pi's RFC 2119 line
+  // (antigravityRFCHint)
+  const AG_RFC = "Antigravity answers this 429 to the line \"RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.\" that starts oh-my-pi (omp)'s system prompt, and to any prompt that has it, whatever quota is left, so it is not a quota and waiting won't help; magpie sends that line as \"RFC 2119 key words: …\", which goes through, so this one came from a copy of it that was worded another way";
   // what it adds to WorkBuddy's 403 11140 for an account it restricted
   // (provider.WBRestrictedHint, #1849)
   const WB_RESTRICTED = "WorkBuddy restricted this account for unusual activity; it stays out until WorkBuddy lifts that, which an appeal (Submit feedback in WorkBuddy) asks for";
-  const HINTS = [WB_REFUSED, BLOCKED, ZCODE_BLOCKED, AG_TURNED_AWAY, AG_CODEX, AG_HERMES, WB_RESTRICTED];
+  const HINTS = [WB_REFUSED, BLOCKED, ZCODE_BLOCKED, AG_TURNED_AWAY, AG_CODEX, AG_HERMES, AG_RFC, WB_RESTRICTED];
 
   function trySaid(r, i) {
     const tr = r.tries[i], w = tried(r, tr), agent = agentName(r.agent);
@@ -4091,10 +4134,17 @@ function routingPage(part) {
     return said ? ledCredits({ credits: n, credited: said }).textContent : "";
   }
   const creditsNote = () => t("What it cost in its plan's credits, as the reply said");
+  // the one provider a request's cost is of, for Settings' currency "By
+  // provider": none (a sum, in the totals' currency) when its tries went to
+  // more than one
+  function routeProvider(r) {
+    const ids = new Set((r.tries || []).map((tr) => tr.id).filter(Boolean));
+    return ids.size === 1 ? [...ids][0] : !ids.size && !r.group ? r.provider : "";
+  }
   function routeCost(r) {
     const credits = routeCredits([r]);
     if (!r.priced) return credits || "—";
-    return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }) + (r.unpriced ? "+" : "") + (credits ? " · " + credits : "");
+    return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }, routeProvider(r)) + (r.unpriced ? "+" : "") + (credits ? " · " + credits : "");
   }
   // byKey: grouped by the gateway key each came with, one sent with none
   // (from this computer, or kept before routes named their key) a group of
@@ -4132,10 +4182,14 @@ function routingPage(part) {
           const { prompt, read } = promptOf(r);
           if (prompt) { s.prompt += prompt; s.read += read; s.cached++; }
           const d = !noAnswer(outcome(r)[1]) && decodeOf(r, r.ms, r.ttft, r.firstText);
-          if (d) { s.decodeMs += d.w; s.decodeOut += d.n; s.timed++; }
+          // the same replies over their whole time too, the wait for the
+          // first token and the reasoning in: what a tool that times the
+          // whole request reads (@verymoes on X: CC Switch's ≈77 and
+          // opencode's 76.7 beside this 142)
+          if (d) { s.decodeMs += d.w; s.decodeOut += d.n; s.timed++; s.wholeMs += r.ms; s.wholeOut += r.out; }
         }
         return s;
-      }, { cost: 0, tokens: 0, priced: 0, unpriced: 0, running: 0, completed: 0, prompt: 0, read: 0, cached: 0, decodeMs: 0, decodeOut: 0, timed: 0 });
+      }, { cost: 0, tokens: 0, priced: 0, unpriced: 0, running: 0, completed: 0, prompt: 0, read: 0, cached: 0, decodeMs: 0, decodeOut: 0, timed: 0, wholeMs: 0, wholeOut: 0 });
       setText(x.arrow, open ? "▾" : "▸");
       // Background workers have their own IDs. Label groups made entirely
       // for one purpose without renaming a chat that also made helper calls.
@@ -4181,7 +4235,8 @@ function routingPage(part) {
       if (g.key && visibleMetrics.includes("cache") && total.prompt) meta.push(metricElement(["cache-hit", "Avg. cache", hitPct(total.read / total.prompt),
         t("Total cache reads divided by total prompt tokens; larger prompts carry more weight") + "\n" + coverage(total.cached)]));
       if (g.key && visibleMetrics.includes("speed") && total.decodeMs) meta.push(metricElement(["speed", "Avg. speed", t("{n} tok/s", { n: Math.round(total.decodeOut * 1000 / total.decodeMs) }),
-        t("Total output tokens divided by total decode time; excludes waiting and replies without usable timing") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed") + "\n" + coverage(total.timed)]));
+        tipLines(t("Total output tokens divided by the time from each reply's first token to its end; the wait for the first token, and replies without usable timing, are left out") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed"),
+          total.wholeMs ? t("Over each request's whole time, the wait for the first token and the reasoning counted: {n} tok/s", { n: Math.round(total.wholeOut * 1000 / total.wholeMs) }) : "", coverage(total.timed))]));
       const metaSig = JSON.stringify([bits, tokenHelp, meta.map((e) => [e.textContent, e.title])]);
       if (x.meta.dataset.sig !== metaSig) { x.meta.replaceChildren(...meta); x.meta.dataset.sig = metaSig; }
       const credits = routeCredits(g.rows);
@@ -4305,7 +4360,7 @@ function routingPage(part) {
     // all the row says, and its titles
     const title = reqTitle(r, how, tr);
     const sig = JSON.stringify([lang, said, how, title, r.time, r.agent, name, ag?.icon, r.model, r.provider, tagKind(r), r.effort,
-      tr?.effort, tr?.picked, tr?.fixed, tr?.fast, tr?.entry, tr?.entryWhy, tr?.swapped && tr.done && tryOk(tr) ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tryOk(tr) ? tr.served : 0, tr?.done && tryOk(tr) ? tr.upstream : 0, meta, metrics, cost]);
+      tr?.effort, tr?.picked, tr?.fixed, tr?.fast, r.tier, tr?.tier, tr?.tierServed, tr?.done, tr?.entry, tr?.entryWhy, tr?.swapped && tr.done && tryOk(tr) ? [tr.model, tr.served] : 0, tr?.routed && tr.done && tryOk(tr) ? tr.served : 0, tr?.done && tryOk(tr) ? tr.upstream : 0, meta, metrics, cost]);
     s = { lang, shows, name, icon, cost, said, how, tr, ag, meta, metrics, title, sig };
     rowSaid.set(r, s);
     return s;
@@ -4428,7 +4483,7 @@ function routingPage(part) {
       reqs.style.setProperty("--rt-cols", px.join(" "));
     }
     redrawList(); // the rows' heights measured in the columns before are dropped (listKey)
-    if (!inMetaFit) metaFit(); // new columns, not metaFit's own: whether the numbers fit asked again
+    if (!inMetaFit) { metaFit(); sideFit(); } // new columns, not metaFit's own: whether the numbers fit asked again
   };
   // told a frame later: the rows taking their columns can move the list's
   // scrollbar and with it the probes, which within the observer's own turn
@@ -4453,12 +4508,20 @@ function routingPage(part) {
     const was = probeShapes.get(r);
     if (was && was.key === key) return was.s;
     const how = outcome(r)[1], meta = r.tries.length > 1 ? t("{n} tries", { n: r.tries.length }) : "";
+    // a request in flight's numbers too (60 B, ≈ tokens, ago): measured
+    // without them, its column was as wide as no numbers, and they were
+    // drawn past the list's edge, cut off (normalcoder_ on X)
     const s = ["t" + digits(rowClock(r.time)), "a" + JSON.stringify([r.model, tagKind(r) ? kindName(tagKind(r)) : ""]),
-      "m" + digits(JSON.stringify([meta, requestMetrics(r, how).map((m) => [m[0], m[2]])]))];
+      "m" + digits(JSON.stringify([meta, requestMetrics(r, how).map((m) => [m[0], m[2]]), liveParts(probeOf(r)).map((p) => p[0])]))];
     probeShapes.set(r, { key, s });
     return s;
   }
   // fillSizer: a probe of each shape the rows have, in the sizer
+  // probeOf: a request in flight measured as quiet for 59 min, the widest
+  // its "ago" says in the hour: measured as it was then ("3 s ago"), the
+  // row's numbers wrapped a line once it said "13 s ago", between two of
+  // the gateway's answers, and stayed two lines at any width
+  const probeOf = (r) => r.done || !r.contentAt ? r : { ...r, contentAt: Date.now() - 3540e3 };
   function fillSizer(rs) {
     const key = document.documentElement.lang + "|" + visibleMetrics.join(), seen = new Set(), want = new Map();
     for (const r of rs) {
@@ -4473,7 +4536,7 @@ function routingPage(part) {
       let p = probes.get(id);
       if (!p) {
         const [said, how, tr] = outcome(r), meta = r.tries.length > 1 ? [t("{n} tries", { n: r.tries.length })] : [];
-        const b = reqRow(r, said, how, tr, agentOf(r.agent), meta, requestMetrics(r, how), "");
+        const b = reqRow(probeOf(r), said, how, tr, agentOf(r.agent), meta, requestMetrics(r, how), "");
         p = el("div", b.className.replace(/^rt-req /, "rt-probe ") + " probe"); // not a row to anything that asks for one
         p.append(...b.childNodes);
         probes.set(id, p);
@@ -4596,6 +4659,23 @@ function routingPage(part) {
     kids.forEach((k, i) => { if (i < was.length) morphRow(was[i], k); else old.append(k); });
     for (let i = kids.length; i < was.length; i++) was[i].remove();
   }
+  // rowTier: the service tier a request's row says it went at, in the
+  // words its tag takes ("fast", "ultrafast", "flex"), "" for the usual
+  // one. The try's own tier once it has gone out (what was sent, a tier
+  // its provider drops included), the one asked for while it is on its way.
+  const TIER_TAG = { priority: "fast", fast: "fast", ultrafast: "ultrafast", flex: "flex" };
+  function rowTier(r, tr) {
+    const v = tr?.tier || (tr?.done ? "" : r.tier) || "";
+    return TIER_TAG[String(v).toLowerCase()] || "";
+  }
+  function tierNote(r, tr, tier) {
+    const word = tr?.tier || r.tier;
+    const said = tr?.fast ? t("Sent in its vendor's fast mode, as the group says")
+      : tier === "flex" ? t("Sent at its vendor's flex tier (service tier {tier}): slower, at a lower price", { tier: word })
+      : t("Sent in its vendor's fast mode (service tier {tier}): quicker, at a higher price", { tier: word });
+    const served = tr?.tierServed && tr.tierServed !== tr.tier ? t("Its reply said it ran at {tier}.", { tier: tr.tierServed }) : "";
+    return served ? `${said}\n${served}` : said;
+  }
   function reqRow(r, said, how, tr, ag, meta, metrics, title) {
     const b = el("button", "rt-req " + how);
     const when = el("span", "at", rowClock(r.time));
@@ -4633,10 +4713,13 @@ function routingPage(part) {
       ef.title = effortNote(r, tr);
       to.append(ef);
     }
-    if (tr?.fast) {
-      // sent in its vendor's fast mode, as the group's member is
-      const ft = el("span", "ef", t("fast"));
-      ft.title = t("Sent in its vendor's fast mode, as the group says");
+    const tier = rowTier(r, tr);
+    if (tr?.fast || tier) {
+      // sent in its vendor's fast mode, as the group's member is, or at
+      // the service tier the request went out at: Codex's /fast asks
+      // for priority (Anotiaww on X), Claude's for speed "fast"
+      const ft = el("span", "ef tier", tier === "ultrafast" ? t("Ultrafast") : tier === "flex" ? t("flex") : t("fast"));
+      ft.title = tierNote(r, tr, tier);
       to.append(ft);
     }
     if (tr?.entry) {
