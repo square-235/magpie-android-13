@@ -1342,6 +1342,13 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 				// row, to sign in again (#1793)
 				noteSignIn(ctx, on.Account, req, res)
 			}
+			if rest == "/responses" && res.StatusCode == http.StatusTooManyRequests {
+				if acct, ok := codexRelayedAccount(base, r.Header, on); ok {
+					// what the refusal says of the account's credits, for
+					// asking again on them below (heardCodexCredits)
+					heardCodexCredits(acct, res.Header)
+				}
+			}
 			if !creditsAsked && rest == "/responses" && base != codexAPIBase && res.StatusCode == http.StatusTooManyRequests && relayOnCredits(on) {
 				// the account holds credits and was refused as out of its
 				// allowance: ChatGPT may turn away the turn that uses the
@@ -1467,7 +1474,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 			res.Body = io.NopCloser(bytes.NewReader(msg))
 			// its credits and resets looked at above, a 429 that names
 			// when the account is back holds it till then (codexHolds)
-			noteCodexHold(holdKey, res.StatusCode, res.Header, msg)
+			noteCodexHold(holdKey, res.StatusCode, res.Header, msg, relayOnCredits(on))
 			if overload && codexBusy(res.StatusCode, msg) && s.codexFallsBack(r, body) {
 				// still too busy once asked again: the fallbacks answer
 				said := provider.APIError(msg, res.Status)
@@ -2390,10 +2397,52 @@ func (s *Server) askCodexList(rctx context.Context, h http.Header, query string,
 	}
 }
 
+// codexListAuth keeps the client's ChatGPT sign-in apart from the gateway
+// key identifyCaller replaces with its internal token (#5197).
+type codexListAuth struct{}
+
+func keepCodexListAuth(r *http.Request, identified bool) *http.Request {
+	if r.Method != http.MethodGet || r.URL.Path != CodexPath+"/models" {
+		return r
+	}
+	auth := ""
+	if identified {
+		auth = r.Header.Get("Authorization")
+	}
+	a := strings.TrimSpace(auth)
+	if len(a) <= 7 || !strings.EqualFold(a[:7], "Bearer ") {
+		auth = ""
+	} else {
+		token := strings.TrimSpace(a[7:])
+		if token == "" || token == Token || strings.HasPrefix(token, Token+"-") || access.Named(token) || access.Default(token) {
+			auth = ""
+		}
+	}
+	return r.WithContext(context.WithValue(r.Context(), codexListAuth{}, auth))
+}
+
 // codexModels is the ChatGPT backend's model list for this sign-in, with
 // magpie's models after it. Should the backend not answer, or not in
 // time, Codex's last list of its own stands in.
 func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
+	if auth, kept := r.Context().Value(codexListAuth{}).(string); kept {
+		if auth == "" {
+			writeError(w, provider.Responses, http.StatusUnauthorized, "a ChatGPT sign-in is required for the Codex backend model list")
+			return
+		}
+		// Both the cache key and the backend ask use the client's sign-in,
+		// after the gateway's guards have judged its key. No gateway key
+		// or internal token belongs in the request to ChatGPT.
+		r = r.Clone(r.Context())
+		r.Header.Set("Authorization", auth)
+		for _, h := range []string{"x-api-key", "x-goog-api-key", "x-openai-actor-authorization"} {
+			r.Header.Del(h)
+		}
+		if q := r.URL.Query(); q.Has("key") {
+			q.Del("key")
+			r.URL.RawQuery = q.Encode()
+		}
+	}
 	var own []any
 	body, etag, deny, denyBody := s.codexBackendList(r)
 	// A sign-in the backend calls revoked (401 token_revoked, "Encountered

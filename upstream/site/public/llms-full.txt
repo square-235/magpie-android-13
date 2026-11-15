@@ -724,12 +724,11 @@ magpie runs a gateway on your computer, at `127.0.0.1:3425`. It speaks the OpenA
 | ChatGPT (Plus, Pro, Business) | `codex/…` | `magpie accounts add codex` |
 | GitHub Copilot | `copilot/…` | `magpie accounts add copilot` |
 | Gemini (Code Assist) | `gemini/…` | `magpie accounts add gemini` |
-| Antigravity | `antigravity/…` | `magpie accounts add antigravity` |
 
 - **Claude..** Requests on a Claude subscription run through the Claude Code installed on your computer, so keep it installed.
 - **Copilot..** Copilot gives you a code to enter on GitHub’s page. For GitHub Enterprise on its own domain: `magpie accounts add copilot --host <name>.ghe.com`.
 - **Gemini..** This is Gemini CLI’s Google sign-in. Google answers it only for a Code Assist Standard or Enterprise account with a Google Cloud project of its own; `magpie accounts project gemini <email> <project>` names the project.
-- **Antigravity..** Its sign-in gives Antigravity’s Claude and Gemini models.
+- **Antigravity..** Install Antigravity (local agy CLI) from Plugins (`magpie plugin add @magpie-community/opencode-agy-cli-auth`). It runs the agy CLI you installed and signed in to, so Google sees agy’s own requests. Signing in to Antigravity in magpie directly is retired: Google bans accounts used that way.
 
 Other subscriptions are added as plugins, from magpie’s Plugins page; see [Plugins](https://usemagpie.ai/docs/plugins).
 
@@ -2294,7 +2293,7 @@ magpie doesn’t use OpenRouter’s Responses API. An agent that speaks Response
 - **Where it comes from..** magpie fetches the list from `https://openrouter.ai/api/v1/models`, which gives each model’s context length. Names, reasoning levels and prices come from the `openrouter` catalog on models.dev.
 - **Which models agents see..** OpenRouter lists hundreds. Unless you pick some, magpie shows agents the first 24 OpenRouter lists, newest first. Pick the rest in the provider’s model list, or turn on Best in family to keep only the newest of each family.
 - **New models..** `auto-include` rules expose matching models now and each one a later fetch lists for the first time, and `refresh-every` has magpie fetch the list again by itself.
-- **Image models..** OpenRouter’s `/models` lists text models only, so magpie reads image models such as FLUX, Seedream, Riverflow, Recraft and GPT Image from `/api/v1/images/models`. Choose one in Settings → Models → Images.
+- **Image models..** OpenRouter’s `/models` lists text models only, so magpie reads image models such as FLUX, Seedream, Riverflow, Recraft and GPT Image, and their free variants, from `/api/v1/models?output_modalities=image`. Choose one in Settings → Models → Images.
 - **Decision models..** OpenRouter’s decision models (`liquid/d1`, `cloudflare/clef`, `~typesafe/jev-latest`…) are listed too, so a routing group can classify turns with the same key.
 
 ```
@@ -10275,6 +10274,29 @@ magpie update mirror off
 
 In the app, Settings' Download source row has Use a mirror… for a Mirror address, and Remove mirror to go back. No mirror is used unless you give one. On a network that lets GitHub through and not usemagpie.ai, nothing needs setting: the update comes from GitHub, its signature checked.
 
+## Download source and Update source in Settings
+
+Two rows in the app's Settings decide where an update comes from. Neither needs changing on a network that reaches usemagpie.ai.
+
+| Setting | Choice | What the update is downloaded from |
+| --- | --- | --- |
+| About › Download source | `usemagpie.ai` (the default) | usemagpie.ai, and github.com when that fails. |
+|  | Use a mirror… | usemagpie.ai, and the mirror when that fails, in place of github.com. Remove mirror goes back. |
+| About › Update source | Automatic (the default) | usemagpie.ai's release list and files, and GitHub's when the site can't be reached. |
+|  | usemagpie.ai only | usemagpie.ai alone, never GitHub, so a mirror is never used. |
+|  | GitHub only | github.com alone (through the mirror when one is set), never usemagpie.ai. |
+
+### What a mirror's address is
+
+A mirror here is a GitHub download proxy: a site that fetches any github.com link put after its own address, as in `https://mirror.example/https://github.com/yetone/magpie-releases/releases/download/…`. Type only the part before `https://github.com`, a full `https://` address such as `https://mirror.example/`. Public GitHub download proxies work this way; `gh-proxy.com`, the one `MAGPIE_MIRRORS` falls back to, is one of them. magpie names no mirror of its own and vouches for none: whichever you use, the file is checked against usemagpie.ai's checksum and the release's signature, and one that doesn't match is not installed.
+
+### When to use one
+
+- An update stalls or fails with a timeout or `EOF`, and both usemagpie.ai and github.com are slow or blocked where you are (often in mainland China): set a mirror.
+- usemagpie.ai is slow and GitHub is fast: pick GitHub only, no mirror needed.
+- You have a proxy: put it in Network and sharing › App updates instead; a mirror is for when you have none.
+- A download that failed through the mirror says so, and offers to download from GitHub instead, which removes the mirror.
+
 ## MAGPIE_MIRRORS: a mirror after a failure
 
 Another way is off by default. With `MAGPIE_MIRRORS=on`, the official source is tried first, and a mirror only after a network error, HTTP 429, HTTP 5xx or GitHub's rate-limit 403. The defaults are `registry.npmmirror.com` for npm and `gh-proxy.com` for GitHub; `MAGPIE_NPM_REGISTRY` and `MAGPIE_GITHUB_MIRROR` replace them:
@@ -10648,7 +10670,7 @@ The key is issued under the rule’s gateway key and held to it like any other i
 
 ## Management API
 
-Providers, accounts, gateway keys and account groups can be managed with no hand-edited file, by a key you allow to. Allow it from the command line (not through the API: a key can't give another more than it has):
+Providers, accounts, gateway keys, account groups and routing groups can be managed with no hand-edited file, by a key you allow to. Allow it from the key’s menu in the app, under Advanced, or from the command line (not through the API: a key can't give another more than it has):
 
 ```
 magpie gateway-key add automation
@@ -10659,7 +10681,7 @@ curl -s -X POST http://127.0.0.1:3425/v1/magpie/admin/gateway-keys/add-key \
   -H "Authorization: Bearer $KEY" -d '{"name":"ci"}'
 ```
 
-It answers the same as the app’s own pages do, under `/v1/magpie/admin/`: `GET providers`, `POST provider/{save,delete,on,off,name,…}`, `POST keys/…` (a provider’s keys), `GET`/`POST gateway-keys[/{add-key,rename-key,limit-key,models-key,remove-key,…}]`, `GET`/`POST account-groups[/…]`, and `POST signin` with `{"agent":…}`, which answers the vendor’s page and the code to type there, never a password; open it on a computer with a browser. A saved key and a gateway key’s secret are never told again, and what changes this computer’s apps is not served.
+It answers the same as the app’s own pages do, under `/v1/magpie/admin/`: `GET providers`, `POST provider/{save,delete,on,off,name,…}`, `POST keys/…` (a provider’s keys), `GET`/`POST gateway-keys[/{add-key,rename-key,limit-key,models-key,remove-key,…}]`, `GET`/`POST account-groups[/…]`, `GET routing-groups[/{id}]` and `POST routing-groups/{create,update,delete,switch,…}` (the Routing page’s groups and combos, checked as the app checks them; `update` changes only the fields you send), and `POST signin` with `{"agent":…}`, which answers the vendor’s page and the code to type there, never a password; open it on a computer with a browser. A saved key and a gateway key’s secret are never told again, and what changes this computer’s apps is not served. Sign-ins are not exported: that would hand out every account’s secrets.
 
 A key that is read-only, the extension’s, issued or short-lived, or the sharing key, can’t have it. A web page can’t call it, with a key or without (any request with `Origin` or `Sec-Fetch-*` is refused), and nor can a request under another name for this computer. Shared over the network, only a key set to `any` gets in.
 
@@ -10707,7 +10729,7 @@ Run magpie on a server or a NAS that has no desktop: its gateway serves your mod
 
 | **Image** | `ghcr.io/yetone/magpie`, for `linux/amd64` and `linux/arm64` |
 | --- | --- |
-| **Tags** | `latest` (the newest release), `daily` (the newest release as of 20:00 UTC, moved once a day), `stable` (the desktop app's Stable channel: a release a week, out three days first, or an urgent one at once), `0.1.1150` (one release), `0.1`, `edge` (every change on `main`) |
+| **Tags** | `latest` (the newest release), `daily` (the desktop app's Daily channel: once a day at 20:00 UTC, the newest release whose CI run passed, or an urgent one at once), `stable` (the desktop app's Stable channel: a release a week, out three days first, or an urgent one at once), `0.1.1150` (one release), `0.1`, `edge` (every change on `main`) |
 | **Ports** | `3425` the gateway agents call; `3430` the browser UI, when the container runs `magpie web`; it answers the gateway’s `/v1` routes too, so a reverse proxy needs only this port |
 | **Volume** | `/config`: providers, keys, sign-ins, plugins and usage |
 | **User** | nonroot (uid 65532) |
@@ -11856,7 +11878,7 @@ magpie plugin add ./agent-aider   # or a single *.agent.js file
 
 ### connect
 
-`connect(input)` returns the other keys to write beside the model, by key path, each with its value; it may be `async`. It is given `gateway` (`url`, `v1` — the URL ending in `/v1` — and `key`, the agent’s own key, which counts its requests under its id), `model` (`id`, `name`, `context`, `output`, `images`, `efforts`, and as `/v1/models` names them `native_endpoints`, the gateway paths a request for it goes on untranslated such as `["/v1/chat/completions"]`, and `pricing`, USD a token as decimal strings: `prompt`, `completion`, `input_cache_read`, `input_cache_write`; each left out when not known, never empty or 0), `models` (every model magpie offers the agent, the same way) and `agent` (`id`, `config`). A plugin without `connect` writes only the model. It is called again when magpie’s models change, so a list it writes stays current.
+`connect(input)` returns the other keys to write beside the model, by key path, each with its value; it may be `async`. It is given `gateway` (`url`, `v1` — the URL ending in `/v1` — and `key`, the agent’s own key, which counts its requests under its id), `model` (`id`, `name`, `context`, `output`, `images`, `efforts`, and as `/v1/models` names them `native_endpoints`, the gateway paths a request for it goes on untranslated such as `["/v1/chat/completions"]`, and `pricing`, USD a token as decimal strings: `prompt`, `completion`, `input_cache_read`, `input_cache_write`; each left out when not known, never empty or 0), `models` (every model magpie offers the agent, the same way), `decisionModels` (magpie’s decision models — Jev, Clef, a model a plugin marks `decides` — and the routing groups of them, kept out of `models` and `/v1/models`, each `id`, `name`, `provider` or `group: true`, and `endpoints`, the paths it is asked on: `["/v1/systemone", "/v1/decisions"]`; `[]` for none) and `agent` (`id`, `config`). A plugin without `connect` writes only the model. It is called again when magpie’s models change, so a list it writes stays current.
 
 `own({ config, base, model })`, when exported, gives the agent’s own models for the row’s picker: it gets the config file parsed (`{}` for none), `base` too when the agent has one, and the model the agent is on, and returns a list of `{ value, model, direct }`, `value` what is written as the model, `model` its name at the vendor and `direct` the vendor it goes to (`Google`, `OpenAI`, `Anthropic`). Without it the picker lists the model the agent is on.
 
@@ -12147,7 +12169,7 @@ The app writes a log of what it did, `app.log`, in `~/Library/Logs/magpie` on ma
 
 magpie asks its own site for a few things, whatever the privacy settings say, as any app asks its update server. None of these requests carries the install id or an account.
 
-- `/api/latest`: the update feed, every 6 hours unless `noAutoUpdate` is on, with `?lang=` for the notes in your language, and `?channel=stable` when Settings → About → Update channel is Stable; a fresh install asks `?channel=stable` once too, to stay on Stable when it is Stable’s version. Neither says who you are. `/api/notes` gives What’s new after an update.
+- `/api/latest`: the update feed, every 6 hours unless `noAutoUpdate` is on, with `?lang=` for the notes in your language, and `?channel=stable` or `?channel=daily` when Settings → About → Update channel is Stable or Daily; a fresh install asks `?channel=stable` once too, to stay on Stable when it is Stable’s version. Neither says who you are. `/api/notes` gives What’s new after an update.
 - `/files/<version>/<file>`: the release files an update and the installer download, served from Cloudflare R2. A file the site doesn’t hold is sent on to github.com. Nothing is counted.
 - `/api/partners`: the add sheet’s partner list, every 6 hours. One fetch in ten is counted as a `magpie partners fetch` event, with the country Cloudflare gives, while a partner is listed.
 - `/go/<partner>/site` and `/go/<partner>/keys`: a partner’s website and key-page links, opened in your browser, are counted (the partner, which link, a region, a country) as `magpie partner go` before you are sent on.
