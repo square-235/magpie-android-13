@@ -2455,6 +2455,9 @@ func (p Provider) listPriceIn(c priceCats, model string) (catalog.Price, bool, i
 	if p.pluginFree(model) {
 		return catalog.Price{}, true, pricedOwn
 	}
+	if f, ok := mythosFable(model); ok {
+		return p.listPriceIn(c, f)
+	}
 	return catalog.Price{}, false, pricedOwn
 }
 
@@ -2783,6 +2786,9 @@ func MakerPrice(model string) (catalog.Price, bool) {
 		if pr, ok := makerListPrice(m); ok {
 			return pr, true
 		}
+	}
+	if f, ok := mythosFable(model); ok {
+		return MakerPrice(f)
 	}
 	return catalog.Price{}, false
 }
@@ -3254,6 +3260,22 @@ func pricedNamesTo(dst []string, model string) []string {
 	return out
 }
 
+// mythosFable is the Fable of a Mythos id's version (claude-mythos-5.2 ->
+// claude-fable-5.2), the price of a Mythos nothing prices
+// (shangyuan0818 on X): Anthropic gives Mythos 5.1 Fable 5.1's per-token
+// pricing and Mythos 5 Fable 5's, and models.dev's azure lists
+// claude-mythos-5 at claude-fable-5's. It is the last place looked, so a
+// price for the Mythos itself (a catalog's, what Anthropic told Claude
+// Code, a plugin's) always comes first.
+func mythosFable(model string) (string, bool) {
+	l := strings.ToLower(strings.TrimSpace(model))
+	i := strings.Index(l, "claude-mythos-")
+	if i < 0 {
+		return "", false
+	}
+	return l[:i] + "claude-fable-" + l[i+len("claude-mythos-"):], true
+}
+
 // PricedName is the catalog ID used for a list-price estimate. Prefer a
 // directly listed model before falling back to a documented alias.
 func PricedName(model string) string {
@@ -3261,6 +3283,11 @@ func PricedName(model string) string {
 	for _, name := range n {
 		if _, ok := makerListPrice(name); ok {
 			return name
+		}
+	}
+	if f, ok := mythosFable(model); ok {
+		if _, ok := MakerPrice(f); ok {
+			return PricedName(f)
 		}
 	}
 	return n[len(n)-1]
@@ -3628,6 +3655,19 @@ func entriesOf(of func(Provider) bool, off func(pid, model string) bool) []Entry
 	return out
 }
 
+// InputsOf is what a model takes: what its source listed, else, when its
+// source said nothing of its input, what models.dev says the model takes
+// wherever it is served, as images are read (catalog.SeesImages). A Gemini
+// model a list gave bare (Vertex AI's, a relay's) was said to take text
+// and image alone, never its audio (Parlevent_ on X). The list may be
+// shared: the caller only reads it.
+func InputsOf(m catalog.Model) []string {
+	if m.InputModalities != nil || m.ImageInput != nil {
+		return m.InputModalities
+	}
+	return catalog.InputsOf(m.ID)
+}
+
 // entryFor is one of a provider's models as the catalog carries it: the
 // window and the reply limit a request on it is routed and metered against,
 // with what the user set taken over the vendor's list and models.dev.
@@ -3653,7 +3693,7 @@ func sharedEntry(p *Provider, m catalog.Model, s settings.Settings) Entry {
 	name := cmp.Or(m.Name, m.ID)
 	e := Entry{ID: p.ID + "/" + m.ID, Model: m.ID, Family: p.Family, Name: name, Efforts: effortsOf(m), Provider: p,
 		Images: images, ImageInput: imageInput, Context: ctx, WindowSet: p.ContextOf(m.ID) > 0, MaxContext: m.MaxContext, Output: output, OutputSet: outputOf(s, p.ID, m.ID) > 0, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers, Released: m.Released,
-		Inputs: m.InputModalities, Outputs: m.OutputModalities, Codex: m.Codex,
+		Inputs: InputsOf(m), Outputs: m.OutputModalities, Codex: m.Codex,
 		AlwaysThinks: m.AlwaysThinks, DynamicTools: m.DynamicTools, DefaultEffort: m.DefaultEffort}
 	if lv, ok := catalog.CodexLevels(m.Codex); ok {
 		// the levels the vendor lists the model at in Codex's shape are

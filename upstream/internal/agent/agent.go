@@ -116,6 +116,12 @@ type Field struct {
 	// ("model" for Claude Code's tiers and subagents): a profile's details
 	// say so, and Drift reads the field as on that one's model (#1050).
 	Follows string
+	// Own fields are the user's own settings of the agent's, never
+	// magpie's wiring (Claude Code's permission mode): magpie writes one
+	// only when the user picks it, so Disconnect, Reapply and a restore
+	// leave it as it is, and a profile neither keeps nor writes it. A
+	// value the user then sets in the agent itself stays theirs.
+	Own bool
 }
 
 // Agent is one supported coding agent.
@@ -235,15 +241,15 @@ type Agent struct {
 	// is that group's (#750).
 	Routed func() bool
 	// FailingOver reports an agent that isn't connected whose requests
-	// still go through magpie's gateway, for account failover alone (Codex
-	// signed in to ChatGPT with more of its accounts on in magpie, #1385):
-	// the Agents page says so and what turns it off, and the gateway lists
-	// it only its own models.
+	// still go through magpie's gateway, for account failover alone: what
+	// a magpie from before wrote in Codex's config by itself (#1385), till
+	// Sync takes it out (TylerBai_loveai on X). The Agents page says so,
+	// and the gateway lists it only its own models.
 	FailingOver func() bool
 	// EndFailover takes out what account failover wrote, for magpie
 	// quitting: left there, the agent would be pointed at a gateway that
 	// no longer answers, and retry till magpie is open again (Leon920717
-	// on X). The next start's Sync writes it again.
+	// on X).
 	EndFailover func() error
 	// TakeLeftovers takes out what magpie wrote that no Disconnect could
 	// name: an address at magpie's gateway whose marks are gone (magpie's
@@ -373,6 +379,11 @@ type Agent struct {
 	// ~/.cursor (MCP servers, skills, hooks, chats) is the Cursor editor's
 	// too, so the Library and Sessions call it Cursor (SharedName).
 	shared string
+	// sharedApp, when set, reports whether an app of the vendor's that
+	// reads the shared folder is here, the folder or not: VS Code and
+	// GitHub Copilot's JetBrains plugin read ~/.copilot's
+	// copilot-instructions.md before anything has made the folder.
+	sharedApp func() bool
 	// pathOwn, when set, says whether the file at Path is this agent's,
 	// not one another tool wrote there first: a JetBrains plugin's
 	// settings.json in Qoder CN's folder (#1495).
@@ -440,7 +451,15 @@ func (a *Agent) SharedName() string {
 // but what the other app reads there too, the Library's MCP servers and
 // skills, is still given.
 func (a *Agent) SharedHere() bool {
-	return a.shared != "" && a.WSL == "" && a.Dir != "" && !Taken(a.Dir) && agentDir(a.Dir)
+	return a.shared != "" && a.WSL == "" && a.Dir != "" && !Taken(a.Dir) && (agentDir(a.Dir) || a.SharedRead())
+}
+
+// SharedRead reports whether an app of the agent's vendor that reads its
+// shared folder is here (sharedApp): VS Code, or GitHub Copilot's JetBrains
+// plugin, for Copilot CLI's ~/.copilot. A folder left by the CLI's
+// uninstall is then no leftover: that app still reads it.
+func (a *Agent) SharedRead() bool {
+	return a.shared != "" && a.WSL == "" && a.Dir != "" && a.sharedApp != nil && !Taken(a.Dir) && a.sharedApp()
 }
 
 // Detected reports whether the agent seems to be installed or configured.

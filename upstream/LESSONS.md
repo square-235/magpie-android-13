@@ -435,6 +435,21 @@ ok except gateway" stops being a normal run record.
   goes through would hold it.
 - Seen 2× (2026-10-16, 2026-10-17).
 
+**A quiet `go test ./...` log is not a hang until a package's own time
+says so.** go test prints packages in order, so one slow package holds
+back every line after it, and the log moves in bursts.
+- 705d67efc (11-15) called 0dbdc7481's macOS Test step hung: nothing
+  past internal/libc for 44 minutes. The next run was cancelled at 53
+  minutes for the same reason, and its log showed the step had just
+  finished. internal/library reported 264s but printed at 02:33, so it
+  had started 47 minutes into the step. The step was slow, not stuck
+  (#5267).
+- Before you cancel, compare the last burst's time with the reported
+  seconds of the packages that came before it. go 1.26 waits only 5s for
+  a test binary's pipes once the binary exits, so a lingering child
+  can't explain a silence.
+- Seen 1× (2026-11-15).
+
 **A suite's log is kept whole until its reds are named.**
 - 5b12407e8 (10-17) piped a full run through tail, lost which
   internal/gateway test failed at 2559s, and shipped with an unnamed red.
@@ -627,6 +642,21 @@ checks the write.**
   Restore with the bytes read before, or give the test its own HOME.
 - Seen 1× (2026-11-13).
 
+**A change to which tests share a process runs a pairing check on the
+package-global state they leave.**
+- 0dbdc7481 (11-15) ran internal/gateway's plain Test step in chunks as
+  Race does, green on mote's 12 workers. On CI the chunks held other
+  tests, and TestEffortChangeKeepsTheCache started held by a Codex
+  usage-limit rest that six tests left in restingUntil (#6717): its
+  helper set a home without fresh(t), and fresh only cleared rests at a
+  test's start. 6e0b8113d clears them at the end too, and in every
+  helper that sets a home itself; the six pairs were red before it.
+- A green split proves only that split. Run each test that records
+  package state with the one that reads it, in one process
+  (`-run '^(A|B)$'`), and clear the state in a t.Cleanup where it is
+  made.
+- Seen 1× (2026-11-15).
+
 **A value put in a request's context lives as long as anything that
 holds the context, a stopped timer included.**
 - #5250: TestSocketTurnBodiesFreed kept 1 of 12 turn bodies in full
@@ -710,6 +740,13 @@ cause:
   test was being written. Checking `git log` isn't enough while both are
   working; say on an issue, or file one, that you are on it before you
   start.
+  - 11-14: again. TestInfoSaysMCPHub went red on ubuntu's -race CI at
+    3dbbb173e with no issue filed. The review's loop wrote a fix
+    (ListenAndServe waits for keepHubPruned) and spent a 30-minute
+    gateway -race run on it, while another session wrote the same fix
+    and pushed it as 49f49c41c. Neither said it was on it. The review's
+    copy was dropped. File the red (or comment on its issue) before the
+    first edit, and `git fetch` before a long run as well as after.
 - 10-12/10-13: #1794 got four "seen again" comments before anyone took
   it (fixed in 6ae6b3402), and #1543 was seen three times with no owner
   (097479dab). A comment that a red came back is not work on it: take it
@@ -1418,6 +1455,27 @@ each one.
     16:55 (05d25d8dc). The same guard went red the same morning from the
     yaml.v3 copy. A new file that adds a package-level value runs the
     guards that walk the tree, which only ./... reaches.
+    80a315a70 (17:00, the hidden page's cache release) did it a third
+    time: it ran gui and usage, and its new POST /api/page-away left
+    internal/cli's TestEveryRouteHasACommandOrIsNamed red until
+    69946f43c (17:48). A new route runs internal/cli too.
+  - The updater shipped on chosen packages: 14807bcf2 and 943404477
+    (18:20, Restart to update and Windows downloads) say the full suite
+    wasn't run because mote was at load 126 to 142 and mica's disk was
+    full (114 MB free, 172 GB of stale ~/runs copies; the review cleared
+    them). Saying so is right, but an updater bug is one users can only
+    leave by downloading by hand. When both boxes are busy, a change to
+    the update path waits for a full run, or takes it on the Windows or
+    Linux box; a full disk on a run box is cleared, not worked around.
+  - Pushed before its own suite finished, "at the coordinator's ask":
+    32c830fc1 (TUI language, +1,293 lines) and 106a24b95 (skills update
+    by themselves). Both suites later came back with only the known
+    #6648 red, and 32c830fc1's result went on #6649, a CLI feature
+    issue nobody reading the commit would find. A coordinator's hurry
+    doesn't stand in for the run: wait for it, or push and then put the
+    result where the commit points (its own issue, named in the body).
+    106a24b95 did what the updater lesson above asks: with mote at
+    load 167 it ran the full suite in WSL instead of skipping it.
   - No Test run finished green from 63c91cae5 (11-13 21:51 UTC) to
     07a62b373 (11-14 08:34 UTC): 57 runs were cancelled by the next push
     and two went red (TestEffortUpdateRefused, fixed in a4937f8ff;
@@ -1426,6 +1484,12 @@ each one.
     bodies name. A cancelled run tests nothing; when pushes come faster
     than a run takes, someone lets one run finish, or the workflow keeps
     the run of the newest tag instead of cancelling it.
+    It happened again the same day: after 1ab2c3984 (11:38 UTC) went
+    green, the only two runs to finish were red (TestInfoSaysMCPHub,
+    fixed in 49f49c41c). Every other run was cancelled up to 221c91fae
+    (16:16 UTC), and the 14 tags v0.1.4171 to v0.1.4184 had no green
+    run behind them. 6bdeedc6f (1,836 lines, a new keyless gateway
+    route) ran only its own tests and has no "Not run" line.
   - A library vendored for an allocation cut: 0caa09b3d copied
     yaml.v3 v3.0.1 into third_party (11,400 lines, go.mod replace) for
     a 7-line emitter change. The review diffed it against the gofmt'd
@@ -1443,6 +1507,78 @@ each one.
   - Done right: f1f34d624 met the budget with no raise, moving keysTag
     into keyrates.js, which is loaded exactly when a model can have a
     key tag.
+- **11-14, criteria still missed.**
+  - The suite: a new route meets every guard that lists routes.
+    TestEveryRouteHasACommandOrIsNamed went red for a new GUI route
+    five times in five days (e8fbee60e, 65f1fdd1d, 5d54a990d, the MCP
+    account route, 90efddaba). 6bdeedc6f's /deepseek-chat routes, run
+    with their own tests only, left TestKeySlotEveryRoute and
+    TestLazyCatManifestListsTheClientRoutes red. The first was a real gap:
+    a key capped at one slot could run a chat page turn beside an agent's
+    request (#6688, cd030691a). 0b8c4bfc3's new field left
+    TestEveryWordHasZh red (e9fcc6229). A change that adds a route or a
+    label runs internal/cli, internal/gateway and internal/tui whole.
+  - A red with an issue still needs an owner. #6677 was red on main for
+    about three hours. A session that met it commented "Not taking it"
+    and shipped past it, and the review fixed it in 4c86b0ab4. The four
+    earlier issues for the same test (#5946, #6359, #6516, #6202) stayed
+    open after their fixes. Close an issue in the commit that fixes it
+    (`Fixes #N`).
+  - A `-run` of the new tests is not a run of the package. d50ae6fcb
+    changed three files in internal/usage and ran only its two new
+    tests. 93762f968, the next commit, changed the same package, and
+    its record is from a run at 442964d70, before d50ae6fcb. Their
+    pushed pair first ran together in the review (go test
+    ./internal/usage ./internal/usageapi at 93762f968: ok). Run the
+    changed package whole, at the head being pushed.
+  - A new value in a list that tests loop over meets every one of
+    them. 6256d9956 added "account" to access.Periods and ran
+    internal/access, budget, provider, cli and gui, but not
+    internal/gateway, where TestKeyLimitReservationsStayInTheirWindow
+    runs every period and went red (#6706, 2f5e75515). Before
+    pushing, grep the tests for the list's name (`access.Periods`)
+    and run each package that has one. The review's own first run
+    of it was piped through tail and lost which package failed; the
+    rerun went to a log file.
+- **11-15, criteria still missed.**
+  - A red filed as "red on main" is bisected before anyone ships past
+    it. 2bb201162 (11-12) dropped `&& key.isConnected` from the
+    editor's paste reader, so a curl pasted into a keyed provider's
+    Base URL saved its key unseen over the provider's own. It ran 92
+    provider-* GUI files; key-box-once, which says exactly that, isn't
+    named provider-*, and went red. #6424 then filed it as "red on
+    origin/main", and #6709 lists it among 111 red files, both with no
+    cause. The review bisected it in two runs (10/10 at the parent,
+    0/10 at 2bb201162) and fixed it in a2a49c204. Choose GUI files by
+    what the change touches (grep the tests for its selectors and
+    words), not by name; and a red on main has a first bad commit,
+    which `git bisect` finds faster than a list grows.
+  - A new API route runs internal/cli. 5bd41301b (warm-all) added
+    POST /api/warm-all and ran `-run 'WarmAll|WarmNow|...'` in
+    internal/provider only, so TestEveryRouteHasACommandOrIsNamed,
+    which names every route, was red on main from the push.
+    9cd5f3652 saw it an hour later and filed #6724 but shipped past
+    it; 72418591f named the route. A route, a setting or a command
+    reaches internal/cli's parity tests: run that package (43s).
+  - A size budget raised to fit, every day: coreScriptBudget rose 29
+    times from its reset at 8016205e3 (11-11) to b466aa280 (11-15),
+    +7,559 bytes, 12 raises on 11-13 alone, each "no page to move it
+    to". Recording each raise here hasn't slowed them; the bound needs
+    a rate the owner sets, or a raise that moves out as much (#2710).
+  - A "seen again" is still not work on it, a third time (#1794 on
+    10-12, #2444 on 10-17): #5052 (account-eye) had six comments, the
+    last naming the likely cause and "I'm not taking this", and 2e1c0a377
+    shipped past it and four usage-fold reds on #6003 the same way.
+    Instrumented, every red was a detached button; 17d230d65 fixed it
+    in one helper, 240 of 240 green in 8 parallel runs. When a comment
+    can name the cause, the fix is usually shorter than the comment.
+  - GUI tests in every file a change can reach, a guard red 14 days:
+    57246b381 (11-01) put an "All N accounts" strip over each Usage
+    card of several accounts and ran four GUI files, not usage-fold,
+    whose "most on one screen" guard fell from 15 to 11 that day. It
+    was filed on #6003 (11-10) and called "the same on main" for five
+    days; bisected on 11-15, nine steps on mica. A layout change runs
+    every file of its page.
 - **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
   diffed staticcheck's U1000 against its base for dead code, b98f906b1
   was red on the old code for an own-account gap, and 8 subscriptions

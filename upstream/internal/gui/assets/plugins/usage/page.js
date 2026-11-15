@@ -909,6 +909,42 @@ function holdsUnknownLine(why) {
   return line;
 }
 
+// The Agents list folds the clients that are small and idle into one
+// Other row (WJaunita45604 on X: dozens of randomly named test clients of
+// ~10K tokens each, every one a row laid out again at each refresh, slowed
+// the page down). A client folds when it is past the 5 with the most
+// tokens, under 1% of the period's tokens, and either has made no call in
+// the last 3 days or is past the top 20; two or more fold, or none do.
+// Their sum is the Other row's, so every total stays exact.
+const USAGE_FOLD_TOP = 5, USAGE_FOLD_LONG = 20, USAGE_FOLD_SHARE = 0.01, USAGE_FOLD_IDLE = 3 * 864e5;
+const USAGE_OTHER_PAGE = 100;
+let usageOtherOpen = false, usageOtherShown = USAGE_OTHER_PAGE;
+function usageFoldAgents(groups, total, now = Date.now()) {
+  const rank = new Map([...groups].sort((a, b) => usageTokens(b) - usageTokens(a)).map((g, i) => [g, i]));
+  const idle = (g) => {
+    const at = Date.parse(g.last || "");
+    return at > 0 && now - at >= USAGE_FOLD_IDLE;
+  };
+  const folds = (g) => {
+    const i = rank.get(g);
+    return i >= USAGE_FOLD_TOP && usageTokens(g) < USAGE_FOLD_SHARE * total && (i >= USAGE_FOLD_LONG || idle(g));
+  };
+  const folded = groups.filter(folds);
+  if (folded.length < 2) return { kept: groups, folded: [] };
+  return { kept: groups.filter((g) => !folds(g)), folded };
+}
+// usageSum adds groups' counts up, as one group
+function usageSum(groups) {
+  const add = (s, g) => {
+    for (const [k, v] of Object.entries(g)) {
+      if (typeof v === "number") s[k] = (s[k] || 0) + v;
+      else if (k === "own" && v) s.own = add(s.own || {}, v);
+    }
+    return s;
+  };
+  return groups.reduce(add, {});
+}
+
 function renderUsage() {
   const u = usage;
   const view = $("#view-usage");
@@ -992,61 +1028,66 @@ function renderUsage() {
   fitChartLabels();
 
   const total = Math.max(1, usageTokens(u));
-  const list = (id, groups, act) => {
+  // list draws a list's rows anew; more adds what follows them while the
+  // logos drawn before are still kept
+  const list = (id, groups, act, more) => {
     const box = typeof id === "string" ? $("#" + id) : id;
     keepIcons(box); // a logo made again blinks (keepIcons)
     box.replaceChildren();
-    for (const g of groups) {
-      const r = el("div", "row stat");
-      r.dataset.id = g.id || "";
-      r.append(icon(g.icon || "generic"));
-      const who = el("div", "who");
-      who.append(el("div", "name" + (g.name ? "" : " faint"), g.name || t("account not recorded")));
-      const sub = [];
-      if (g.sub) sub.push(g.sub);
-      sub.push(t(g.calls === 1 ? "{n} call" : "{n} calls", { n: g.calls }));
-      // what the calls cost in their plan's credits, as the replies said
-      // (WorkBuddy's 积分): an account's, a model's, an agent's (lcyksp
-      // on Discord), not only their tokens
-      if (g.credited) sub.push(ledCredits(g).textContent);
-      // magpie's own calls apart from the agents' (#1839): magpie's row
-      // says it is, and a model's, a key's or an account's how many of
-      // its calls were
-      if (id === "usageAgents" && g.id === "magpie") who.firstChild.append(ownBadge());
-      else if (g.own?.calls) sub.push(ownCalls(g.own.calls));
-      if (g.errors) sub.push(t("{n} failed", { n: g.errors }));
-      // of those, the replies magpie ended stuck in a loop (#1858)
-      if (g.loops) sub.push(t("{n} looped", { n: g.loops }));
-      if (g.retried) sub.push(t("{n} answered on a retry", { n: g.retried }));
-      // how long the streamed replies took to begin, and how fast they
-      // wrote after (#196)
-      if (g.timed) {
-        sub.push(t("TTFT {ms}", { ms: ledTook(Math.round(g.ttft_ms / g.timed)) }));
-      }
-      const gs = ledGroupSpeed(g);
-      if (gs) sub.push(gs.text);
-      const subLine = el("div", "sub", sub.join(" · "));
-      if (g.own?.calls) subLine.title = ownWhy();
-      who.append(subLine);
-      r.append(who);
-      const share = el("div", "share");
-      const fill = el("i");
-      fill.style.width = Math.max(1.5, 100 * usageTokens(g) / total).toFixed(1) + "%";
-      share.append(fill);
-      share.title = t("{n}% of tokens", { n: Math.round(100 * usageTokens(g) / total) });
-      r.append(share);
-      const num = el("div", "num");
-      // how much of its prompt came from the cache, counted as the cache
-      // read tile counts it (#925)
-      const hitRate = cacheHitOf(g);
-      const hit = g.cache_read && hitRate !== null ? " · " + t("hit rate {p}", { p: hitPct(hitRate) }) : "";
-      num.append(el("b", "", fmtN(usageTokens(g))), el("small", "", t("{a} in · {b} out", { a: fmtN(g.input), b: fmtN(g.output) }) + (g.cache_read ? " · " + t("{n} cached", { n: fmtN(g.cache_read) }) : "") + hit));
-      r.append(num);
-      r.append(el("div", "cost", fmtCost(g, g.provider) ? "≈" + fmtCost(g, g.provider) : ""));
-      if (act) act(r, g);
-      box.append(r);
-    }
+    for (const g of groups) box.append(row(id, g, act));
+    if (more) more(box);
     keptIcons = null;
+    return box;
+  };
+  const row = (id, g, act) => {
+    const r = el("div", "row stat");
+    r.dataset.id = g.id || "";
+    r.append(icon(g.icon || "generic"));
+    const who = el("div", "who");
+    who.append(el("div", "name" + (g.name ? "" : " faint"), g.name || t("account not recorded")));
+    const sub = [];
+    if (g.sub) sub.push(g.sub);
+    sub.push(t(g.calls === 1 ? "{n} call" : "{n} calls", { n: g.calls }));
+    // what the calls cost in their plan's credits, as the replies said
+    // (WorkBuddy's 积分): an account's, a model's, an agent's (lcyksp
+    // on Discord), not only their tokens
+    if (g.credited) sub.push(ledCredits(g).textContent);
+    // magpie's own calls apart from the agents' (#1839): magpie's row
+    // says it is, and a model's, a key's or an account's how many of
+    // its calls were
+    if (id === "usageAgents" && g.id === "magpie") who.firstChild.append(ownBadge());
+    else if (g.own?.calls) sub.push(ownCalls(g.own.calls));
+    if (g.errors) sub.push(t("{n} failed", { n: g.errors }));
+    // of those, the replies magpie ended stuck in a loop (#1858)
+    if (g.loops) sub.push(t("{n} looped", { n: g.loops }));
+    if (g.retried) sub.push(t("{n} answered on a retry", { n: g.retried }));
+    // how long the streamed replies took to begin, and how fast they
+    // wrote after (#196)
+    if (g.timed) {
+      sub.push(t("TTFT {ms}", { ms: ledTook(Math.round(g.ttft_ms / g.timed)) }));
+    }
+    const gs = ledGroupSpeed(g);
+    if (gs) sub.push(gs.text);
+    const subLine = el("div", "sub", sub.join(" · "));
+    if (g.own?.calls) subLine.title = ownWhy();
+    who.append(subLine);
+    r.append(who);
+    const share = el("div", "share");
+    const fill = el("i");
+    fill.style.width = Math.max(1.5, 100 * usageTokens(g) / total).toFixed(1) + "%";
+    share.append(fill);
+    share.title = t("{n}% of tokens", { n: Math.round(100 * usageTokens(g) / total) });
+    r.append(share);
+    const num = el("div", "num");
+    // how much of its prompt came from the cache, counted as the cache
+    // read tile counts it (#925)
+    const hitRate = cacheHitOf(g);
+    const hit = g.cache_read && hitRate !== null ? " · " + t("hit rate {p}", { p: hitPct(hitRate) }) : "";
+    num.append(el("b", "", fmtN(usageTokens(g))), el("small", "", t("{a} in · {b} out", { a: fmtN(g.input), b: fmtN(g.output) }) + (g.cache_read ? " · " + t("{n} cached", { n: fmtN(g.cache_read) }) : "") + hit));
+    r.append(num);
+    r.append(el("div", "cost", fmtCost(g, g.provider) ? "≈" + fmtCost(g, g.provider) : ""));
+    if (act) act(r, g);
+    return r;
   };
   // a client hidden from the Agents list (ikunbots on X: curl,
   // Go-http-client, python-httpx beside the agents in use) is left out of
@@ -1055,7 +1096,7 @@ function renderUsage() {
   const hid = new Set(state.settings?.usageAgentsHidden || []);
   const agents = usageSorted(u.agents, "agents");
   const hidden = agents.filter((g) => hid.has(g.id));
-  list("usageAgents", agents.filter((g) => !hid.has(g.id)), (r, g) => {
+  const agentAct = (r, g) => {
     r.classList.add("acts");
     const b = el("button", "icon us-more");
     b.type = "button";
@@ -1084,6 +1125,47 @@ function renderUsage() {
     b.onclick = (e) => { e.stopPropagation(); menu(); };
     r.oncontextmenu = (e) => { e.preventDefault(); menu(); };
     r.querySelector(".share").after(b);
+  };
+  // the small clients idle for days fold into one Other row at the
+  // list's foot (usageFoldAgents), drawn only while it is open
+  const { kept, folded } = usageFoldAgents(agents.filter((g) => !hid.has(g.id)), total);
+  if (!folded.length) usageOtherOpen = false;
+  list("usageAgents", kept, agentAct, (box) => {
+    if (!folded.length) return;
+    // a page at a time: every row drawn is laid out again at each refresh.
+    // The folded rows are made before the Other row, so their logos are
+    // the ones kept from the last draw
+    let inner = null;
+    if (usageOtherOpen) {
+      const shown = folded.slice(0, usageOtherShown);
+      inner = el("div", "us-folded");
+      for (const g of shown) inner.append(row("usageAgents", g, agentAct));
+      if (folded.length > shown.length) {
+        const more = el("button", "text us-folded-more", t("Show {n} more", { n: folded.length - shown.length }));
+        more.type = "button";
+        more.onclick = (e) => { e.stopPropagation(); usageOtherShown += USAGE_OTHER_PAGE; renderUsage(); };
+        inner.append(more);
+      }
+    }
+    const other = row("usageAgents", { ...usageSum(folded), id: "", name: t("Other"), sub: t(folded.length === 1 ? "{n} client" : "{n} clients", { n: folded.length }), icon: "generic" });
+    other.classList.add("us-other");
+    const chev = el("span", "us-other-chev");
+    chev.append(svg(CHEV_R, 11, 1.6));
+    other.firstChild.replaceWith(chev);
+    other.tabIndex = 0;
+    other.setAttribute("role", "button");
+    other.setAttribute("aria-expanded", String(usageOtherOpen));
+    other.title = t("Clients under 1% of the tokens, idle for 3 days or past the top 20. Their calls still count in every total.");
+    const flip = () => {
+      usageOtherOpen = !usageOtherOpen;
+      usageOtherShown = USAGE_OTHER_PAGE;
+      renderUsage();
+      $("#usageAgents .us-other")?.focus({ preventScroll: true });
+    };
+    other.onclick = flip;
+    other.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } };
+    box.append(other);
+    if (inner) box.append(inner);
   });
   const hb = $("#usageAgentsHid");
   hb.hidden = !hidden.length;
@@ -1300,9 +1382,9 @@ async function hideUsageAgent(id, hide) {
 // An allowance card can be hidden from the Overview (whqtian_07012 on
 // Discord: StepFun's plan card wanted, its balance card not), from the
 // card's own menu (quotaCardMenus). Only from what is shown: routing, caps
-// and the counting never hear of it, the tray panel's Allowances tab leaves
-// it out too (panelPageCut, onkashiko on X), and a menu bar cell asking for
-// a hidden card shows it until the page is left. Each is kept by its tray card id and its kind
+// and the counting never hear of it; the tray panel's Allowances tab
+// (panelPageCut) and the menu bar (trayShown, onkashiko on X) leave it out
+// too. Each is kept by its tray card id and its kind
 // (cardHideKey), in magpie's settings (usageCardsHidden), so every window
 // and magpie web agree; one line at the section's end says how many, and
 // has them back.
@@ -1414,6 +1496,8 @@ function quotaCardMore(card, subs) {
 }
 function quotaCardMenu(target, card, subs, from) {
   let part = [...card.children].find((c) => c.contains(target));
+  // an account's own card in the provider's: its first row names it
+  if (part?.classList.contains("subscription-acct")) part = part.firstElementChild;
   while (part && !part.classList.contains("subscription-account") && !part.classList.contains("subscription-head")) part = part.previousElementSibling;
   const who = part?.classList.contains("subscription-account") && subs.find((q) => trayCardID(q) === part.dataset.card);
   const of = who ? [who] : subs;
@@ -5269,22 +5353,139 @@ if (mode === "window" && params.get("view") === "usage") {
 }
 
 // The tray panel's Allowances tab leaves out what this page hides
-// (onkashiko on X): cards are the ones it draws, their hidden rows gone and
-// the cards hidden left out but for one peek asks for; gone says whether
-// this page hides a vendor's every card, which the panel's Arrange calls
-// hidden; away is the vendors the panel leaves out, those and the ones its
-// own Arrange hid (hidden). Here, not in the core, as page.js is in every
+// (onkashiko on X): cards are the ones it draws from list (the quotas as
+// read), in this page's order, the cards hidden left out before a key's
+// balance is put on its plan's card (keyCards), as the Overview has it, so
+// a plan hidden leaves its balance and a balance hidden leaves its plan's
+// card without it, and their hidden rows gone, but for what peek asks for;
+// gone says whether this page hides a vendor's every card, which the
+// panel's Arrange calls hidden, for list as read or as keyCards puts it;
+// away is the vendors the panel leaves out, those and the ones its own
+// Arrange hid (hidden). Here, not in the core, as page.js is in every
 // window.
-function panelPageCut(subs, peek = () => false, hidden = new Set()) {
-  const all = subs.map(withoutHiddenRows), hid = hiddenCards();
-  const off = (q) => hid.has(cardHideKey(q));
-  const gone = (p) => all.every((q) => q.provider !== p || off(q));
-  const away = new Set(all.filter((q) => (hidden.has(q.provider) || gone(q.provider)) && !peek(q)).map((q) => q.provider));
-  return { gone, away, cards: all.filter((q) => !off(q) || peek(q)) };
+function panelPageCut(list, peek = () => false, hidden = new Set()) {
+  const hid = hiddenCards();
+  list = sharedBalances(list || []).filter((q) => q.balance || q.error || q.windows?.length);
+  const gone = (p) => list.every((q) => q.provider !== p || cardHideKeys(q).every((k) => hid.has(k)));
+  const kept = list.filter((q) => !hid.has(cardHideKey(q)) || peek(q));
+  const cards = byUsageOrder(keyCards(kept)).map(withoutHiddenRows);
+  const peeked = (p) => list.some((q) => q.provider === p && peek(q));
+  const away = new Set(list.map((q) => q.provider).filter((p) => (hidden.has(p) || gone(p)) && !peeked(p)));
+  return { gone, away, cards };
 }
 
 // usageCardsHidden with a vendor's every card shown again, for the panel's
 // Arrange showing one this page hid
 function cardsShownFor(p) {
   return (state.settings.usageCardsHidden || []).filter((k) => k.split("|")[0] !== p);
+}
+
+// The Usage cards' packing, moved from app.js (its renderQuotas calls
+// packUsageNow once this file has run)
+// packUsage lays the Usage cards in 260px columns, each card to the column
+// that ends highest (#860), as tall as what it holds (jen_celeus on X).
+const USAGE_MIN = 260, USAGE_GAP = 7;
+let usagePacked = null, usagePackFrame = 0;
+function packUsage() {
+  const list = $("#subscriptionUsage");
+  if (usagePackFrame) { cancelAnimationFrame(usagePackFrame); usagePackFrame = 0; }
+  if (!list || list.classList.contains("sorting")) return;
+  const cards = [...list.children], width = list.clientWidth;
+  if (!width || !cards.length) {
+    // out of sight: the grid as it is without packing, packed once it shows
+    list.classList.remove("packed");
+    list.style.gridTemplateColumns = "";
+    for (const c of cards) { c.style.gridArea = ""; c.style.minHeight = ""; }
+    usagePacked = null;
+    return;
+  }
+  // sorted: a drag keeps the columns it was shown in
+  const keys = cards.map((c) => c.dataset.key || "").sort().join();
+  const most = Math.max(1, Math.min(cards.length, Math.floor((width + USAGE_GAP) / (USAGE_MIN + USAGE_GAP))));
+  const place = (n, hs) => {
+    const { at, ends } = usagePlace(n, hs);
+    const tall = Math.max(...ends) - USAGE_GAP;
+    // what stands empty under the columns' ends, by the columns' width
+    const empty = ends.reduce((s, e) => s + tall - (e - USAGE_GAP), 0) * (width - (n - 1) * USAGE_GAP) / n;
+    return { n, at, tall, empty };
+  };
+  const heights = () => {
+    for (const c of cards) c.style.minHeight = "";
+    fitQuota([...list.querySelectorAll(".quota-windows")]);
+    return foldedHeights(cards, cards.map((c) => c.getBoundingClientRect().height));
+  };
+  const columns = (n) => { list.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`; };
+  let best;
+  if (usagePacked && usagePacked.most === most && usagePacked.keys === keys && list.classList.contains("packed")) {
+    // the same cards, as many columns fitting: the columns as they are
+    best = place(usagePacked.n, heights());
+  } else {
+    list.classList.remove("packed");
+    for (const c of cards) c.style.gridArea = "";
+    for (let n = most; n >= Math.max(1, most - 1); n--) {
+      columns(n);
+      const p = place(n, heights());
+      if (!best) best = p;
+      else if (p.tall <= best.tall * 1.3 && p.empty < best.empty * 0.6) best = p;
+    }
+    // measured again: a count beside its name or under it is the width's
+    columns(best.n);
+    best = place(best.n, heights());
+  }
+  usagePacked = { most, keys, n: best.n };
+  list.classList.add("packed");
+  best.at.forEach(([c, top, h], i) => {
+    const area = `${top + 1} / ${c + 1} / span ${Math.max(1, h)} / span 1`;
+    if (cards[i].style.gridArea !== area) cards[i].style.gridArea = area;
+    const min = cards[i].dataset.folded ? h + "px" : "";
+    if (cards[i].style.minHeight !== min) cards[i].style.minHeight = min;
+  });
+}
+// foldedHeights: a folded card as tall as the tallest folded one of one
+// account, or whole rows of it, so folded cards line up in a grid; an
+// open one stays as tall as itself (jen_celeus on X)
+function foldedHeights(cards, hs) {
+  const row = Math.max(0, ...hs.filter((h, i) => cards[i].dataset.folded == 1)) + USAGE_GAP;
+  return hs.map((h, i) => row > USAGE_GAP && cards[i].dataset.folded ? Math.ceil((h + USAGE_GAP) / row - .01) * row - USAGE_GAP : h);
+}
+// usagePlace packs heights hs into n columns: [column, top, height] each
+function usagePlace(n, hs) {
+  const ends = Array(n).fill(0), at = [];
+  for (const h of hs.map(Math.ceil)) {
+    // the leftmost of those ending within a pixel of the highest
+    const low = Math.min(...ends), c = ends.findIndex((e) => e <= low + 1);
+    at.push([c, ends[c], h]);
+    ends[c] += h + USAGE_GAP;
+  }
+  return { at, ends };
+}
+// usageLayout: dragCards' layout for the packed Usage cards
+function usageLayout(rects) {
+  const list = $("#subscriptionUsage");
+  const n = usagePacked?.n;
+  if (!n || !list?.classList.contains("packed")) return null;
+  const hs = rects.map((r) => r.height), now = usagePlace(n, hs).at;
+  const left = [];
+  now.forEach(([c], i) => { left[c] ??= rects[i].left; });
+  if (left.length < n || left.includes(undefined)) return null;
+  const top0 = rects[0].top - now[0][1];
+  return (order) => {
+    const at = [];
+    usagePlace(n, order.map((i) => hs[i])).at.forEach(([c, top], k) => { at[order[k]] = { left: left[c], top: top0 + top }; });
+    return at;
+  };
+}
+
+// a card's height or the page's width moved: packed on the next frame (in
+// the observer's call WebKit reports a ResizeObserver loop). What is in a
+// card is watched too, so one that only shrinks is packed again (#2059).
+const usagePack = new ResizeObserver(() => { if (!usagePackFrame) usagePackFrame = requestAnimationFrame(packUsage); });
+function packUsageNow(list) {
+  packUsage();
+  usagePack.disconnect();
+  usagePack.observe(list);
+  for (const card of list.children) {
+    usagePack.observe(card);
+    for (const part of card.children) usagePack.observe(part);
+  }
 }

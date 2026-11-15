@@ -69,7 +69,7 @@ var Choices = map[string][]string{
 	"claudeWarmup":   {"off", "week", "all"},
 	"trayUsageEvery": ints(settings.TrayEvery),
 	"dayStart":       {"0", "1", "2", "3", "4", "5", "6"},
-	"updateChannel":  {settings.UpdateStable},
+	"updateChannel":  {settings.UpdateStable, settings.UpdateDaily},
 	"updateSource":   {settings.UpdateSourceSite, settings.UpdateSourceGitHub},
 	"updateEvery":    ints(settings.UpdateEveries),
 	"searchFirst":    {settings.SearchFirstModel, settings.SearchFirstAPI},
@@ -355,7 +355,8 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.PlainNames, in.PlainOwnNames = cur.PlainNames, cur.PlainOwnNames
 	in.AgentSuffix = cur.AgentSuffix   // and each agent's own (agent-suffix)
 	in.BareModelIDs = cur.BareModelIDs // set on its own (bare-ids)
-	in.BusyLoad = cur.BusyLoad         // and so is this (busy-load)
+	in.BareModelIDsOnly = cur.BareModelIDsOnly
+	in.BusyLoad = cur.BusyLoad // and so is this (busy-load)
 	in.CodexAgentsV1 = cur.CodexAgentsV1
 	in.FullContext = cur.FullContext     // set on its own (full-context)
 	in.CompactAt = cur.CompactAt         // and so is the threshold

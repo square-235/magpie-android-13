@@ -1167,6 +1167,9 @@ func APIError(b []byte, fallback string) string {
 	if cmdGoNoAPI.Match(b) {
 		return apiError(b, fallback) + " — " + CommandCodeGoHint
 	}
+	if harnessOnly.Match(b) && !bytes.Contains(b, []byte(HarnessOnlyHint)) {
+		return apiError(b, fallback) + " — " + HarnessOnlyHint
+	}
 	return apiError(b, fallback)
 }
 
@@ -1372,7 +1375,7 @@ func apiError(b []byte, fallback string) string {
 	// a body in no shape known is shown as it is, cut short, so what the
 	// vendor said isn't lost; other markup (an XML error, a page's
 	// fragment) by its words, its tags taken out
-	s := strings.Join(strings.Fields(string(b)), " ")
+	s := strings.Join(strings.Fields(QuotedReply(b)), " ")
 	if strings.HasPrefix(s, "<") {
 		if s = MarkupText(b); s == "" {
 			return fallback

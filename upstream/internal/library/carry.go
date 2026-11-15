@@ -33,6 +33,9 @@ type Bundle struct {
 	// carried, which knew nothing of this computer's: Put keeps them. Collect
 	// always sets it, empty too, so taking the last one out is carried.
 	Subagents *[]*Subagent `json:"subagents,omitempty"`
+	// Commands are nil in a bundle from a magpie before slash commands,
+	// as Subagents are: Put keeps this computer's.
+	Commands *[]*Command `json:"commands,omitempty"`
 	// Hooks are nil in a bundle from a magpie before they were carried,
 	// as Subagents are: Put keeps this computer's. Applied.Hooks, the
 	// entries magpie wrote into each agent here, stays out.
@@ -46,6 +49,12 @@ type Bundle struct {
 	// this computer has none or it can't be read, and in a bundle from a
 	// magpie before it was carried: Put keeps this computer's then.
 	Bili *string `json:"bili,omitempty"`
+	// ClaudePlugins are the marketplaces and plugins installed in Claude
+	// Code itself (claude_plugins.go). nil when there are none, or they
+	// can't be read, and in a bundle from a magpie before them: Put adds
+	// nothing then. Put only adds, so one computer's never takes away
+	// another's.
+	ClaudePlugins *ClaudePlugins `json:"claudePlugins,omitempty"`
 }
 
 // CarriedSkill is a skill with its folder's files.
@@ -146,6 +155,14 @@ func Collect() (*Bundle, error) {
 		subs = append(subs, &c)
 	}
 	b.Subagents = &subs
+	cmds := []*Command{}
+	for _, c := range sorted(l.Commands, func(c *Command) string { return c.Name }) {
+		x := *c
+		x.Agents = orNone(slices.Sorted(slices.Values(c.Agents)))
+		x.Taken = nil // files here, this computer's own
+		cmds = append(cmds, &x)
+	}
+	b.Commands = &cmds
 	hooks := []*Hook{}
 	for _, h := range sorted(l.Hooks, func(h *Hook) string { return h.Name }) {
 		c := *h
@@ -161,6 +178,7 @@ func Collect() (*Bundle, error) {
 	}
 	b.Env = &envs
 	b.Bili = carriedBili()
+	b.ClaudePlugins = carriedClaudePlugins()
 	return b, nil
 }
 
@@ -309,6 +327,22 @@ func (b *Bundle) check() error {
 				return fmt.Errorf("the subagent %s twice", s.Name)
 			}
 			seen[s.Name] = true
+		}
+	}
+	if b.Commands != nil {
+		seen := map[string]bool{}
+		for _, c := range *b.Commands {
+			if c == nil {
+				return fmt.Errorf("an empty slash command")
+			}
+			// the agents are left as they come, as a subagent's are
+			if !commandNameRe.MatchString(c.Name) {
+				return fmt.Errorf("the slash command name %q", c.Name)
+			}
+			if seen[c.Name] {
+				return fmt.Errorf("the slash command %s twice", c.Name)
+			}
+			seen[c.Name] = true
 		}
 	}
 	if b.Env != nil {
@@ -637,6 +671,22 @@ func Put(b *Bundle) (*Result, error) {
 			}
 			l.Subagents = subs
 		}
+		// slash commands the same way: Applied.Commands decides
+		if b.Commands != nil {
+			cmds := []*Command{}
+			for _, c := range *b.Commands {
+				x := *c
+				x.Agents = slices.Clone(orNone(c.Agents))
+				// the files this computer's was imported from stay its
+				// own: written as they were while it says the same
+				x.Taken = nil
+				if have := l.command(c.Name); have != nil {
+					x.Taken = have.Taken
+				}
+				cmds = append(cmds, &x)
+			}
+			l.Commands = cmds
+		}
 		// the same for hooks: Applied.Hooks decides, entry by entry,
 		// what magpie takes out of each agent's file here
 		if b.Hooks != nil {
@@ -664,6 +714,11 @@ func Put(b *Bundle) (*Result, error) {
 				return err
 			}
 			biliWrote = wrote
+		}
+		if b.ClaudePlugins != nil {
+			if err := putClaudePlugins(b.ClaudePlugins, kept); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -745,8 +800,8 @@ func isDir(p string) bool {
 }
 
 // Changed is when the library was last changed: library.json, or a file
-// of its own (links not followed), or billion-context.json, which a
-// sync carries with it.
+// of its own (links not followed), or billion-context.json or Claude
+// Code's plugin records, which a sync carries with it.
 func Changed() time.Time {
 	var t time.Time
 	if fi, err := os.Stat(path()); err == nil {
@@ -754,6 +809,9 @@ func Changed() time.Time {
 	}
 	if b := biliChanged(); b.After(t) {
 		t = b
+	}
+	if c := claudePluginsChanged(); c.After(t) {
+		t = c
 	}
 	filepath.WalkDir(Dir(), func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -757,13 +757,28 @@ var googleToS = lazyre.New(`(?i)disabled in this account for violation of Terms 
 // refused, every ten minutes for good. Another vendor's same words are its
 // own, and aren't read so.
 func googleSuspended(p provider.Provider, status int, body []byte) bool {
-	if status != http.StatusForbidden {
-		return false
-	}
-	if a := accountAgent(p); a != "antigravity" && a != "gemini" {
+	if status != http.StatusForbidden || !googleSignIn(p) {
 		return false
 	}
 	return googleToS.Match(wordsOf(body))
+}
+
+// googleSignIn says p is signed in to Google's Code Assist with a Google
+// account: the built-in Antigravity or Gemini CLI account, or the
+// community plugin's that does the same, the Antigravity plugin's (OAuth)
+// or agy-cli's (Google's own agy program). A plugin account's Agent is
+// "plugin", so a suspended plugin account was read as an unknown failure
+// and asked again every few minutes (plugins#1148).
+func googleSignIn(p provider.Provider) bool {
+	switch accountAgent(p) {
+	case "antigravity", "gemini":
+		return true
+	}
+	switch p.PluginProvider() {
+	case "antigravity", "agy-cli":
+		return true
+	}
+	return false
 }
 
 // isWorkBuddy is whether p is a WorkBuddy account, either build's: the
@@ -924,9 +939,40 @@ func liftRests(agent, user string, vendorTill bool) {
 	}
 }
 
+// creditsKnown lifts the rests out of its allowance of a ChatGPT account
+// found to go on past it on credits (provider.OnCredits), whatever time
+// the refusal named: a turn turned away before magpie knew of the credits
+// — bought once the plan ran out, or its reading failed or not come yet —
+// rested the account until its window renewed, days on, while Codex by
+// itself goes on on them (@123xtv03k on X). A rate limit's rest, or one
+// out of the credits themselves, stands; so does Codex's own hold of a
+// relayed turn for them.
+func creditsKnown(agent, user string) {
+	if agent != "codex" {
+		return
+	}
+	restingUntil.Lock()
+	now := time.Now()
+	for k, r := range restingUntil.note {
+		if r.agent != agent || !strings.EqualFold(r.user, user) || !(r.Why == failQuota || r.By == "window") {
+			continue
+		}
+		delete(restingUntil.m, k)
+		delete(restingUntil.note, k)
+		liftedLocked(k, now)
+	}
+	restingUntil.Unlock()
+	codexHolds.Lock()
+	if h, ok := codexHolds.m[strings.ToLower(user)]; ok && h.why == failQuota {
+		delete(codexHolds.m, strings.ToLower(user))
+	}
+	codexHolds.Unlock()
+}
+
 func init() {
 	provider.OnRenewed(renewed)
 	provider.OnStarted(restarted)
+	provider.OnCredits(creditsKnown)
 }
 
 // staleAllowance is provider.StaleAllowance, swapped in tests.
@@ -979,6 +1025,8 @@ func narrowWhenRead(c candidate, r Rest) {
 var (
 	keyAllowance      = provider.KeyAllowance
 	staleKeyAllowance = provider.StaleKeyAllowance
+	// remoteSeat is provider.RemoteSeat, swapped in tests
+	remoteSeat = provider.RemoteSeat
 )
 
 // RestOf is why what rests by key — a provider's id, or its id#key — is
@@ -1442,6 +1490,16 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// connection (regionFresh)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
+	if status == http.StatusForbidden && provider.HarnessOnly(wordsOf(body)) {
+		// OpenRouter serving a free model only to the agent apps it lists
+		// (provider.HarnessOnly): the app the request came from was
+		// turned away, not the key, whose other models answer as before,
+		// nor the model, which another agent's request may be served. Read
+		// as the key's 403 it set every OpenRouter model aside
+		// (Wade111999 on X); none is set aside and the failure counts
+		// nowhere
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
 	if status == http.StatusBadRequest && signatureRefused.Match(wordsOf(body)) {
 		// Google turned a thought signature away as one it didn't give
 		// (signatureRefused): the history's doing, not the account's. A
@@ -1741,7 +1799,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	} else if a == nil && why != failOther && why != failVerify && why != failRestricted {
 		staleKeyAllowance(c.p) // a key that reads its windows, too
 	}
-	r.Until = now.Add(d)
+	r.Until = onWall(now.Add(d))
 	if a := c.p.Account; a != nil {
 		r.agent, r.user = a.UsageAgent(), a.User
 	} else if why == failQuota {
@@ -2056,7 +2114,7 @@ func restSlow(c candidate, now time.Time) (Rest, bool) {
 	if run.n > slowRests {
 		by = "backoff"
 	}
-	r := Rest{Why: failSlow, Status: http.StatusGatewayTimeout, Until: now.Add(d), By: by, Failures: run.n, Key: id, Model: c.model}
+	r := Rest{Why: failSlow, Status: http.StatusGatewayTimeout, Until: onWall(now.Add(d)), By: by, Failures: run.n, Key: id, Model: c.model}
 	if a := c.p.Account; a != nil {
 		r.agent, r.user = a.UsageAgent(), a.User
 	}
@@ -2419,6 +2477,10 @@ func (c candidate) allowanceKey() allowanceKey {
 
 type left struct {
 	used float64
+	// freePlan: a Remote magpie's member whose card is of an account
+	// signed in to a free plan there (provider.RemoteSeat); this
+	// magpie's own accounts are told by Account.Plan
+	freePlan bool
 	// weekLow: used is at lowShare or more for its budget windows alone,
 	// no rate cap of it near full (Allowance.CapUsed, routes.Seat.WeekLow)
 	weekLow bool
@@ -2533,9 +2595,16 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 	wg.lefts = map[allowanceKey]left{}
 	for _, c := range cs {
 		var a provider.Allowance
-		var ok bool
+		var ok, free bool
 		whose := c.p.ID // whose wallet a balance is in
-		if c.p.Account == nil {
+		m := c.model    // the model as its allowance counts it
+		if c.p.IsRemoteMagpie() {
+			// another magpie's: by the card of its provider serving the
+			// model there, as last read from it (#6708, zzh11223311 on X);
+			// read again in the background only when there is another to
+			// weigh it against
+			a, m, free, ok = remoteSeat(c.p, c.model, len(cs) > 1)
+		} else if c.p.Account == nil {
 			// a key that reads its own windows is weighed by them as an
 			// account is; any other key isn't known
 			a, ok = keyAllowance(c.p)
@@ -2548,20 +2617,21 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 			a, ok = known[ag][c.p.Account.User]
 		}
 		if ok {
-			u, r := a.For(c.model, now)
-			pc, due := a.Pace(c.model, now)
-			amt, of, unit := a.Count(c.model, now)
+			u, r := a.For(m, now)
+			pc, due := a.Pace(m, now)
+			amt, of, unit := a.Count(m, now)
 			rs := a.Restarts(now)
-			l := left{used: u, renews: r, fullest: a.Fullest(c.model, now), fullestName: a.FullestName(c.model, now), soon: a.Renewal(c.model, now), unreached: a.Unreached(c.model, now), lapse: a.Lapse(c.model, now), lapsing: a.Lapsing(c.model, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
+			l := left{used: u, renews: r, fullest: a.Fullest(m, now), fullestName: a.FullestName(m, now), soon: a.Renewal(m, now), unreached: a.Unreached(m, now), lapse: a.Lapse(m, now), lapsing: a.Lapsing(m, now), pace: pc, due: due, amount: amt, of: of, unit: unit,
 				restarts: rs, dueRestart: !rs.IsZero() && due.Equal(rs), credits: spendsCredits(c.p, a)} // one not known counts as unused
 			l.dueExpiry = !l.dueRestart && !l.lapse.IsZero() && due.Equal(l.lapse)
-			l.weekLow = u >= lowShare && u < usedShare && a.CapUsed(c.model, now) < lowShare
+			l.weekLow = u >= lowShare && u < usedShare && a.CapUsed(m, now) < lowShare
 			l.first = l.credits && provider.CodexCreditsFirst(c.p.Account.User)
-			if b, bu, has := a.Left(c.model); has {
+			if b, bu, has := a.Left(m); has {
 				// a wallet's figure is weighed only against the same
 				// provider's in the same unit (routes.Seat.LeftIn)
 				l.bal, l.balUnit, l.balIn = b, bu, whose+"\x00"+bu
 			}
+			l.freePlan = free
 			wg.lefts[c.allowanceKey()] = l
 		}
 	}
@@ -2611,7 +2681,7 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 		}
 		wg.expires = map[string]time.Time{}
 		for i, c := range cs {
-			seats[i].FreePlan = c.p.Account != nil && provider.FreePlan(c.p.Account.Plan)
+			seats[i].FreePlan = c.p.Account != nil && provider.FreePlan(c.p.Account.Plan) || wg.lefts[c.allowanceKey()].freePlan
 			if seats[i].FreePlan {
 				wg.free[c.rest] = true
 			}

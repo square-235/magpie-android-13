@@ -2,6 +2,9 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "{n} client": "{n} 个客户端",
+    "{n} clients": "{n} 个客户端",
+    "Clients under 1% of the tokens, idle for 3 days or past the top 20. Their calls still count in every total.": "token 不到总量 1%、3 天未使用或排在前 20 名之后的客户端。它们的调用仍计入每一项总计。",
     "What the bytes sent upstream were made of": "发往上游的字节由什么组成",
     "≈ {size} a request": "每个请求约 {size}",
     "Each request sends the whole conversation again, with the system prompt and the tools' definitions, so a request's bytes grow with its context.": "每个请求都会把整段对话连同系统提示词和工具定义重新发送一遍，所以一个请求的字节数随上下文增长。",
@@ -101,7 +104,6 @@ magpie.strings({
     "Pick the first day, then the last": "先选第一天，再选最后一天",
     "No calls on the days picked.": "所选日期内没有调用。",
     "All gateway keys": "全部网关密钥",
-    "All accounts": "全部账号",
     "{agent} · on {computer}": "{agent} · 在 {computer}",
     "What was said stays on {computer}: sync shares the usage alone.": "对话内容留在 {computer} 上：同步只共享用量。",
     "Model · provider": "模型 · 供应商",
@@ -291,6 +293,9 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 协议发往上游，与 agent 所用协议相同",
   },
   "zh-TW": {
+    "{n} client": "{n} 個用戶端",
+    "{n} clients": "{n} 個用戶端",
+    "Clients under 1% of the tokens, idle for 3 days or past the top 20. Their calls still count in every total.": "token 不到總量 1%、3 天未使用或排在前 20 名之後的用戶端。它們的呼叫仍計入每一項總計。",
     "What the bytes sent upstream were made of": "傳往上游的位元組由什麼組成",
     "≈ {size} a request": "每個請求約 {size}",
     "Each request sends the whole conversation again, with the system prompt and the tools' definitions, so a request's bytes grow with its context.": "每個請求都會把整段對話連同系統提示詞和工具定義重新傳送一遍，所以一個請求的位元組數隨上下文增長。",
@@ -390,7 +395,6 @@ magpie.strings({
     "Pick the first day, then the last": "先選第一天，再選最後一天",
     "No calls on the days picked.": "所選日期內沒有呼叫。",
     "All gateway keys": "全部閘道金鑰",
-    "All accounts": "全部帳號",
     "{agent} · on {computer}": "{agent} · 在 {computer}",
     "What was said stays on {computer}: sync shares the usage alone.": "對話內容留在 {computer} 上：同步只共享用量。",
     "Model · provider": "模型 · 供應商",
@@ -580,6 +584,9 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "以 {to} 協議發往上游，與 agent 所用協議相同",
   },
   ja: {
+    "{n} client": "{n} 個のクライアント",
+    "{n} clients": "{n} 個のクライアント",
+    "Clients under 1% of the tokens, idle for 3 days or past the top 20. Their calls still count in every total.": "トークンが 1% 未満で、3 日間使われていないか上位 20 位より下のクライアント。その呼び出しはすべての合計に含まれます。",
     "What the bytes sent upstream were made of": "上流へ送ったバイトの内訳",
     "≈ {size} a request": "1 リクエストあたり約 {size}",
     "Each request sends the whole conversation again, with the system prompt and the tools' definitions, so a request's bytes grow with its context.": "各リクエストは会話全体をシステムプロンプトとツール定義ごと送り直すため、リクエストのバイト数はコンテキストとともに増えます。",
@@ -679,7 +686,6 @@ magpie.strings({
     "Pick the first day, then the last": "最初の日、次に最終日を選択",
     "No calls on the days picked.": "選んだ日付の呼び出しはありません。",
     "All gateway keys": "すべてのゲートウェイキー",
-    "All accounts": "すべてのアカウント",
     "{agent} · on {computer}": "{agent} · {computer} 上",
     "What was said stays on {computer}: sync shares the usage alone.": "会話内容は {computer} に残ります。同期で共有されるのは使用量だけです。",
     "Model · provider": "モデル · プロバイダ",
@@ -869,6 +875,9 @@ magpie.strings({
     "Sent upstream as {to}, as the agent spoke it": "エージェントと同じ {to} で上流へ送信",
   },
   de: {
+    "{n} client": "{n} Client",
+    "{n} clients": "{n} Clients",
+    "Clients under 1% of the tokens, idle for 3 days or past the top 20. Their calls still count in every total.": "Clients unter 1 % der Tokens, seit 3 Tagen ungenutzt oder nach den ersten 20. Ihre Aufrufe zählen weiter in jeder Summe mit.",
     "What the bytes sent upstream were made of": "Woraus die an den Upstream gesendeten Bytes bestehen",
     "≈ {size} a request": "≈ {size} pro Anfrage",
     "Each request sends the whole conversation again, with the system prompt and the tools' definitions, so a request's bytes grow with its context.": "Jede Anfrage sendet die ganze Unterhaltung erneut, samt Systemprompt und Tool-Definitionen, daher wachsen die Bytes einer Anfrage mit ihrem Kontext.",
@@ -968,7 +977,6 @@ magpie.strings({
     "Pick the first day, then the last": "Erst den ersten Tag, dann den letzten wählen",
     "No calls on the days picked.": "An den gewählten Tagen keine Aufrufe.",
     "All gateway keys": "Alle Zugangsschlüssel",
-    "All accounts": "Alle Konten",
     "{agent} · on {computer}": "{agent} · auf {computer}",
     "What was said stays on {computer}: sync shares the usage alone.": "Die Inhalte bleiben auf {computer}: Die Synchronisierung teilt nur die Nutzung.",
     "Model · provider": "Modell · Anbieter",

@@ -283,6 +283,14 @@ type SubscriptionQuota struct {
 	// this computer (#1547, remote_key_limits.go): the limit that magpie
 	// holds the key to, beside the windows that show it.
 	GatewayKey *GatewayKeyLimit `json:"gatewayKey,omitempty"`
+	// Routing is, on a card told another magpie (RemoteCardsPath), what
+	// each window's json leaves out for routing (Span, Model, Aside), in
+	// the windows' order: that magpie weighs its Remote magpie by the card
+	// (RemoteAllowance, #6708). Set only as cards are told; nil elsewhere.
+	Routing []lastWindow `json:"routing,omitempty"`
+	// routable: a remote magpie's card whose windows have Routing laid
+	// back on them (keepRemoteCards), so routing may go by them
+	routable bool
 	// In-process read order, separate from the vendor's ReadAt and never
 	// persisted: restarting starts a new sequence.
 	readSeq uint64
@@ -1212,17 +1220,7 @@ func codexWindows(ctx context.Context, token, accountID string) (plan string, ou
 // or less) is none left, whatever has_credits says.
 func codexGoesOnCredits(u codexUsage) bool {
 	c := u.Credits
-	if c == nil {
-		return false
-	}
-	if c.Unlimited {
-		return true
-	}
-	if !c.Has {
-		return false
-	}
-	n, err := strconv.ParseFloat(strings.TrimSpace(c.Balance), 64)
-	return err != nil || n > 0
+	return c != nil && CodexGoesOnCredits(c.Has, c.Unlimited, c.Balance)
 }
 
 // codexUsage is what /wham/usage tells of a ChatGPT account.
