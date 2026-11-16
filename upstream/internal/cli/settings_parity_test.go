@@ -255,6 +255,7 @@ var notYet = map[string]string{
 	"GET /api/appearance/wallpaper":              W,  // appearance.go
 	"POST /api/appearance/wallpaper":             W,  // appearance.go: the picture comes from the window's file picker
 	"GET /api/quit":                              W,  // api.go: the window's Quit question
+	"POST /api/quit/disconnect":                  W,  // api.go: the Quit question's Disconnect and quit, which quits the app
 	"POST /api/page-away":                        W,  // api.go: the page says it went from view, so its caches can go
 	"GET /api/remote":                            W,  // remote.go: another magpie opened in a window of the app
 	"POST /api/remote":                           W,  // remote.go
@@ -300,6 +301,7 @@ var notYet = map[string]string{
 	"POST /api/settings/codex-open":              S2, // api.go
 	"POST /api/settings/codex-predictions":       S2, // api.go
 	"POST /api/settings/codex-reset-lead":        S2, // api.go
+	"POST /api/settings/codex-suggestions":       S2, // api.go
 	"POST /api/settings/codex-titles":            S2, // api.go
 	"POST /api/settings/codex-warm-at":           S2, // api.go
 	"POST /api/settings/cors":                    S2, // api.go
@@ -493,9 +495,12 @@ var notYet = map[string]string{
 	"POST /api/qianwen/{id}/signin":              P,  // providers.go
 	"POST /api/qianwen/{id}/signin/cancel":       P,  // providers.go
 	"POST /api/qianwen/{id}/signout":             P,  // providers.go
+	"POST /api/qianfan/{id}/session":             P,  // providers.go
+	"POST /api/qianfan/{id}/signout":             P,  // providers.go
 	"GET /api/speeds":                            U,  // sessions_manage.go: the Sessions row's speed curve
 	"GET /api/sessions/manage":                   U,  // sessions_manage.go
 	"GET /api/sessions/search":                   U,  // sessions_manage.go
+	"GET /api/sessions/said":                     U,  // sessions_manage.go: every agent's sessions; agents have the sessions MCP server
 	"POST /api/sessions/codex-provider":          U,  // sessions_manage.go
 	"POST /api/sessions/delete":                  U,  // sessions_manage.go
 	"POST /api/sessions/purge":                   U,  // sessions_manage.go

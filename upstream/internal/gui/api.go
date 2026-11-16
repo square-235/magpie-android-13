@@ -673,6 +673,9 @@ type searchAPIJSON struct {
 	Quota bool   `json:"quota,omitempty"`
 	// Off: switched off, kept but never asked (#2286)
 	Off bool `json:"off,omitempty"`
+	// Mix: asked together with the others marked so, their pages merged
+	// (provider.SearchAPI.Mix, #2845)
+	Mix bool `json:"mix,omitempty"`
 	// KeyList is each key in its order, masked, on or off, and resting
 	// (辰林鸭~ on Discord)
 	KeyList []searchKeyJSON `json:"keyList"`
@@ -739,7 +742,7 @@ func searchState(s *settingsJSON) {
 	}
 	s.SearchAPIs, s.SearchVendors = []searchAPIJSON{}, []searchVendorJSON{}
 	for _, a := range provider.StoredSearchAPIs() {
-		j := searchAPIJSON{Vendor: a.Vendor, Name: a.Name(), URL: a.URL, Ready: a.Ready(), Keys: len(a.Keys()), Pick: a.Pick, Quota: gateway.CanReadSearchQuota(a), Off: a.Off}
+		j := searchAPIJSON{Vendor: a.Vendor, Name: a.Name(), URL: a.URL, Ready: a.Ready(), Keys: len(a.Keys()), Pick: a.Pick, Quota: gateway.CanReadSearchQuota(a), Off: a.Off, Mix: a.Mix}
 		if a.Key != "" {
 			j.Key = a.MaskedKey()
 		}
@@ -1248,6 +1251,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		if s.NoBird {
 			boot["noBird"] = true
+		}
+		// and the title bar's pin, where the window can be kept on top
+		// (ontop.go): shown, and pressed, from the first paint
+		if pinnable(w) {
+			boot["pin"] = true
+			boot["onTop"] = s.OnTop
 		}
 		// a browser tab keeps its own font choice (fonts.js)
 		if !isWeb(w) {
@@ -2199,6 +2208,28 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
+	// the model the Codex app's prompt suggestions go on: "" as Codex
+	// sends them, or a model's id (Codex's own setting turns them off)
+	mux.HandleFunc("POST /api/settings/codex-suggestions", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Model string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		v := strings.TrimSpace(in.Model)
+		if v != "" {
+			// a model or group magpie lists, not any name under a provider
+			if !slices.ContainsFunc(provider.Served(), func(e provider.Entry) bool { return e.ID == v || e.Group != "" && provider.SameRef(e.ID, v) }) {
+				fail(rw, fmt.Errorf("no model %s for Codex's prompt suggestions", v))
+				return
+			}
+		}
+		if err := provider.SetCodexSuggestionsModel(v); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
 	// where Codex's requests for a thread's title go (#705): "" as Codex
 	// sends them, "off", or a model's id
 	// the models turned off for every request through magpie (#1867), each
@@ -3048,13 +3079,16 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		writeJSON(rw, settingsState())
 	})
 	// a web search API added, given a new key or address, switched on or
-	// off, or taken away; or the APIs put in a new order (#2286)
+	// off, or taken away; or the APIs put in a new order (#2286); or those
+	// asked together named (Mix: two or more, or none for one at a time,
+	// #2845)
 	mux.HandleFunc("POST /api/settings/search-api", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Vendor, Key, URL, Pick string
 			Remove                 bool
 			On                     *bool
 			Arrange                []string
+			Mix                    []string
 			// Append: the keys typed for an API added before go after its
 			// own, which stay, rather than in their place
 			Append bool
@@ -3067,6 +3101,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		switch {
 		case in.Arrange != nil:
 			err = provider.ArrangeSearchAPIs(in.Arrange)
+		case in.Mix != nil:
+			err = provider.MixSearchAPIs(in.Mix)
 		case in.Remove:
 			err = provider.RemoveSearchAPI(in.Vendor)
 		case in.On != nil:
@@ -3206,12 +3242,30 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	mux.HandleFunc("GET /api/quit", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, map[string]any{"agents": quitAgents()})
 	})
+	// the question's Disconnect and quit: the agents put back as Put
+	// agents back when quitting puts them, for this quit (quitDisconnect)
+	mux.HandleFunc("POST /api/quit/disconnect", func(rw http.ResponseWriter, r *http.Request) {
+		if err := quitDisconnect(); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, state())
+	})
 	mux.HandleFunc("POST /api/window/{action}", func(rw http.ResponseWriter, r *http.Request) {
 		switch r.PathValue("action") {
 		case "hide":
 			w.HidePanel()
 		case "main":
 			w.ShowMain(mainView(r.URL.Query()))
+		case "ontop":
+			// the title bar's pin (ontop.go)
+			on := r.URL.Query().Get("on") == "1"
+			if err := pinMain(w, on); err != nil {
+				fail(rw, err)
+				return
+			}
+			writeJSON(rw, map[string]bool{"onTop": on})
+			return
 		case "quit":
 			// the question's "Don't ask again" (noAsk=1, zhujiu on
 			// Discord) is saved before the quit; a save that fails keeps

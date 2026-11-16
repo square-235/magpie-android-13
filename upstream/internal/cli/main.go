@@ -420,6 +420,9 @@ func run(args []string) error {
 			if len(args) > 1 && args[1] == "memory" {
 				return browsermcp.RunMemory(args[2:])
 			}
+			if len(args) > 1 && args[1] == "sessions" {
+				return browsermcp.RunSessions(args[2:])
+			}
 			return imagemcp.Run(args[1:])
 		case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
 			return claudebridge.RunMCP(args[1:])
@@ -525,6 +528,9 @@ func run(args []string) error {
 		}
 		return nil, false
 	}
+	// and kept there under its size, a bucket grown before that brought
+	// under it once the gateway starts
+	gateway.WhileServing = append(gateway.WhileServing, gateway.KeepBucketArchiveBounded)
 	if len(args) == 0 {
 		if hasGUI {
 			return runGUI(true, "")
