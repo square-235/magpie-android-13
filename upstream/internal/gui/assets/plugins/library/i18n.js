@@ -2,6 +2,7 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Pick the agents that may search and read what was said in your other sessions.": "选择可以搜索、阅读你其他会话内容的 Agent。",
     "Update by themselves": "自动更新",
     "Fetch skills from GitHub and git again when they change there. One you changed here stays as it is.": "GitHub 和 git 上的技能有改动时自动重新获取。你在这里改过的技能保持不变。",
     "Skills update by themselves now": "技能现在会自动更新",
@@ -737,6 +738,9 @@ magpie.strings({
     "Added {n} servers": "已添加 {n} 个服务器",
     "A skill is a folder with a SKILL.md an agent loads when it's needed. The library keeps each one once and links it into the agents you pick.": "技能是一个带 SKILL.md 的文件夹，Agent 在需要时加载。资源库只保存一份，再链接到你选的 Agent 中。",
     "In the library": "资源库中",
+    "Servers turned off": "已关闭的服务器",
+    "Show the servers turned off": "展开已关闭的服务器",
+    "Fold the servers turned off away": "收起已关闭的服务器",
     "By source": "按来源",
     "not in the library — bring one in to give it to the others": "不在资源库中 — 导入后可以给其他 Agent",
     "{agents} has no skills folder.": "{agents} 没有技能文件夹。",
@@ -1074,6 +1078,7 @@ magpie.strings({
     "{name} read again from its source": "已重新从来源读取 {name}",
   },
   "zh-TW": {
+    "Pick the agents that may search and read what was said in your other sessions.": "選擇可以搜尋、閱讀你其他會話內容的 Agent。",
     "Update by themselves": "自動更新",
     "Fetch skills from GitHub and git again when they change there. One you changed here stays as it is.": "GitHub 和 git 上的技能有變動時自動重新取得。你在這裡改過的技能保持不變。",
     "Skills update by themselves now": "技能現在會自動更新",
@@ -1813,6 +1818,9 @@ magpie.strings({
     "Added {n} servers": "已新增 {n} 個伺服器",
     "A skill is a folder with a SKILL.md an agent loads when it's needed. The library keeps each one once and links it into the agents you pick.": "技能是一個帶 SKILL.md 的資料夾，Agent 在需要時載入。資源庫只儲存一份，再連結到你選的 Agent 中。",
     "In the library": "資源庫中",
+    "Servers turned off": "已關閉的伺服器",
+    "Show the servers turned off": "展開已關閉的伺服器",
+    "Fold the servers turned off away": "收起已關閉的伺服器",
     "By source": "按來源",
     "not in the library — bring one in to give it to the others": "不在資源庫中 — 匯入後可以給其他 Agent",
     "{agents} has no skills folder.": "{agents} 沒有技能資料夾。",
@@ -2146,6 +2154,7 @@ magpie.strings({
     "{name} read again from its source": "已重新從來源讀取 {name}",
   },
   ja: {
+    "Pick the agents that may search and read what was said in your other sessions.": "ほかのセッションで話した内容を検索して読める Agent を選びます。",
     "Update by themselves": "自動で更新",
     "Fetch skills from GitHub and git again when they change there. One you changed here stays as it is.": "GitHub や git でスキルが変わったら自動で取得し直します。ここで変更したスキルはそのままです。",
     "Skills update by themselves now": "スキルは自動で更新されるようになりました",
@@ -2880,6 +2889,9 @@ magpie.strings({
     "Added {n} servers": "{n} 個のサーバーを追加しました",
     "A skill is a folder with a SKILL.md an agent loads when it's needed. The library keeps each one once and links it into the agents you pick.": "スキルとは、エージェントが必要なときに読み込む SKILL.md を含むフォルダです。ライブラリは各スキルを1つだけ保管し、選んだエージェントにリンクします。",
     "In the library": "ライブラリ内",
+    "Servers turned off": "オフのサーバー",
+    "Show the servers turned off": "オフのサーバーを表示",
+    "Fold the servers turned off away": "オフのサーバーを折りたたむ",
     "By source": "ソース別",
     "not in the library — bring one in to give it to the others": "ライブラリにありません — 取り込むと他のエージェントにも渡せます",
     "{agents} has no skills folder.": "{agents} にはスキルフォルダがありません。",
@@ -3218,6 +3230,7 @@ magpie.strings({
     "{name} read again from its source": "{name} をソースから読み直しました",
   },
   de: {
+    "Pick the agents that may search and read what was said in your other sessions.": "Wähle die Agents, die durchsuchen und lesen dürfen, was in deinen anderen Sitzungen gesagt wurde.",
     "Update by themselves": "Selbst aktualisieren",
     "Fetch skills from GitHub and git again when they change there. One you changed here stays as it is.": "Skills von GitHub und git neu laden, wenn sie sich dort ändern. Ein hier geänderter Skill bleibt, wie er ist.",
     "Skills update by themselves now": "Skills aktualisieren sich jetzt selbst",
@@ -3952,6 +3965,9 @@ magpie.strings({
     "Added {n} servers": "{n} Server hinzugefügt",
     "A skill is a folder with a SKILL.md an agent loads when it's needed. The library keeps each one once and links it into the agents you pick.": "Ein Skill ist ein Ordner mit einer SKILL.md, die ein Agent bei Bedarf lädt. Die Bibliothek hält jeden nur einmal vor und verlinkt ihn in die Agenten, die Sie wählen.",
     "In the library": "In der Bibliothek",
+    "Servers turned off": "Ausgeschaltete Server",
+    "Show the servers turned off": "Ausgeschaltete Server anzeigen",
+    "Fold the servers turned off away": "Ausgeschaltete Server einklappen",
     "By source": "Nach Quelle",
     "not in the library — bring one in to give it to the others": "nicht in der Bibliothek – übernehmen Sie einen, um ihn den anderen zu geben",
     "{agents} has no skills folder.": "{agents} hat keinen Skills-Ordner.",

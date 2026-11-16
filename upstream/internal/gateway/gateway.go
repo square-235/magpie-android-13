@@ -567,6 +567,9 @@ type Server struct {
 	// bodyCaps are the byte caps providers refused a request over
 	// (body_cap.go)
 	bodyCaps bodyCaps
+	// imageCaps are the image caps a model refused a request over, by
+	// provider id and model (image_cap.go)
+	imageCaps bodyCaps
 	// codexTurns is the model each Codex last had a turn of its own
 	// answered on, by caller (codexMemoryStandIn)
 	codexTurns sync.Map
@@ -598,6 +601,8 @@ type Server struct {
 	unread unreadConns
 	// sockets are the Responses WebSockets being served (responses_ws.go)
 	sockets clientSockets
+	// realtimes are the Realtime API sessions being served (realtime.go)
+	realtimes realtimeSessions
 	// what it serves other computers TLS with, nil without (tls.go)
 	tls *tlsServer
 	// the images described for models that can't see them (vision.go);
@@ -978,7 +983,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		// a socket's connection was taken from the server (hijacked), so
 		// Shutdown doesn't wait for it: each ends after its turn in flight
 		sockets := make(chan struct{})
-		go func() { defer close(sockets); s.sockets.drain(c) }()
+		// a realtime session has no turn to wait for: it is closed going
+		// away, and its client opens a new one
+		s.realtimes.end()
+		go func() { defer close(sockets); s.sockets.drain(c); s.realtimes.wait(c) }()
 		if err := srv.Shutdown(c); err != nil {
 			// the requests still answering are cut where they are, and
 			// an agent streaming one reads a reply broken off (Codex:
@@ -1024,7 +1032,7 @@ func (s *Server) Handler() http.Handler {
 	// on (dumpFirst)
 	// a socket's turns go through all of it again (socketEntry); the
 	// agent's Retry-After is bounded on the way out (retryCapped)
-	return socketEntry(s.dumpFirst(retryCapped(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(keyLimited(s.keySlots(mux, mux))))))))))))
+	return socketEntry(s.dumpFirst(retryCapped(s.counted(headerLogged(holdCatalog(corsGuard(callerGuard(readOnlyGuard(mux, withCaller(keptBodyRequests(keyLimited(s.keySlots(mux, mux)))))))))))))
 }
 
 // routes are the client APIs, each by its pattern: readOnlyGuard reads
@@ -1062,6 +1070,7 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("GET /v1/magpie/quotas/history", s.quotasHistory)
 	mux.HandleFunc("GET "+provider.RemoteCardsPath, s.quotaCards)
 	mux.HandleFunc("GET "+provider.RemoteLibraryPath, s.sharedLibrary)
+	mux.HandleFunc("GET "+provider.RemoteAgentModelsPath, s.sharedAgentModels)
 	mux.HandleFunc("POST "+provider.RemoteRefreshPath, s.quotaCardsRefresh)
 	mux.HandleFunc("POST "+provider.RemoteCodexResetPath, s.codexReset)
 	mux.HandleFunc("GET /v1/magpie/route", s.sessionRoute)
@@ -1148,6 +1157,8 @@ func (s *Server) routes() *routeMux {
 	// speech to text, for a client's voice input (#2053)
 	mux.HandleFunc("POST /v1/audio/transcriptions", s.transcribe("/audio/transcriptions", "transcriptions"))
 	mux.HandleFunc("POST /audio/transcriptions", s.transcribe("/audio/transcriptions", "transcriptions"))
+	mux.HandleFunc("GET /v1/realtime", s.realtime)
+	mux.HandleFunc("GET /realtime", s.realtime)
 	mux.HandleFunc("POST /v1/audio/translations", s.transcribe("/audio/translations", "translations"))
 	mux.HandleFunc("POST /audio/translations", s.transcribe("/audio/translations", "translations"))
 	mux.HandleFunc("POST /v1/audio/speech", s.speak)
@@ -1168,6 +1179,7 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc(SearchMCPPath, s.searchMCP)
 	mux.HandleFunc(VisionMCPPath, s.visionMCP)
 	mux.HandleFunc(MemoryMCPPath, s.memoryMCP)
+	mux.HandleFunc(SessionsMCPPath, s.sessionsMCP)
 	mux.HandleFunc(ImageMCPPath, s.imageMCP)
 	mux.HandleFunc(BrowserMCPPath, s.browserMCP)
 	mux.HandleFunc("GET "+BrowserExtensionPath, s.browserExtension)
@@ -1182,7 +1194,7 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc("GET /v1beta/models", s.geminiModels)
 	mux.HandleFunc("POST /v1beta/models/{call...}", s.gemini)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, provider.Chat, http.StatusNotFound, "magpie serves /v1/chat/completions, /v1/responses, /v1/messages, /v1/systemone, /v1/images/generations, /v1/images/edits, /v1/videos, /v1/embeddings, /v1/rerank, /v1/decisions, /v1/audio/transcriptions, /v1/audio/translations, /v1/audio/speech and /v1beta/models/*")
+		writeError(w, provider.Chat, http.StatusNotFound, "magpie serves /v1/chat/completions, /v1/responses, /v1/messages, /v1/systemone, /v1/images/generations, /v1/images/edits, /v1/videos, /v1/embeddings, /v1/rerank, /v1/decisions, /v1/audio/transcriptions, /v1/audio/translations, /v1/audio/speech, /v1/realtime (WebSocket) and /v1beta/models/*")
 	})
 	return mux
 }
@@ -1211,7 +1223,7 @@ var catalogSize stamped[struct{}, int]
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "magpie", "version": Version, "models": catalogSize.get(struct{}{}, func() int { return len(provider.Catalog()) }), "window": Window,
-		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", NativePath + "{provider}/{path}", "/v1/embeddings", "/v1/rerank", "/v1/decisions", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", StatuslinePath, "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, MemoryMCPPath, ImageMCPPath, BrowserMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
+		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", NativePath + "{provider}/{path}", "/v1/embeddings", "/v1/rerank", "/v1/decisions", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/realtime", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", StatuslinePath, "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, MemoryMCPPath, SessionsMCPPath, ImageMCPPath, BrowserMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
 	// which process serves, for another magpie on this computer to name it
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
@@ -1312,6 +1324,39 @@ func (s *Server) sharedLibrary(w http.ResponseWriter, r *http.Request) {
 	b, err := SharedLibrary()
 	if err != nil {
 		writeError(w, provider.Chat, http.StatusInternalServerError, "reading the Library: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(b)
+}
+
+// SharedAgentModels is the models this magpie's agents are on as another
+// magpie is told them (JSON, provider.AgentModels), set by the agent
+// package: the gateway doesn't read agents' configs.
+var SharedAgentModels func() ([]byte, error)
+
+// sharedAgentModels tells another magpie that has this one as its
+// provider the models this computer's agents are on, so its own agents
+// start on them and follow a change made here (KoiLx0 on X). Asked as the
+// Library is: this computer, or a full-access key of a magpie shared on
+// the local network.
+func (s *Server) sharedAgentModels(w http.ResponseWriter, r *http.Request) {
+	if !local(r) && !sharedWith(r) {
+		writeError(w, provider.Chat, http.StatusForbidden, "magpie's agent models are told to another machine only when magpie is shared on the local network (Settings → Share on local network) and the request carries its API key (Authorization: Bearer <key> or x-api-key: <key>)")
+		return
+	}
+	if heldKey(access.Caller(r.Context())) {
+		refuseHeld(w, r, heldQuotasOff)
+		return
+	}
+	if SharedAgentModels == nil {
+		writeError(w, provider.Chat, http.StatusNotFound, "this magpie has no agents to tell")
+		return
+	}
+	b, err := SharedAgentModels()
+	if err != nil {
+		writeError(w, provider.Chat, http.StatusInternalServerError, "reading the agents' models: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -2739,6 +2784,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		asked = m
 		move(m, movedDshCompactRested)
 	}
+	// the Codex app's prompt suggestions on the model set for them, not
+	// the one its server names, which falls back to the provider's
+	// default ("auto") on magpie; one the ChatGPT backend's route already
+	// put there is recorded as asked for the model it was
+	if was := suggestionsAskedOf(r); was != "" && was != call.Model {
+		to := call.Model
+		call.Model = was
+		move(to, movedCodexSuggestions)
+	} else if m := codexSuggestionsTo(r, agent, call.Kind, asked); m != "" {
+		asked = m
+		move(m, movedCodexSuggestions)
+	}
 	// a Codex subagent on the model set for Codex's subagents, whatever
 	// its lead asked for (willz on Discord), and a Claude Desktop
 	// subagent's tool turn on the one set for Desktop's; one already put
@@ -4105,8 +4162,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			attemptBody = withFast(from, attemptBody)
 		}
 		// a pick sent Ultrafast (#1954) asks for it in OpenAI's words; in
-		// Claude's, which have none, the try carries it (withUltra)
-		ultra := fast && c.ultra && !ownFast
+		// Claude's, which have none, the try carries it (withUltra). So
+		// does one sent fast on a provider whose extra body asks for
+		// Ultrafast itself (KoiLx0 on X): fast is never sent slower than
+		// the user asked of the provider, and a tier the extra body forces
+		// ("!service_tier") goes over both as it says (WithExtraBody). On
+		// a provider the user added by its address it is asked for as its
+		// Fast is (OwnFast), and turned away, asked again without it
+		ultra := fast && (c.ultra || extraUltra(c.p))
 		if ultra && (from == provider.Chat || from == provider.Responses) {
 			attemptBody = withFields(attemptBody, map[string]any{"service_tier": "ultrafast"})
 		}
@@ -5896,6 +5959,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	if relay && !keep && customOff() {
 		relay, ownAPI = false, true
 	}
+	// and input items a model turned away before (input_kinds.go: a
+	// subagent's agent_message to a server that knows OpenAI's first
+	// items alone)
+	itemsOff := func() bool {
+		return from == provider.Responses && !inCompaction(r.Context()) && !s.fits(p.ID, inputKindsRefused(model), from) && hasOtherItem(body)
+	}
+	if relay && !keep && itemsOff() {
+		relay, ownAPI = false, true
+	}
 	// and a backend that turned a request for one body away because it
 	// only streams (stream_only.go) is asked streamed, translated
 	streamOnly := (from == provider.Chat || from == provider.Responses) && !streamOf(body) && !s.fits(p.ID, streamOnlyRefused(model), from)
@@ -5923,7 +5995,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 		// or it turned the custom tools away just now: speak it translated,
 		// except a compaction or a sealed subagent task, which a
 		// translation would leave out
-		if customOff() || !s.fits(p.ID, streamOnlyRefused(model), from) && !streamOf(body) {
+		if customOff() || itemsOff() || !s.fits(p.ID, streamOnlyRefused(model), from) && !streamOf(body) {
 			if keep || sealed {
 				return writeError(w, from, status, msg), msg
 			}
@@ -6072,6 +6144,11 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 		// oldest images left out, or said as a 413 (body_cap.go)
 		res, err = s.refitOverCap(ctx, p, to, path, body, in, res)
 	}
+	if err == nil && res.StatusCode >= 400 {
+		// more images than the model takes: asked again with its oldest
+		// left out (image_cap.go)
+		res, err = s.refitImageCap(ctx, p, to, path, body, in, res)
+	}
 	if err == nil && mantleRoutes(p, to) {
 		res, err = s.mantleReroute(ctx, p, to, path, body, in, res)
 	}
@@ -6148,6 +6225,8 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	body = kimiLockedSampling(p, to, body)
 	body = clinePin(p, to, body)
 	body = codexImagesFit(p, to, body)
+	// no more images than the model refused more over (image_cap.go)
+	body = s.withinImageCap(p, to, path, body)
 	// the tool turns' thinking a provider's model asked for before
 	// (thinking_back.go)
 	body = s.withThinkingBack(p, to, body)
@@ -6183,6 +6262,9 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 			// "enabled" (thinkingNeededRefusal): that type it keeps
 			body = adaptiveThinking(body)
 		}
+		// display is Claude's: pi-ai (DeepSeek Harness) asks it of every
+		// model that reasons, and Alibaba Cloud's Qwen turns it away
+		body = withoutForeignDisplay(body)
 		body = s.withoutRefusedShapes(p, body)
 		// the thinking blocks it refused as another conversation's
 		// (thinking_bound.go), every route to it alike
@@ -6445,6 +6527,11 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		s.fitUserBetas(p, req.Header)
 	}
 	sent := len(body)
+	// to another magpie, against a body it kept before (remote_dict.go)
+	dict, dsent := sendDict(p, req, body)
+	if dict != nil {
+		sent = dsent
+	}
 	if p.Account != nil && p.Account.Agent == "codex" {
 		// a turn goes zstd-compressed, as Codex's own client sends it;
 		// sent plain, ChatGPT answered a 1.1 MB one 503 (ylorn on X)
@@ -6467,6 +6554,10 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	res, err := p.Do(s.client, req)
 	// what comes back is counted as it is read, as what went is (#4456)
 	res = gotDown(ctx, res)
+	if dict != nil {
+		// a body the other magpie couldn't decode goes again whole
+		res, err = dict.after(req, res, err, again)
+	}
 	if err == nil && res.StatusCode >= 400 && provider.OpenCodeURL(req.URL.String()) {
 		logOpenCodeRefusal(p, req, res.StatusCode)
 	}
@@ -7097,6 +7188,16 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// and from then on
 			res.Body.Close()
 			s.markUnfit(p.ID, customToolRefused(model), proto)
+			return res.StatusCode, p.Name + ": " + provider.APIError(b, res.Status), false
+		}
+		if proto == provider.Responses && !inCompaction(r.Context()) && inputKindWords.Match(b) && hasOtherItem(body) {
+			// an input item it has no type for turned away (a local
+			// Qwen server's "Unsupported input item: agent_message",
+			// input_kinds.go): translated on the same API, and so from
+			// then on. A compaction's summary ask has its own way on, the
+			// conversation as text (inputKindRefused)
+			res.Body.Close()
+			s.markUnfit(p.ID, inputKindsRefused(model), proto)
 			return res.StatusCode, p.Name + ": " + provider.APIError(b, res.Status), false
 		}
 		if gather == nil && refusesWhole(proto, body, b) {
@@ -8291,12 +8392,16 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			r.OwnTier, req = own, &r
 		}
 		// a member or pick the user sent fast on a provider they added is
-		// asked for priority on its OpenAI API whatever API the agent
+		// asked for priority (ultrafast, sent Ultrafast) on its OpenAI API whatever API the agent
 		// spoke (#1615); one that turned the field away isn't (own is
 		// false then)
 		if req.OwnTier && req.Tier == "" && isOwnFast(ctx) && (to == provider.Chat || to == provider.Responses) {
+			tier := "priority"
+			if isUltra(ctx) {
+				tier = "ultrafast" // a member sent Ultrafast there
+			}
 			r := *req
-			r.Tier, req = "priority", &r
+			r.Tier, req = tier, &r
 		}
 		// a pick sent Ultrafast from an agent on Claude's API, whose words
 		// for it are speed "fast" (#1954): on the ChatGPT backend alone

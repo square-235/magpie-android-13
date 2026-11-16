@@ -274,6 +274,7 @@ var wholeCallReaders = map[string]func(file) (*callFile, bool){
 	"agy":          readAgyCalls,         // #2097
 	"antigravity":  readAntigravityCalls, // #2190
 	"devin":        readDevinCalls,       // aohan0905 on X
+	"droid":        readDroidCalls,       // _meouwu on X
 }
 
 // resumeCallReaders read an agent's calls from a file only appended to that
@@ -427,7 +428,7 @@ func readCalls(f file) *callFile {
 	if st.Claude != nil && (old == nil || old.Claude == nil) && !workingRevision(f.mod.UnixNano(), time.Now()) {
 		st = st.withoutRevisions()
 	}
-	if err == nil && (f.agent == "claude" || f.agent == "claude-desktop" || f.agent == "codex") {
+	if err == nil && (ccCallAgent(f.agent) || f.agent == "codex") {
 		writeCallRevisions(st)
 	}
 

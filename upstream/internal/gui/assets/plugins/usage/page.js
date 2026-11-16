@@ -566,7 +566,7 @@ function costHead(c, note, title) {
   cost.replaceChildren();
   cost.title = "";
   if (!c && !note) return;
-  if (c) cost.append(el("b", "", "≈" + c));
+  if (c) cost.append(el("b", "", c));
   cost.append(el("span", note ? "unpriced" : "", note || t("effective prices")));
   cost.title = title;
 }
@@ -848,12 +848,15 @@ function usageTokensPick() {
 // holdsLine: a window's whole (WindowHolds), how in its tooltip. With a
 // baseCost (#5861, no long-context premium) its figure switches every card.
 let holdsBase = kept("holdsBase", false);
+// an estimate's cost, whole from 100 up: its cents would claim a precision
+// the estimate hasn't
+const wholeCost = (c, prov) => fmtCost({ cost: c }, prov).replace(/\d{3,}\.\d+/, (n) => Math.round(n));
 function holdsCostText(h, prov) {
-  const c = fmtCost({ cost: holdsBase ? h.baseCost : h.cost }, prov);
+  const c = wholeCost(holdsBase ? h.baseCost : h.cost, prov);
   return holdsBase ? t("≈ {cost} base", { cost: c }) : t("≈ {cost} API", { cost: c });
 }
 function holdsLine(h, prov) {
-  const cost = (c) => fmtCost({ cost: c }, prov);
+  const cost = (c) => wholeCost(c, prov);
   const line = el("span", "quota-holds");
   const r = h.routed || {};
   // with the tokens tiles' "with cache" pick, the cache's tokens, read and
@@ -1019,7 +1022,7 @@ function renderUsage() {
     out.style.height = (100 * p.output / peak).toFixed(1) + "%";
     b.append(out, inp);
     const when = u.bucket === "hour" ? `${p.label}:00` : u.bucket === "week" ? t("week of {label}", { label: dayOf(p) }) : dayOf(p);
-    b.title = p.calls ? t(p.calls === 1 ? "{when} · {tokens} tokens · {n} call" : "{when} · {tokens} tokens · {n} calls", { when, tokens: fmtN(usageTokens(p)), n: p.calls }) + (fmtCost(p) ? " · ≈" + fmtCost(p) : "") : t("{when} · nothing", { when });
+    b.title = p.calls ? t(p.calls === 1 ? "{when} · {tokens} tokens · {n} call" : "{when} · {tokens} tokens · {n} calls", { when, tokens: fmtN(usageTokens(p)), n: p.calls }) + (fmtCost(p) ? " · " + fmtCost(p) : "") : t("{when} · nothing", { when });
     bars.append(b);
     const last = i === n - 1 && (n - 1) % every >= every / 2;
     labels.append(el("span", "", i % every === 0 || last ? dayOf(p) : ""));
@@ -1085,7 +1088,7 @@ function renderUsage() {
     const hit = g.cache_read && hitRate !== null ? " · " + t("hit rate {p}", { p: hitPct(hitRate) }) : "";
     num.append(el("b", "", fmtN(usageTokens(g))), el("small", "", t("{a} in · {b} out", { a: fmtN(g.input), b: fmtN(g.output) }) + (g.cache_read ? " · " + t("{n} cached", { n: fmtN(g.cache_read) }) : "") + hit));
     r.append(num);
-    r.append(el("div", "cost", fmtCost(g, g.provider) ? "≈" + fmtCost(g, g.provider) : ""));
+    r.append(el("div", "cost", fmtCost(g, g.provider) || ""));
     if (act) act(r, g);
     return r;
   };
@@ -2143,7 +2146,7 @@ function ledDetail(r) {
   if (r.in || r.out || r.cache_read || r.cache_write || !ledFailed_(r)) {
     add("Tokens", t("{i} in · {o} out · {r} cache read · {w} cache creation", { i: ledNum(r.in || 0), o: ledNum(r.out || 0), r: ledNum(r.cache_read || 0), w: ledNum(r.cache_write || 0) }) + cacheTTLs(r, ledNum) + (r.cache_unknown ? " · " + t("The vendor doesn't count the cache") : ""), "led-tokens");
   }
-  if (r.priced) add("Cost", "≈" + fmtCost({ cost: r.cost, unpriced: 0 }, r.provider));
+  if (r.priced) add("Cost", fmtCost({ cost: r.cost, unpriced: 0 }, r.provider));
   if (r.credits != null) add("Credits", ledCredits({ credits: r.credits, credited: 1 }).textContent);
   if (ledRowSpeed(r)) add("Speed", t("{n} tok/s", { n: ledNum(Math.round(ledRowSpeed(r))) }));
   else if (ledFloorSpeed(r)) add("Speed", "≥" + t("{n} tok/s", { n: ledNum(Math.round(ledFloorSpeed(r))) }));
@@ -2601,8 +2604,8 @@ function renderLedgerDash(l) {
   const c = fmtCost(l, l.provider);
   // the count in the words the quick panel uses too, the whole sentence on
   // hover (tenacious_eagle on Discord)
-  block("Cost", c ? "≈" + c : "—", line(l.unpriced ? unpricedCalls(l.unpriced) : t("effective prices")), c ? "cost" : "", l.unpriced ? unpricedCallsWhy(l.unpriced) : "");
-  const hit = block("Cache hit rate", rate === null ? "—" : hitPct(rate, 1), cacheLeftOut(l) ? line(cacheLeftOut(l)) : null, "", t("The share of the prompt read from the cache"));
+  block("Cost", c || "—", line(l.unpriced ? unpricedCalls(l.unpriced) : t("effective prices")), c ? "cost" : "", l.unpriced ? unpricedCallsWhy(l.unpriced) : "");
+  const hit = block("Cache hit rate", rate === null ? "—" : hitPct(rate, 2), cacheLeftOut(l) ? line(cacheLeftOut(l)) : null, "", t("The share of the prompt read from the cache"));
   const meter = el("div", "meter"), fill = el("i");
   fill.style.width = (100 * (rate || 0)).toFixed(1) + "%";
   meter.append(fill);
@@ -2880,7 +2883,7 @@ function ledHeatTip(x) {
   const parts = [t("{n} tokens", { n: fmtN(x.tokens) }), t(x.calls === 1 ? "{n} request" : "{n} requests", { n: ledNum(x.calls) })];
   // of one provider's calls, while the filters keep only its
   const c = fmtCost(x, new URLSearchParams(ledHeat?.want).get("provider") || "");
-  if (c) parts.push("≈" + c);
+  if (c) parts.push(c);
   const order = { tokens: 0, calls: 1, cost: 2 }[ledHeatMetric];
   if (order && parts[order]) parts.unshift(...parts.splice(order, 1)); // the metric shown first
   tip.append(el("span", "", parts.join(" · ")));
@@ -3621,7 +3624,7 @@ function renderLedger() {
     // (jiabubu on Discord): in place of the dash a plan's model has for a
     // price, or under the price; a reply that said none says nothing
     const credits = r.credits != null ? ledCredits({ credits: r.credits, credited: 1 }).textContent : "";
-    const cost = td(r.priced ? "≈" + fmtCost({ cost: r.cost, unpriced: 0 }, r.provider) : credits || "—", "n cost" + (r.priced || credits ? "" : " faint"), r.priced ? (r.pricing_model ? t("API price reference") + ": " + r.pricing_model : "") : credits ? t("What it cost in its plan's credits, as the reply said") : t("No known price for this model"));
+    const cost = td(r.priced ? fmtCost({ cost: r.cost, unpriced: 0 }, r.provider) : credits || "—", "n cost" + (r.priced || credits ? "" : " faint"), r.priced ? (r.pricing_model ? t("API price reference") + ": " + r.pricing_model : "") : credits ? t("What it cost in its plan's credits, as the reply said") : t("No known price for this model"));
     if (r.priced && r.pricing_model) {
       const reference = el("div", "price-reference", t("Price reference: {model}", { model: r.pricing_model }));
       reference.title = t("Model used for the API price estimate; this is not an observed model forwarding event.");
@@ -3810,7 +3813,7 @@ function sessUsageDetail(d, s, line) {
     for (const x of s.models) {
       m.append(el("span", "model", x.model || t("a model with no name")),
         el("span", "n", t("{a} in · {b} out", { a: fmtN(x.input), b: fmtN(x.output) }) + (x.cache_read ? " · " + t("{n} cached", { n: fmtN(x.cache_read) }) : "") + (x.cache_write ? " · " + t("{n} written", { n: fmtN(x.cache_write) }) : "")),
-        el("span", "c" + (x.priced ? "" : " none"), x.priced ? "≈" + fmtCost({ cost: x.cost }) : "—"));
+        el("span", "c" + (x.priced ? "" : " none"), x.priced ? fmtCost({ cost: x.cost }) : "—"));
     }
     d.append(m);
   }
@@ -4250,7 +4253,7 @@ const sessTokens = (s) => usageTokens(s);
 // a session's cost: "—" when none of its models has a known price
 function sessCost(s) {
   if (!s.models.some((m) => m.priced && (m.input || m.output || m.cache_read || m.cache_write))) return "—";
-  return "≈" + fmtCost({ cost: s.cost, unpriced: s.unpriced });
+  return fmtCost({ cost: s.cost, unpriced: s.unpriced });
 }
 // the range picker, in the page's head where the Overview's period is
 function renderSessRange(loading) {
@@ -4419,7 +4422,7 @@ function renderSessions() {
       t("Tokens in and out per session: the middle session's, and what nine in ten stay under"), stale ? "stale" : "");
     // counted as the Overview's tokens tile is, by the same pick (#2591)
     tile(fmtN(usageTokens(tot)), usageTokensPick(), [t("{a} in · {b} out", { a: fmtN(tot.input), b: fmtN(tot.output) }), ...(usageWithCache && cacheOf(tot) ? [t("{a} cache", { a: fmtN(cacheOf(tot)) })] : [])]);
-    tile(c ? "≈" + c : "—", t("cost"), unpricedModels || t("at effective prices"), unpricedNote);
+    tile(c || "—", t("cost"), unpricedModels || t("at effective prices"), unpricedNote);
     // input leaves out what was read from the cache and written to it
     const prompt = tot.input + tot.cache_read + tot.cache_write;
     tile(fmtN(tot.cache_read), t("cache read"), tot.cache_read && prompt ? t("hit rate {p}", { p: hitPct(tot.cache_read / prompt) }) : "", tot.cache_write ? t("{n} written", { n: fmtN(tot.cache_write) }) : "");
@@ -4563,9 +4566,9 @@ function renderSessChart(chart, st, used, ov, acts) {
   const metric = off[sessMetric] ? "tokens" : sessMetric;
   const value = (x) => metric === "cost" ? x.cost : metric === "sessions" ? x.sessions : metric === "messages" ? x.messages :
     metric === "active" ? x.active : metric === "output" ? x.output : usageTokens(x);
-  const show = (v) => metric === "cost" ? "≈" + fmtCost({ cost: v }) : metric === "active" ? fmtDur(v) : fmtN(v);
+  const show = (v) => metric === "cost" ? fmtCost({ cost: v }) : metric === "active" ? fmtDur(v) : fmtN(v);
   const tip = (x, when) => {
-    const parts = [usageTokens(x) ? t("{n} tokens", { n: fmtN(usageTokens(x)) }) : "", x.cost && fmtCost(x) ? "≈" + fmtCost(x) : "",
+    const parts = [usageTokens(x) ? t("{n} tokens", { n: fmtN(usageTokens(x)) }) : "", x.cost && fmtCost(x) || "",
       x.messages ? t(x.messages === 1 ? "{n} message" : "{n} messages", { n: fmtN(x.messages) }) : "",
       x.sessions ? t(x.sessions === 1 ? "{n} session" : "{n} sessions", { n: x.sessions }) : "", x.active ? t("{d} active", { d: fmtDur(x.active) }) : ""].filter(Boolean);
     return parts.length ? when + " · " + parts.join(" · ") : t("{when} · nothing", { when });
@@ -4838,7 +4841,7 @@ function renderSessTop() {
     who.append(sub);
     r.append(who);
     const fc = fmtCost({ cost: s.cost, unpriced: !s.priced });
-    const v = sessTopBy === "cost" ? (fc ? "≈" + fc : "—") : sessTopBy === "active" ? fmtDur(s.active) : fmtN(usageTokens(s));
+    const v = sessTopBy === "cost" ? (fc || "—") : sessTopBy === "active" ? fmtDur(s.active) : fmtN(usageTokens(s));
     r.append(el("div", "v", v));
     r.onclick = () => {
       if (window.getSelection()?.toString()) return;
@@ -5084,7 +5087,7 @@ function sessBars(box, title, items, cur, choose, name, menu) {
     fill.style.width = Math.max(1.5, 100 * x.n / peak).toFixed(1) + "%";
     track.append(fill);
     const fc = x.cost ? fmtCost(x) : "";
-    r.append(el("span", "n", name(x.v)), track, el("span", "v", fmtN(x.n)), el("span", "c", fc ? "≈" + fc : ""));
+    r.append(el("span", "n", name(x.v)), track, el("span", "v", fmtN(x.n)), el("span", "c", fc || ""));
     r.onclick = () => choose(x.v === cur ? "" : x.v);
     // a model's bar: its price, on a right-click
     if (menu) r.oncontextmenu = (e) => { e.preventDefault(); menu(r, x.v); };
@@ -5488,4 +5491,106 @@ function packUsageNow(list) {
     usagePack.observe(card);
     for (const part of card.children) usagePack.observe(part);
   }
+}
+
+// The allowances' trend pick in the page's head, and what a curve under a
+// card reads out on a hover; app.js draws the curves.
+const QUOTA_RANGES = [["off", "Off", "No curves on the cards"], ["2d", "2 days", "The last two days"], ["cycle", "Cycle", "The current cycle, from the window's start to its reset"], ["7d", "7 days", ""], ["30d", "30 days", ""]];
+// renderQuotaTrend: the allowances' head's pick of the curves' range, there
+// once some account has readings to draw
+function renderQuotaTrend() {
+  const b = $("#quotaTrend");
+  if (!b || b.nextElementSibling?.classList.contains("qt-days")) return;
+  b.hidden = !quotas?.some((q) => !q.error && (quotaLines(q).length || q.balanceTrend?.points?.length > 1));
+  if (b.hidden) return;
+  b.classList.toggle("set", quotaRange !== "off");
+  b.replaceChildren(el("span", "", t("Trends: {range}", { range: quotaRangeName(quotaRange) })), svg(CHEV, 11, 1.6));
+  b.title = t("What was left over time, under each account's meters");
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    const opts = QUOTA_RANGES.map(([v, name, note]) => ({ v, name, note }));
+    // a number of days typed before is listed beside the presets
+    if (!opts.some((o) => o.v === quotaRange)) opts.push({ v: quotaRange, name: quotaRangeName(quotaRange), literalName: true, note: "" });
+    opts.push({ v: "days", name: "Other number of days…", note: "" });
+    openProtoMenu(b, opts, quotaRange, (v) => v === "days" ? quotaDaysField(b) : setQuotaRange(v), "Left over time", "sess-menu");
+  };
+}
+
+// quotaDaysField: the trend head's button as a field for a number of days,
+// 1 to 45; Enter picks it, Escape or a bad number leaves the range as it was
+function quotaDaysField(b) {
+  const i = input(quotaDays(quotaRange) ? String(quotaDays(quotaRange)) : "", "1–" + QUOTA_DAYS_MAX, "text");
+  i.className = "rename-in qt-days";
+  i.inputMode = "numeric";
+  i.setAttribute("aria-label", t("Days back, 1 to {n}", { n: QUOTA_DAYS_MAX }));
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const s = i.value.trim(), n = Number(s);
+    i.remove();
+    b.hidden = false;
+    if (save && s && !(Number.isInteger(n) && n >= 1 && n <= QUOTA_DAYS_MAX)) status(t("A number of days from 1 to {n}", { n: QUOTA_DAYS_MAX }), "err");
+    else if (save && s) setQuotaRange(n + "d");
+    b.focus(NO_SCROLL);
+  };
+  // the Enter is used up here: let through, it would press the button that
+  // focus goes back to and open its menu again
+  i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); finish(e.key === "Enter"); } };
+  i.onblur = () => finish(true);
+  b.hidden = true;
+  b.after(i);
+  i.focus(NO_SCROLL);
+  i.select();
+}
+
+// curveHover: a curve's readings nearest the pointer, each line's with its
+// figure and when it was read (shangyuan0818 on X), from what box.hover says
+// was drawn last; a mouse's alone, a touch is the click that zooms
+function curveHover(box, g, W, H) {
+  const tip = el("div", "qc-tip");
+  tip.hidden = true;
+  const hot = sv("line", { y1: 0, y2: H, class: "qc-hot" });
+  box.append(tip);
+  // the curve's own tooltip (what the dashes mean) waits while it is read
+  let title = null;
+  const hide = () => {
+    tip.hidden = true;
+    hot.remove();
+    if (title != null && !box.title) box.title = title;
+    title = null;
+  };
+  g.addEventListener("pointerleave", hide);
+  g.addEventListener("pointermove", (e) => {
+    const h = box.hover;
+    if (e.pointerType === "touch" || !h) return hide();
+    const r = g.getBoundingClientRect();
+    const at = h.x0 + ((e.clientX - r.left) / r.width) * (h.x1 - h.x0);
+    // each line's reading nearest the pointer, of those drawn
+    const near = h.lines.map((l) => {
+      let best = null;
+      for (const p of l.points) if (p.at >= h.x0 && p.at <= h.x1 && (!best || Math.abs(p.at - at) < Math.abs(best.at - at))) best = p;
+      return best && { l, p: best };
+    }).filter(Boolean);
+    if (!near.length) return hide();
+    const first = near.reduce((a, b) => Math.abs(b.p.at - at) < Math.abs(a.p.at - at) ? b : a);
+    const x = ((first.p.at - h.x0) / (h.x1 - h.x0)) * W;
+    hot.setAttribute("x1", x);
+    hot.setAttribute("x2", x);
+    if (!hot.isConnected) g.append(hot);
+    tip.replaceChildren(el("b", "", quotaCycleDate(first.p.at)));
+    for (const { l, p } of near) {
+      const row = el("div"), sw = el("i");
+      sw.style.background = l.color;
+      row.append(sw, el("span", "", l.label), el("em", "", l.text(p)));
+      tip.append(row);
+    }
+    tip.hidden = false;
+    if (box.title) { title = box.title; box.removeAttribute("title"); }
+    // beside the pointer, on whichever side has room
+    const bx = box.getBoundingClientRect(), px = r.left - bx.left + (x / W) * r.width, w = tip.offsetWidth;
+    tip.style.left = Math.max(0, px + 12 + w > bx.width ? px - w - 12 : px + 12) + "px";
+    tip.style.top = r.top - bx.top + "px";
+  });
 }
