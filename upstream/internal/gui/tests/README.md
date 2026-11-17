@@ -1366,6 +1366,16 @@ Daily bars select that day's totals and ranking while keeping the whole chart;
 refresh and metric changes keep the selection, a period change clears it, and
 clicking the selected day clears it too, including days with no calls.
 
+`panel-heatmap.test.cjs` checks that the tray panel's Usage tab ends in the
+recent weeks' heatmap (eiyuuzaki2333 on X): as many weeks as fit the card (at
+least 20 at 440, 8 to 53), the last cell today and the first a Monday, square
+cells inside the card with no sideways scroll, a legend of five shades whose
+quiet one shows on the light panel's white card, levels that follow the tab's
+Tokens/Cost/Requests switch with no new read, a tooltip with the day and its
+value inside the window, and a provider picked in the ranking narrowing it
+(`usage/heatmap?provider=`). Weeks with no call show no card. 440 light and
+320 dark, in every language, Chromium and WebKit.
+
 `usage-refresh.test.cjs` sets the Usage page's refresh period, with a clock in
 place of time: every 5 s to begin with and no read before that, the picker's
 five (off, 5 s, 10 s, 30 s, a minute), off reading no more, a minute reading at
@@ -2745,6 +2755,17 @@ reason, the "Not encrypted" row on the local network, no native select or
 left border, nothing wider or cut off at 360px, and no such section (nor a
 read of it) in a browser on the page. Every language, Chromium and WebKit,
 with the API faked.
+
+## Instance name
+
+`instance-name.test.cjs` checks a browser tab's title names the magpie it
+shows (starballl on X): "<name> · magpie" from the first paint with
+MAGPIE_NAME's name, the Name field under Settings › Network and sharing ›
+Advanced (closed until a name is set, the variable's name its placeholder),
+a saved name trimmed and in the title at once, a cleared one back to the
+variable's, Advanced open after a reload with a name, nothing wider than
+360px, and the app's own window still "magpie". Every language, Chromium
+and WebKit, with the API faked.
 
 ## Inner scroll boxes keep the wheel
 
