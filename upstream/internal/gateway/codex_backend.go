@@ -1957,6 +1957,9 @@ func withoutUnreadable(body, msg []byte) ([]byte, bool) {
 }
 
 // withoutItem is a Responses request without the input item of this id.
+// A compaction of magpie's own (cmp_magpie_…, hey_boyce on X: one that
+// reached OpenAI as it was written) goes as the summary it holds, so
+// the turn keeps what came before.
 func withoutItem(body []byte, id string) ([]byte, bool) {
 	var q map[string]json.RawMessage
 	if json.Unmarshal(body, &q) != nil {
@@ -1966,17 +1969,27 @@ func withoutItem(body []byte, id string) ([]byte, bool) {
 	if json.Unmarshal(q["input"], &items) != nil {
 		return nil, false
 	}
-	kept := items[:0:0]
+	kept, found := items[:0:0], false
 	for _, it := range items {
 		var t struct {
-			ID string `json:"id"`
+			ID        string `json:"id"`
+			Type      string `json:"type"`
+			Encrypted string `json:"encrypted_content"`
 		}
 		if json.Unmarshal(it, &t) == nil && t.ID == id {
+			found = true
+			if t.Type == "compaction" {
+				if msg, ours := codexsummary.Message(t.Encrypted); ours && msg != nil {
+					if b, err := json.Marshal(msg); err == nil {
+						kept = append(kept, b)
+					}
+				}
+			}
 			continue
 		}
 		kept = append(kept, it)
 	}
-	if len(kept) == len(items) {
+	if !found {
 		return nil, false
 	}
 	q["input"], _ = json.Marshal(kept)
@@ -4115,13 +4128,14 @@ func summaryEndedShort(rec *recorder) bool {
 // upstreamFailed is a relay's own word that the provider behind it turned
 // the request away, without saying why: "flyapi: Upstream request failed"
 // came as a 404 (#866), "apex: Upstream request failed" as a 400
-// invalid_request_error (#1511). Codex asking the same relay itself
-// compacts, so the summary request is asked again as text, and compacted
-// without a model when that fails too.
+// invalid_request_error (#1511), Open Design's "[code=upstream_error]
+// Provider returned error" as a 400 (vendorUnsaidWords). Codex asking the
+// same relay itself compacts, so the summary request is asked again as
+// text, and compacted without a model when that fails too.
 func upstreamFailed(rec *recorder) bool {
 	return rec.status >= 400 && rec.status < 500 && rec.status != http.StatusUnauthorized &&
 		rec.status != http.StatusForbidden && rec.status != http.StatusTooManyRequests &&
-		upstreamFailedWords.Match(rec.body.Bytes())
+		(upstreamFailedWords.Match(rec.body.Bytes()) || vendorUnsaidWords.Match(rec.body.Bytes()))
 }
 
 var upstreamFailedWords = lazyre.New(`(?i)upstream request failed`)
@@ -4139,7 +4153,7 @@ func roleRefused(rec *recorder, err error) bool {
 	if rec.status >= 400 {
 		return upstreamFailed(rec) || rec.status == http.StatusBadRequest && systemRefusedWords.Match(rec.body.Bytes())
 	}
-	return err != nil && (systemRefusedWords.MatchString(err.Error()) || upstreamFailedWords.MatchString(err.Error()))
+	return err != nil && (systemRefusedWords.MatchString(err.Error()) || upstreamFailedWords.MatchString(err.Error()) || vendorUnsaidWords.MatchString(err.Error()))
 }
 
 var systemRefusedWords = lazyre.New(`(?i)system messages are not allowed`)
