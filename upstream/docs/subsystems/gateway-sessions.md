@@ -441,6 +441,11 @@ covers them), and `sessions/manage` carries the same as `reads`. While
 `asked` is false the Sessions page shows the consent (`consentCard` in
 the sessions plugin): each agent found with a switch, off; Allow selected
 saves `all: false` with each agent picked or not, Allow all `all: true`.
+A choice with `all` false reads no agent it doesn't name, so one found
+after it (Antigravity 2.0 installed after Allow selected: baysonfox on
+X) is `new` in `found` (on disk, not named, not read), and the Sessions
+page asks about those once (`laterCard`): Show their sessions sends
+each `true`, Keep off `false`, so it isn't new again.
 Settings › Privacy, *Agents' session history* (`renderSessionReads` in
 the sessions plugin's `settings.js`), has *Agents found later* (`all`, sent with each listed agent
 at the value its row shows) and a row per agent.
@@ -504,6 +509,26 @@ Codex's newest rollout's last line before magpie restarts Codex
 `TestFreshInstallReadsNoAgentUntilAllowed`,
 `TestSettleReadsKeepsWhatWasThere`, `TestSessionReadsRoutes`,
 `sessions-reads.test.cjs`.
+
+LiveAgent's sessions (#6741,
+[`liveagent.go`](../../internal/sessions/liveagent.go)) are K-brain's
+`<root>/sessions/<project>/<id>/session.jsonl` (older ones right under
+`sessions`; `.runs` and `.deleted-history` are skipped), the root found by
+the rule `agent.liveAgentDir` uses (`sessions.LiveAgentDirIn`:
+`$LIVEAGENT_HOME`, `$K_BRAIN_HOME`, `~/.liveagent/data-dir.json`,
+`~/.liveagent`). K-brain rewrites the whole file, so it is parsed whole.
+Its first line, `session_meta`, gives the id, title, cwd and the running
+totals (`usage_in` with cache reads and writes in it, `usage_cached`,
+`usage_out`, `model_usage` by `"<model> @ <provider>"`); each reply's own
+`usage` counts on its day, and what the totals hold beyond those replies
+(a compaction's call, a rewound reply) plus `sub_usage` counts on the last
+message's day. A fork's copies (`seq` up to `fork_seq`) are its source's
+and count in neither. A subagent's session (`task-<parent>-<task>`,
+`task_id` set) is filed under its parent with its tools but no tokens:
+they are the parent's `sub_usage`. There is no Calls reader, as the
+gateway's own record of LiveAgent's calls carries no session, and no
+resume command or delete. Tests: `TestLiveAgentSessions` (the issue's
+literal `session_meta`), `TestLiveAgentTranscript`, `TestLiveAgentRoot`.
 
 ## Local Gateway Conversation Recording
 
@@ -994,10 +1019,22 @@ including response folding and gateway matching. Insiders session ids
 have an `insiders-` prefix in magpie, leaving stable ids unchanged and
 keeping equal UUIDs in the two stores from sharing a session or call id.
 The files themselves are not renamed. Sessions stay read-only with no
-terminal resume command; encrypted conversation text is not read.
+terminal resume command. The database's step text is encrypted and not
+read; what was said is read from the plain-text transcript the app writes
+beside it, `brain/<id>/.system_generated/logs/transcript_full.jsonl` in the
+same store (`antigravityTranscript`), in agy's format and through agy's
+reader (`agyTranscript`): the user's turns, the replies, each tool call and
+its result, on the session viewer, search and the Markdown export
+(@yansheng1003 on X: only the title and preview showed). Its size and time
+are counted into the session file's with the `-wal`'s, so a step it adds
+reads the session again. A conversation with no transcript is
+`ErrNoTranscript`, as before.
 Verification: `TestAntigravityInsidersSessions` covers Insiders alone,
 both stores with the same UUID, per-model tokens, call ids, summary refresh
 and turning the existing reading choice off, using #2190's real step bytes.
+`TestAntigravityAppTranscript` reads a conversation the app's 2.30 language
+server had with a read_file call (testdata/antigravity-2.30-tools) from
+stable, Insiders and a WSL distro's store; `TestAntigravityAppNoTranscript`.
 
 A read of every call decodes each file's cached shard, and over a long
 history that is tens of thousands of files (#2278: 68k shards, 415 MB).
