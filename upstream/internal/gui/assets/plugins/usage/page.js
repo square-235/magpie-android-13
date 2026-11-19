@@ -362,6 +362,57 @@ async function readsNote(host) {
   host.append(box);
 }
 
+// readsLater: the agents found here whose session files magpie doesn't
+// read, and which were never turned off on their own (reads.found[].new):
+// one installed after "allow selected", or left off in its list
+// (baysonfox on X: Antigravity 2.0 beside agy CLI, whose calls made
+// without magpie were counted nowhere). Requests says so above its rows
+// and asks once: Count reads them, Don't count keeps them off and the line
+// is gone for good. sessions/reads is read again at most once a minute.
+let readsLaterAt = 0, readsLaterGot = null, readsLaterKey = "";
+async function readsLater() {
+  const box = $("#ledReads");
+  if (!box) return;
+  if (Date.now() - readsLaterAt > 60e3) {
+    readsLaterAt = Date.now();
+    try { readsLaterGot = await api("sessions/reads"); } catch { readsLaterGot = null; }
+  }
+  const r = readsLaterGot;
+  const found = r?.asked && !r.gateway ? (r.found || []).filter((x) => x.new) : [];
+  const key = found.map((x) => x.agent).join(",") + "|" + locale;
+  if (key === readsLaterKey && box.childElementCount === (found.length ? 2 : 0)) return;
+  readsLaterKey = key;
+  box.hidden = !found.length;
+  if (!found.length) { box.replaceChildren(); return; }
+  const names = found.map((x) => x.name).join(t(", "));
+  const p = el("p", "", t("magpie doesn't read the session files of {names}, so their calls that didn't go through magpie aren't counted here.", { names }));
+  p.id = "ledReadsWhy";
+  box.setAttribute("aria-labelledby", p.id);
+  const acts = el("div", "reads-later-acts");
+  const answer = async (on) => {
+    for (const b of acts.children) b.disabled = true;
+    const agents = {};
+    for (const x of found) agents[x.agent] = on;
+    try {
+      readsLaterGot = await api("sessions/reads", { agents });
+      readsLaterAt = Date.now();
+      readsLater();
+      if (on) await loadLedger();
+    } catch (e) {
+      status(e.message, "err");
+      for (const b of acts.children) b.disabled = false;
+    }
+  };
+  const off = el("button", "text", t("Don't count"));
+  off.type = "button";
+  off.onclick = () => answer(false);
+  const go = el("button", "text primary", t("Count {names}", { names }));
+  go.type = "button";
+  go.onclick = () => answer(true);
+  acts.append(off, go);
+  box.replaceChildren(p, acts);
+}
+
 // noCallsIn is what an empty page says of the period it is on
 function noCallsIn(p) {
   if (periodDays(p)) return "No calls on the days picked.";
@@ -753,6 +804,30 @@ function fitChartLabels() {
   }
 }
 new ResizeObserver(fitChartLabels).observe($("#view-usage"));
+
+// The allowances' cards come in at different times, each vendor's read
+// and the curves' history apart, and each one drawn grows the page above
+// what's below it (liuzhengdong99 on X: 滑到上面看某张卡片，视图会被拽回下面).
+// The Overview keeps where the reader is on what they read: the card, or
+// the part of the page under the cards, nearest the view's top, found again
+// by its data-key once the cards are drawn anew (keepInView in app.js). At
+// the page's top, while the cards are arranged by hand (unpin in app.js),
+// or on another tab, nothing is kept and the browser's own anchoring is
+// left as it was.
+keepInView($("#view-usage"), () => {
+  const v = $("#view-usage"), pane = $("#usagePane");
+  if (pane.hidden || !pane.offsetParent || usageArranging) return null;
+  // the highest that starts in sight, else the one cut by the view's top
+  const top = v.getBoundingClientRect().top, foot = top + v.clientHeight;
+  let best = null, at = Infinity, cut = null;
+  for (const n of [...$("#subscriptionUsage").children, ...[...pane.children].filter((c) => c.id !== "subscriptionUsage")]) {
+    if (!n.offsetParent) continue;
+    const r = n.getBoundingClientRect();
+    if (r.bottom <= top + 1 || !r.height || r.top >= foot) continue;
+    if (r.top >= top - 0.5) { if (r.top < at) { at = r.top; best = n; } } else if (!cut || r.top > cut.getBoundingClientRect().top) cut = n;
+  }
+  return best || cut;
+}, true);
 
 // The Overview's lists — Agents, Models, Accounts, Gateway keys — each fold
 // away under their heading (#2378: 日常看账号维度较多，都要拉到最底下), and
@@ -2154,7 +2229,9 @@ function ledDetail(r) {
   }
   // the subscription account that answered, or the key it was sent with
   if (r.source !== "log") add("Account", r.providerAccount || r.providerKeyName);
-  add("Sent", r.model);
+  // the id it went out under, when another than the model's (a variant a
+  // plugin picked for the effort, a name set upstream): the model's on hover
+  add("Sent", r.wire || r.model, r.wire ? "led-wire" : "", r.wire ? r.model + " → " + r.wire : "");
   if (r.served) add("Served", ledServed(r));
   add("Effort", r.effort);
   add("Service tier", ledTierText(r));
@@ -2758,7 +2835,7 @@ function renderLedgerDash(l) {
   const gs = ledGroupSpeed(l);
   const ttft = ledTTFT(l) ? t("first token in {ms} on average", { ms: ledTook(ledTTFT(l)) }) + " · " + t(l.timed === 1 ? "{k} timed reply" : "{k} timed replies", { k: ledNum(l.timed) }) : t("no streamed replies timed");
   const speedCard = block("Output speed", gs ? gs.mainParts : "—", gs?.other ? line(gs.other) : null,
-    "", [gs?.title, t("Output tokens a second after the first, over the streamed replies") + ". " + t("A reply that reasoned counts only its answer, from its first text: the reasoning was written before the stream showed it") + ". " + t("No answer text: speed includes reasoning only when visible reasoning streamed; hidden reasoning has no speed")].filter(Boolean).join("\n"));
+    "", [gs?.title, t("All output tokens the vendor counted, reasoning and tool calls included, a second from the first output to the end, over the streamed replies") + ". " + t("A reply that reasoned with no sign in its stream of when counts only its answer, from its first text")].filter(Boolean).join("\n"));
   speedCard.append(Object.assign(line(ttft), { className: "sub ttft" }));
   drawLedTrend();
 }
@@ -3348,25 +3425,36 @@ const LED_COLS = [
 // seen (pluviophile714 on Discord: gpt-6.1-sol, 392 tokens 0.25 s after an
 // 8.2 s first token, read 1,539 tok/s; usage.HeldWindowMs)
 const ledHeldShort_ = (w, from) => w < 1000 && from > 4 * w;
-// the tokens a reply was seen to write and the ms it took, as
-// usage.DecodeOf and routing/client.js's decodeOf tell them: one that reasoned
-// counts its answer from its first text, its reasoning written before
-// the stream showed any (tony on Discord); null when it tells no speed.
+// what a reply's speed counts, as usage.DecodeOf and routing/client.js's
+// decodeOf count it: all its output tokens, reasoning and tool calls
+// included (Archivemylife on X), from its first output of any kind, its
+// first content or its first sign of reasoning, to its end (start); one
+// that reasoned with no sign of when counts its answer from its first text
+// (answer, tony on Discord), and none with no text. from is where the
+// answer the burst is judged on starts. null when it counts none.
+const ledSpan_ = (r) => {
+  const think = r.reasoning > 0 ? r.reasoning : 0, fr = r.first_reasoning_ms > 0 ? r.first_reasoning_ms : 0, ft = r.first_text_ms > 0 ? r.first_text_ms : 0;
+  const from = think && ft ? ft : r.ttft_ms;
+  if (think && !fr) return ft ? { n: r.out - think, start: ft, from, think, answer: true } : null;
+  if (think > r.out) return null;
+  return { n: r.out, start: fr && fr < r.ttft_ms ? fr : r.ttft_ms, from, think };
+};
 // A reply held back and let go in a burst at its end tells none (John on
-// Discord): its content came in under a quarter of its window (flow_ms),
-// or its answer at over 20 times the pace its reasoning came before it,
-// or it came in under a second after a wait four times longer (ledHeldShort_)
+// Discord): its answer's content came in under a quarter of its window
+// (flow_ms), or its answer at over 20 times the pace its reasoning came
+// before it, or it came in under a second after a wait four times longer
+// (ledHeldShort_)
 const ledDecode = (r) => {
-  if (ledFailed_(r) || r.canceled || r.reasoning_hidden && !(r.first_text_ms > 0) || !(r.ttft_ms > 0)) return null;
-  const think = r.reasoning > 0, visible = think && !(r.first_text_ms > 0) && r.first_reasoning_ms >= r.ttft_ms && r.flow_ms > 0 && r.reasoning <= r.out;
-  const n = think && !visible ? r.out - r.reasoning : r.out, from = visible ? r.first_reasoning_ms : think ? r.first_text_ms : r.ttft_ms;
-  const w = r.ms - from;
-  if (!(n > 0 && from > 0 && w >= 100 && n * 1000 <= 10000 * w)) return null;
-  if (r.flow_ms > 0 && r.flow_ms * 4 < w) return null;
-  if (ledHeldShort_(w, from)) return null;
-  if (think && r.first_text_ms > 0 && n * (r.first_text_ms - r.ttft_ms) > 20 * r.reasoning * w) return null;
+  if (ledFailed_(r) || r.canceled || r.reasoning_hidden && !(r.first_text_ms > 0) && !(r.first_reasoning_ms > 0) || !(r.ttft_ms > 0)) return null;
+  const s = ledSpan_(r);
+  if (!s) return null;
+  const n = s.n, w = r.ms - s.start, tail = r.ms - s.from;
+  if (!(n > 0 && w >= 100 && n * 1000 <= 10000 * w)) return null;
+  if (r.flow_ms > 0 && r.flow_ms * 4 < tail) return null;
+  if (ledHeldShort_(w, s.start)) return null;
+  if (s.think && r.first_text_ms > 0 && (r.out - s.think) * (r.first_text_ms - r.ttft_ms) > 20 * s.think * tail) return null;
   if (ledCodexTurn(r) && (w < LED_CODEX_WINDOW_MS || n < LED_CODEX_BODY)) return null;
-  return { n, w };
+  return { n, w, answer: !!s.answer };
 };
 // a Codex turn of one call read from its session file, its first token
 // known: its window after the first token can be one network push, not the
@@ -3431,14 +3519,15 @@ const ledNoSpeed_ = (r) => {
   if (!(r.ms > 0)) return t("No duration was recorded to time a speed from");
   if (!(r.out > 0)) return t("No output tokens to time a speed from");
   if (!(r.ttft_ms > 0)) return r.source === "log" ? t("The session file has no first token to time a speed from") : t("Not streamed: no first token to time a speed from");
-  const think = r.reasoning > 0, visible = think && !(r.first_text_ms > 0) && r.first_reasoning_ms >= r.ttft_ms && r.flow_ms > 0 && r.reasoning <= r.out;
-  const n = think && !visible ? r.out - r.reasoning : r.out;
+  // a reply that reasoned with no sign of when and no text counts none:
+  // why is said of its answer, all after its first token
+  const s = ledSpan_(r) || { n: r.out - (r.reasoning || 0), start: r.ttft_ms, from: r.ttft_ms, think: r.reasoning || 0 }, n = s.n;
   if (!(n > 0)) return t("All its output was reasoning: no answer after it to time a speed from");
-  const from = visible ? r.first_reasoning_ms : think && r.first_text_ms > 0 ? r.first_text_ms : r.ttft_ms, w = r.ms - from;
+  const from = s.start, w = r.ms - from, tail = r.ms - s.from, burst = r.flow_ms > 0 && r.flow_ms * 4 < tail;
   const little = t("Too little came after the first token to time a speed by: {n} tokens in {ms}", { n: ledNum(n), ms: ledTook(Math.max(0, w)) });
   if (w < 100) return little;
-  if (ledHeldShort_(w, from) && !(n * 1000 > 10000 * w || r.flow_ms > 0 && r.flow_ms * 4 < w)) return t("It came in under a second after a wait of {wait}: it may have been written during the wait and let go at once, so how fast it was written isn't seen", { wait: ledTook(from) });
-  if (n * 1000 > 10000 * w || r.flow_ms > 0 && r.flow_ms * 4 < w || think && r.first_text_ms > 0 && n * (r.first_text_ms - r.ttft_ms) > 20 * r.reasoning * w) return t("It came in one burst at its end, not as it was written, so how fast it was written isn't seen");
+  if (ledHeldShort_(w, from) && !(n * 1000 > 10000 * w || burst)) return t("It came in under a second after a wait of {wait}: it may have been written during the wait and let go at once, so how fast it was written isn't seen", { wait: ledTook(from) });
+  if (n * 1000 > 10000 * w || burst || s.think && r.first_text_ms > 0 && (r.out - s.think) * (r.first_text_ms - r.ttft_ms) > 20 * s.think * tail) return t("It came in one burst at its end, not as it was written, so how fast it was written isn't seen");
   return little;
 };
 const ledFloorSpeed = (r) => { const f = ledFloor_(r); return f ? f.n / (f.w / 1000) : 0; };
@@ -3558,6 +3647,7 @@ function ledProviderMore(p) {
 
 function renderLedger() {
   const l = ledger;
+  readsLater();
   const callers = l.callerKeys || [];
   const providers = l.providers || [];
   const missingAgent = ledAgent && !l.agents.some((a) => a.id === ledAgent);
@@ -3846,7 +3936,7 @@ function renderLedger() {
     if (badges.childElementCount) wc.append(badges);
     // the model sent is what the gateway sent the vendor: a session file has none
     // The log names a model, but does not capture the outbound HTTP request.
-    td(r.model || "—", "model " + (r.model ? "model-value" : "faint"), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
+    td(r.wire || r.model || "—", "model " + (r.model ? "model-value" : "faint"), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.wire ? r.model + " → " + r.wire : r.model);
     td(ledServed(r), "model");
     td(r.effort || "—", r.effort ? "" : "faint");
     td(fmtN(r.in || 0), "n", exactN(r.in));
@@ -3896,7 +3986,7 @@ function renderLedger() {
     const v = ledRowSpeed(r), floor = ledFloorSpeed(r), f = ledFloor_(r);
     const ttft = r.ttft_ms > 0 ? " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) }) : "";
     td(v ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : floor ? "≥" + t("{n} tok/s", { n: ledNum(Math.round(floor)) }) : "—", "n speed" + (v || floor ? "" : " faint"),
-      v ? (r.reasoning > 0 && r.first_text_ms > 0 ? t("{n} answer tokens in {ms} after the first text, the {r} reasoning tokens before it left out", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w), r: ledNum(r.reasoning) })
+      v ? (ledDecode(r).answer ? t("{n} answer tokens in {ms} after the first text, the {r} reasoning tokens before it left out", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w), r: ledNum(r.reasoning) })
         : t("{n} output tokens in {ms} after the first", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w) })) + ttft
         : floor && f.gateway && f.answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. No first text was recorded, so reasoning after the first token is counted too", { n: ledNum(f.n), ms: ledTook(f.w), r: ledNum(r.reasoning) }) + ttft
         : floor && f.gateway ? t("At least: {n} output tokens in {ms}, from the request to its last token, the wait for the first one counted too", { n: ledNum(r.out), ms: ledTook(r.ms) }) + ". " + ledNoSpeed_(r) + ttft
@@ -5629,6 +5719,46 @@ function cardsShownFor(p) {
 // that ends highest (#860), as tall as what it holds (jen_celeus on X).
 const USAGE_MIN = 260, USAGE_GAP = 7;
 let usagePacked = null, usagePackFrame = 0;
+// usageTall: each card's height as last drawn in full, by its key, kept
+// for the next start (magpie.usageCardTall). A card still
+// waiting on its read or its curve (usageWaiting) is packed and
+// held at least that tall, so the cards come in without the page around
+// them moving (liuzhengdong99 on X: 先按固定高度占位、数据回来再填内容).
+let usageTall = {}, usageTallSave = 0;
+try { usageTall = JSON.parse(localStorage.getItem("magpie.usageCardTall") || "{}") || {}; } catch {}
+for (const k in usageTall) if (!(usageTall[k] > 0)) delete usageTall[k];
+// still to come for a card: an account the gateway is reading yet
+// (X-Magpie-Reading, asked again), or its curve before the history's
+// first answer (quotasReading, quotaHistV in app.js; history that never
+// comes leaves the card as tall as it was)
+function usageWaiting(k) {
+  const subs = (quotas || []).filter((q) => q.provider === k);
+  return quotasReading && subs.some((q) => q.error) || !quotaHistV && quotaRange !== "off" && subs.some((q) => !q.error && q.windows?.length);
+}
+function usageWaits(cards, hs) {
+  const held = cards.map(() => false);
+  let moved = false;
+  cards.forEach((c, i) => {
+    const k = c.dataset.key, was = usageTall[k];
+    if (!k) return;
+    if (usageWaiting(k)) {
+      if (was > hs[i]) { hs[i] = was; held[i] = true; }
+    } else if (was !== Math.ceil(hs[i])) {
+      usageTall[k] = Math.ceil(hs[i]);
+      moved = true;
+    }
+  });
+  if (moved) usageTallKeep();
+  return held;
+}
+function usageTallKeep() {
+  if (!usageTallSave) usageTallSave = setTimeout(() => {
+    usageTallSave = 0;
+    const keys = Object.keys(usageTall);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete usageTall[k];
+    try { localStorage.setItem("magpie.usageCardTall", JSON.stringify(usageTall)); } catch {}
+  }, 1000);
+}
 function packUsage() {
   const list = $("#subscriptionUsage");
   if (usagePackFrame) { cancelAnimationFrame(usagePackFrame); usagePackFrame = 0; }
@@ -5652,10 +5782,13 @@ function packUsage() {
     const empty = ends.reduce((s, e) => s + tall - (e - USAGE_GAP), 0) * (width - (n - 1) * USAGE_GAP) / n;
     return { n, at, tall, empty };
   };
+  let held = [];
   const heights = () => {
     for (const c of cards) c.style.minHeight = "";
     fitQuota([...list.querySelectorAll(".quota-windows")]);
-    return foldedHeights(cards, cards.map((c) => c.getBoundingClientRect().height));
+    const hs = cards.map((c) => c.getBoundingClientRect().height);
+    held = usageWaits(cards, hs);
+    return foldedHeights(cards, hs);
   };
   const columns = (n) => { list.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`; };
   let best;
@@ -5665,7 +5798,11 @@ function packUsage() {
   } else {
     list.classList.remove("packed");
     for (const c of cards) c.style.gridArea = "";
+    // while cards are still to come, the columns they were last seen
+    // whole in ("#" + how many fit): the heights kept are that width's
+    const waits = cards.some((c) => usageWaiting(c.dataset.key)), kept = usageTall["#" + most];
     for (let n = most; n >= Math.max(1, most - 1); n--) {
+      if (waits && kept && n !== kept && kept >= most - 1 && kept <= most) continue;
       columns(n);
       const p = place(n, heights());
       if (!best) best = p;
@@ -5676,13 +5813,17 @@ function packUsage() {
     best = place(best.n, heights());
   }
   usagePacked = { most, keys, n: best.n };
+  if (!held.some(Boolean) && !cards.some((c) => usageWaiting(c.dataset.key)) && usageTall["#" + most] !== best.n) { usageTall["#" + most] = best.n; usageTallKeep(); }
   list.classList.add("packed");
   best.at.forEach(([c, top, h], i) => {
     const area = `${top + 1} / ${c + 1} / span ${Math.max(1, h)} / span 1`;
     if (cards[i].style.gridArea !== area) cards[i].style.gridArea = area;
-    const min = cards[i].dataset.folded ? h + "px" : "";
+    const min = cards[i].dataset.folded || held[i] ? h + "px" : "";
     if (cards[i].style.minHeight !== min) cards[i].style.minHeight = min;
   });
+  // the cards drawn anew or moved to another column: the one being read
+  // stays where it was on the screen
+  followPin($("#view-usage"));
 }
 // foldedHeights: a folded card as tall as the tallest folded one of one
 // account, or whole rows of it, so folded cards line up in a grid; an

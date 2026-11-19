@@ -47,6 +47,11 @@ type Model struct {
 	// APIs, when the vendor says, are the APIs the model is served on
 	// ("chat", "responses", "anthropic"); empty is not known.
 	APIs []string `json:",omitempty"`
+	// Prefers, on a model of another magpie's list, is the API that magpie
+	// asks it on best (magpie_prefers): "responses" for a GPT its OpenAI
+	// key or ChatGPT sign-in is best asked on there, or a routing group
+	// whose members are; "" when it didn't say.
+	Prefers string `json:",omitempty"`
 	// Endpoints, in magpie's own models for an agent, are the gateway
 	// paths a request for it is relayed on as it is
 	// (provider.NativeEndpoints, /v1/models' native_endpoints); a group's
@@ -1000,7 +1005,11 @@ func PriceOf(providerID, modelID string) (Price, bool) {
 // at $8/$40, twice too, "across the full context window". A mode lists no
 // long-context price or 1-hour cache write, so std's are scaled by the
 // mode's own ratio to std, part by part.
-func TierPrice(std Price, model, tier string) (Price, bool) {
+//
+// A tier OpenAI prices as a multiple of the standard rate that changes on
+// a date (tierTimes: GPT-6.2's Ultrafast, which models.dev lists with no
+// cost) is std times the multiple in force at at, the call's own time.
+func TierPrice(std Price, model, tier string, at time.Time) (Price, bool) {
 	tier = strings.ToLower(strings.TrimSpace(tier))
 	if tier == "" || tier == "default" || tier == "auto" {
 		return Price{}, false
@@ -1010,6 +1019,11 @@ func TierPrice(std Price, model, tier string) (Price, bool) {
 		m, ok := all[maker].Models[model]
 		if !ok || m.Cost == nil || !m.Cost.Same(std) {
 			continue
+		}
+		if maker == "openai" {
+			if x, _ := TierTimes(model, tier, at); x > 0 {
+				return std.Times(x), true
+			}
 		}
 		for _, mode := range m.Experimental.Modes {
 			c, body := mode.Cost, mode.Provider.Body
@@ -1035,6 +1049,44 @@ func TierPrice(std Price, model, tier string) (Price, bool) {
 		}
 	}
 	return Price{}, false
+}
+
+// tierTimes are the service tiers OpenAI's pricing page prices as a
+// multiple of a model's standard rate, from a date on: "Ultrafast costs 3
+// times the Standard rate through February 28, 2027" and "6 times the
+// Standard rate starting March 1, 2027 (Pacific time)", for GPT-6.2 Astra
+// and GPT-6.2 Sol (mu33410 on X). models.dev lists their Ultrafast mode
+// with no cost, so it was billed at the standard rate, below Fast's.
+var tierTimes = func() map[[2]string][]tierRate {
+	pt, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		pt = time.FixedZone("PST", -8*3600) // March 1st is before DST
+	}
+	ultra := []tierRate{{Times: 3}, {From: time.Date(2027, 3, 1, 0, 0, 0, 0, pt), Times: 6}}
+	return map[[2]string][]tierRate{{"gpt-6.2-astra", "ultrafast"}: ultra, {"gpt-6.2-sol", "ultrafast"}: ultra}
+}()
+
+type tierRate struct {
+	From  time.Time // zero: from the start
+	Times float64
+}
+
+// TierTimes is the multiple of model's standard rate OpenAI bills tier at
+// a call made at at (tierTimes), and which of its rates that is, for a
+// cache to tell calls on either side of a change apart; 0 when the tier
+// isn't priced that way. A zero at is now.
+func TierTimes(model, tier string, at time.Time) (float64, int) {
+	rates := tierTimes[[2]string{bareID(model), strings.ToLower(strings.TrimSpace(tier))}]
+	if at.IsZero() {
+		at = time.Now()
+	}
+	x, n := 0.0, -1
+	for i, r := range rates {
+		if !at.Before(r.From) {
+			x, n = r.Times, i
+		}
+	}
+	return x, n
 }
 
 // PricedBy is the list price the first of providers (models.dev ids)
@@ -1536,6 +1588,18 @@ func IsOneOf(id string, ids map[string]bool) bool {
 	return ok
 }
 
+// IsOneLike is IsOneOf for models a rule names by their id rather than a
+// list: whether like takes the model of this id, by the id or any spelling
+// IsOneOf hears (a relay's rename, a tag in brackets, ":official", the
+// model the user said it is). like gets bare ids, lowercase. A rule kept
+// so reaches a model newer than any list: provider.OffersUltra's every GPT
+// Sol, Astra and Terra.
+func IsOneLike(id string, like func(bare string) bool) bool {
+	load()
+	_, ok := lookupBy(bareID(id), func(b string) (bool, bool) { return true, like(b) }, true, true)
+	return ok
+}
+
 // KnowsAsWritten is Knows without another spelling (normalFor): the
 // usage report sends a model's id only when models.dev knows it as
 // written, so an id a user typed that only folds into a known one
@@ -1766,24 +1830,38 @@ func lookupAs[T any](id string, table map[string]T, spellings bool) (T, bool) {
 // lookupIn is lookupAs for a bare id, the user's word heard only with
 // user, as contextIn.
 func lookupIn[T any](b string, table map[string]T, spellings, user bool) (T, bool) {
-	if v, ok := found(b, table); ok {
+	return lookupBy(b, inMap(table), spellings, user)
+}
+
+// inMap is a table's lookup of a bare id as it is written, for foundBy.
+func inMap[T any](table map[string]T) func(string) (T, bool) {
+	return func(b string) (T, bool) {
+		v, ok := table[b]
+		return v, ok
+	}
+}
+
+// lookupBy is lookupIn for a table read through get, which may be a rule
+// rather than a map (IsOneLike).
+func lookupBy[T any](b string, get func(string) (T, bool), spellings, user bool) (T, bool) {
+	if v, ok := foundBy(b, get); ok {
 		return v, true
 	}
 	if s, ok := userSame(b, user); ok {
-		if v, ok := lookupIn(s, table, true, false); ok {
+		if v, ok := lookupBy(s, get, true, false); ok {
 			return v, true
 		}
 	}
 	if r, _, ok := renamed(b); ok {
-		if v, ok := found(r, table); ok {
+		if v, ok := foundBy(r, get); ok {
 			return v, true
 		}
 	}
 	if n, ok := normalFor(b); spellings && ok {
-		return found(n, table)
+		return foundBy(n, get)
 	}
 	if t, ok := untagged(b); spellings && ok {
-		return lookupIn(t, table, true, user)
+		return lookupBy(t, get, true, user)
 	}
 	var zero T
 	return zero, false
@@ -1869,21 +1947,25 @@ func normalFor(b string) (string, bool) {
 // profile's without its geography, "gpt-5.4(high)" (CLIProxyAPI's level in
 // the id) as gpt-5.4, or "glm-5:free" (":batch", ":thinking") as glm-5.
 func found[T any](b string, table map[string]T) (T, bool) {
-	if v, ok := table[b]; ok {
+	return foundBy(b, inMap(table))
+}
+
+// foundBy is found for a table read through get.
+func foundBy[T any](b string, get func(string) (T, bool)) (T, bool) {
+	if v, ok := get(b); ok {
 		return v, true
 	}
 	if r, ok := unprofiled(b); ok {
-		return found(r, table)
+		return foundBy(r, get)
 	}
 	if i := strings.IndexByte(b, '('); i > 0 && strings.HasSuffix(b, ")") {
-		if v, ok := table[b[:i]]; ok {
+		if v, ok := get(b[:i]); ok {
 			return v, true
 		}
 		b = b[:i]
 	}
 	if i := strings.IndexByte(b, ':'); i > 0 {
-		v, ok := table[b[:i]]
-		return v, ok
+		return get(b[:i])
 	}
 	var zero T
 	return zero, false
