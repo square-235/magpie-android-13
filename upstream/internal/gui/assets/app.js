@@ -372,7 +372,7 @@ function toneCheck(img) {
     swap();
   }, { once: true });
 }
-const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "openbot", "avibe", "kun"]);
+const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "openbot", "avibe", "kun", "nowledge-mem"]);
 
 // lazy: a picture in a long list (Plugins' rows) is asked for near the
 // screen: each SVG an <img> draws is a ~0.6 MB webview document, kept (#909)
@@ -4610,7 +4610,8 @@ function servedAnew(u) {
 function updateStuck(u) {
   const p = u.packaged;
   if (p) return p.command ? t("{manager} installed magpie ({pkg}), so {manager} updates it, not magpie: {cmd}", { manager: p.manager, pkg: p.package, cmd: p.command }) : t("{manager} installed magpie, so {manager} updates it, not magpie.", { manager: p.manager });
-  if (u.stuck === "container") return t("magpie runs in a container, so it can't update itself; pull the new image (docker pull ghcr.io/yetone/magpie:latest) and recreate the container.");
+  // the version's own image: latest, daily and stable may hold another (fishmagic80 on X)
+  if (u.stuck === "container") return t("magpie runs in a container, so it can't update itself; pull the image of {v} (docker pull {image}) and recreate the container from it.", { v: u.latest, image: u.image });
   if (u.stuck === "not-writable") return t("magpie can't write to the folder it runs from ({dir}), so it can't update itself; move it to a folder you can write to and open it from there.", { dir: u.stuckDir || "" });
   return u.stuck === "translocated"
     ? t("macOS is running magpie from a temporary copy, so it can't update itself; move magpie to Applications and open it from there.")
@@ -4752,10 +4753,11 @@ function holdPop(pop, room) {
   if (!(parseFloat(getComputedStyle(pop).maxHeight) <= room)) pop.style.maxHeight = room + "px";
 }
 
-// a Claude Code switch: a square a click turns on or off, lit while on.
+// an agent's switch: a square a click turns on or off, lit while on.
 const TOGGLES = {
   ultracode: { label: "ultracode", note: "Claude plans a workflow for each substantive task", said: "{agent} ultracode → {value}" },
-  statusline: { label: "status line", note: "the 5h and 7d use of the accounts magpie serves, under Claude Code's prompt", said: "{agent} status line → {value}" },
+  // its note is the agent's own, on its field's on (Codex's footer isn't Claude Code's)
+  statusline: { label: "status line", said: "{agent} status line → {value}" },
 };
 function toggled(f) { return Object.hasOwn(TOGGLES, f.key); }
 function fieldToggle(a, f) {
@@ -4763,7 +4765,7 @@ function fieldToggle(a, f) {
   const on = f.value === "on";
   const b = el("button", "field extra" + (on ? " set" : ""));
   b.append(svg(EXTRA_GLYPH[f.key], 13, 1.5));
-  b.title = t("{label}: {value}", { label: t(k.label), value: t(on ? "on" : "off") }) + "\n" + t(k.note);
+  b.title = t("{label}: {value}", { label: t(k.label), value: t(on ? "on" : "off") }) + "\n" + t(k.note || f.options?.find((o) => o.value == "on")?.note || "");
   b.setAttribute("aria-label", b.title);
   b.setAttribute("aria-pressed", String(on));
   b.dataset.key = f.key;
@@ -10115,17 +10117,11 @@ function drawEditor(p, presetID) {
   // another editor's: no rows for it
   const certDraft = draft;
   import("./tlscerts.js").then(() => draft === certDraft && tlsCertRows({ p, pr, draft, at: certAt, certTakes, onHTTPS, addressOf, asTyped, show: (f) => { const was = showTLS; showTLS = () => { was(); f(); }; showTLS(); }, save: (f) => { pinBody = f; } }), statusErr);
-  // Responses over WebSocket (#5781): auto, or the CLI's on kept
+  // Responses over WebSocket (#5781), its row in socketrow.js
   const socketable = () => !p?.account && (p?.preset || pr?.id) !== "google-vertex" && /^\s*https?:\/\//i.test(addressOf("responses"));
-  {
-    const [stk, scb] = tick(t("Send Responses turns over WebSocket"), !!draft.socket);
-    stk.classList.add("socket-tick");
-    scb.onchange = () => { draft.socket = scb.checked ? (p?.socket || "auto") : ""; };
-    const srow = field(t("WebSocket"), stk);
-    showSocket = () => { for (const e of srow) e.style.display = socketable() ? "" : "none"; };
-    showSocket();
-    advIn.append(...srow);
-  }
+  const sockAt = document.createComment("");
+  advIn.append(sockAt);
+  import("./socketrow.js").then(() => draft === certDraft && socketRow({ p, draft, at: sockAt, socketable, addressOf, show: (f) => { showSocket = f; f(); } }), statusErr);
   // off, a 429 or quota refusal rests none of its keys (LimitRestOff, zoecats)
   if (custom) {
     const [rtk, rcb] = tick(t("Set it aside when out of quota or rate limited"), !draft.limitRestOff);
@@ -12433,7 +12429,7 @@ const drawRotFig = (b, on, a) => (b.hidden = !on) ? b.replaceChildren() : (drawR
 // the routings besides Smart are the built-in plugin rotation's
 // (plugins/rotation): off, their options leave the page (data-feature),
 // and Smart is left — one in use keeps it on
-const ROTATION = new Set(["order", "drain", "rotate", "usage", "pace", "weight", "free", "fast", "cheap", "expiring"]);
+const ROTATION = new Set(["order", "drain", "rotate", "usage", "pace", "weight", "free", "fast", "cheap", "expiring", "fit"]);
 // jsRoutings: the routings JS gateway plugins serve now ("<plugin>/<name>",
 // settings' jsRoutings, plugins/middleware's), and saved, a routing none
 // serves now, shown as it is: its pool is tried in its listed order
@@ -16164,6 +16160,9 @@ function quotasOpened() {
 // A load is never swallowed by a lesser one on its way. A stale answer
 // (X-Magpie-Reading) is asked again every 1.5s, 30s at most (#959).
 let quotasLoading = null, quotasLater = 0, quotasTries = 0;
+// accounts the gateway is reading yet (X-Magpie-Reading, asked again):
+// their cards keep the room they had (usageWaiting in page.js)
+let quotasReading = false;
 let quotaRefreshVersion = 0;
 const quotaRefreshVersions = new Map();
 function loadQuotas(asked, again) {
@@ -16194,6 +16193,7 @@ function loadQuotas(asked, again) {
     }, () => { quotas = quotas || []; quotasKept = reading = false; })
     .finally(() => {
       if (quotasLoading === p) quotasLoading = null;
+      quotasReading = reading && quotasTries < 20;
       if (!same) renderQuotas(true);
       if (view === "usage") loadUpstream();
       globalThis.markBalances?.();
@@ -16207,13 +16207,14 @@ function loadQuotas(asked, again) {
 }
 
 // loadQuotaHist reads the allowances' history for the curves, and draws
-// them again only when it differs from what is drawn. Of two reads on
-// their way, the later asked is the one that stands.
+// them again only when it differs from what is drawn, or on its first
+// answer, an empty one too (the cards stop waiting on it: usageWaiting).
+// Of two reads on their way, the later asked is the one that stands.
 let quotaHistSeq = 0, quotaHistV = 0;
 function loadQuotaHist() {
   const seq = ++quotaHistSeq;
   return api("usage/quotas/history?days=45").then((h) => {
-    if (seq !== quotaHistSeq || !h || JSON.stringify(h) === JSON.stringify(quotaHist)) return;
+    if (seq !== quotaHistSeq || !h || quotaHistV && JSON.stringify(h) === JSON.stringify(quotaHist)) return;
     quotaHist = h; quotaHistV++;
     if (quotas) renderQuotas(true);
   }, () => {});
@@ -16705,6 +16706,7 @@ function usageHandle(sub, card) {
       usageArranging = false;
       if (usageRenderPending) { usageRenderPending = false; renderQuotas(); }
     }, usageLayout);
+    if (usageArranging) unpin($("#view-usage"));
   };
   return b;
 }
@@ -16724,6 +16726,7 @@ async function moveUsage(key, to) {
   const prev = state.settings;
   const order = [...keys, ...(prev.usageOrder || []).filter((k) => !keys.includes(k))];
   state.settings = { ...prev, usageOrder: order };
+  unpin($("#view-usage"));
   renderQuotas();
   try {
     const s = await api("usage/arrange", { order });
@@ -17931,7 +17934,8 @@ function panelBalances(bals) {
 // from a failed read (such as the vendor rate limiting its usage endpoint).
 function asOfText(q, short = false) {
   const text = short ? t("As of {when}", { when: stamp(q.asOf) })
-    : t(q.readDeferred ? "As of {when} — not refreshed this time" : "As of {when} — couldn't be read just now", { when: new Date(q.asOf).toLocaleString(intlLang()) });
+    : t(q.readDeferred ? "As of {when} — not refreshed this time" : "As of {when} — couldn't be read just now", { when: new Date(q.asOf).toLocaleString(intlLang()) })
+      + (!q.readDeferred && q.readError ? " · " + q.readError : "");
   return q.windows?.some((w) => w.resetsAt && new Date(w.resetsAt).getTime() <= Date.now())
     ? text + " · " + t("A cached window has expired; current allowance is unknown") : text;
 }
@@ -19553,12 +19557,15 @@ if (!web) addEventListener("keydown", (e) => {
 }, true);
 // Cmd+, (Ctrl+, off the Mac) opens Settings, as it does in a Mac app
 // (#670), from the window or the panel alike and from a text box too; in a
-// browser tab it is the browser's.
-if (!web) addEventListener("keydown", (e) => {
+// browser tab it is the browser's. Cmd+K (Ctrl+K) is Settings' search,
+// which finds a setting on any page (findAnywhere), in a tab too.
+addEventListener("keydown", (e) => {
   const mod = /^Mac/.test(navigator.platform) ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  if (!mod || e.altKey || e.shiftKey || e.repeat || (e.key !== "," && e.code !== "Comma")) return;
+  if (!mod || e.altKey || e.shiftKey || e.repeat) return;
+  const k = e.code === "KeyK" || e.key === "k" ? findAnywhere : !web && (e.key === "," || e.code === "Comma") ? openSettings : null;
+  if (!k) return;
   e.preventDefault();
-  openSettings();
+  k();
 }, true);
 
 // Font discovery is lazy and separate from polling the app's state. Drafts
@@ -19994,59 +20001,11 @@ function setSetTab(tab, remember) {
   setSetTab(setTab);
 }
 
-// Settings' search (sgfvdsg86265 on X): rows matching the words, shown or
-// English, by their text, section heading or part name; Escape restores.
-const setText = (n) => [n.textContent, ...[...n.querySelectorAll("[data-en]")].map((e) => e.dataset.en)].join(" ").toLowerCase();
+// Settings' search, and what it finds on the other pages: finder.js,
+// loaded the first time a search runs or the box is focused
 function findSettings() {
-  if (!provLinksDrawn && setQuery) provLinksDraw();
-  const v = $("#view-settings");
-  v.classList.add("set-searching");
-  const words = setQuery.split(/\s+/);
-  let any = false;
-  for (const id of SET_TABS) {
-    const page = $("#setPage-" + id), tab = $("#setTab-" + id);
-    const part = setText(tab) + (id === "otel" ? " otel" : ""); // not "usage" for Allowances
-    let hits = 0, head = "";
-    const lit = new Set();
-    for (const n of page.querySelectorAll(".row-head, .row")) {
-      if (n.matches(".row-head")) {
-        head = setText(n);
-        continue;
-      }
-      if (n.parentElement.closest(".row")) continue; // a row in a row goes with it
-      const says = part + " " + head + " " + setText(n);
-      const hit = words.every((w) => says.includes(w));
-      n.classList.toggle("set-miss", !hit);
-      let shows = hit;
-      for (let a = n; shows && a && a !== page; a = a.parentElement) if (a.hidden) shows = false;
-      if (shows && featureHides(n)) shows = false; // a built-in plugin switched off
-      // a provider's link with no such provider to open
-      const ps = n.agents && (providers || providersEarly?.got)?.providers;
-      if (shows && ps && !ps.some((x) => n.agents.includes(x.account?.agent))) n.classList.add("set-miss"), shows = false;
-      if (!shows) continue;
-      hits++;
-      lit.add(n.closest(".list") || n.parentElement);
-    }
-    // a section's heading and list go when nothing in them is left
-    for (const box of page.querySelectorAll(".list")) {
-      if (box.parentElement.closest(".row")) continue; // inside a row: it goes with the row
-      box.classList.toggle("set-miss", ![...lit].some((l) => box.contains(l)));
-    }
-    for (const h of page.querySelectorAll(":scope > .row-head")) {
-      const next = h.nextElementSibling;
-      h.classList.toggle("set-miss", !next || next.classList.contains("set-miss"));
-    }
-    page.dataset.part = tab.textContent;
-    page.hidden = !hits;
-    any ||= hits > 0;
-  }
-  window.setFolds?.(v); // a hit under a folded Advanced (provlinks.js)
-  // the built-ins that match (setfeats.js)
-  if (window.setFeatsFind) any = setFeatsFind(words) > 0 || any;
-  else import("./setfeats.js").then(() => setQuery && findSettings(), () => {});
-  const none = $("#setNone");
-  none.hidden = any;
-  none.textContent = t("No setting matches “{q}”", { q: $("#setQ").value.trim() });
+  if (window.setFind) setFind();
+  else import("./finder.js").then(() => setQuery && setFind(), () => {});
 }
 function searchSettings(q) {
   setQuery = q.trim().toLowerCase();
@@ -20057,11 +20016,13 @@ function searchSettings(q) {
   window.setFolds?.(v, 1);
   $("#setNone").hidden = true;
   window.setFeatsFind?.([]);
+  window.findElse?.([]);
   setSetTab(setTab);
 }
 {
   const q = $("#setQ");
   q.oninput = () => searchSettings(q.value);
+  q.onfocus = () => import("./finder.js").catch(() => {});
   q.onkeydown = (e) => {
     if (e.key === "Escape" && q.value) {
       e.preventDefault();
@@ -20937,6 +20898,7 @@ function renderProxy(s, keep) {
     system: t("Following the system proxy, {proxy}", { proxy: proxyDisplay(s.proxyNow) }),
     environment: t("Following HTTPS_PROXY, {proxy}", { proxy: proxyDisplay(s.proxyNow) }),
     off: t("Off: requests to vendors without a proxy of their own, and update checks, go direct"),
+    down: t("Nothing answers at the proxy found, {proxy}; requests go direct until it runs again", { proxy: proxyDisplay(s.proxyNow) }),
     none: t("No system proxy found; requests to vendors without a proxy of their own, and update checks, go direct"),
   }[s.proxySource] || "";
   const row = proxyRow(s, keep, {
@@ -21776,7 +21738,8 @@ function renderImageGen(s, keep, box) {
   val.append(b);
   r.append(who, val);
   box.append(r);
-  // Video generation's row (#1399), drawn by videogen.js
+  // Video generation's row (#1399), drawn by videogen.js, and Image
+  // resolution's after it (skingstyle48487 on X)
   if (v !== "off") {
     const vr = el("div", "row pref");
     box.append(vr);
@@ -22725,10 +22688,10 @@ async function renderUpdate(r, u) {
       again(1000);
       break;
     case "latest":
-      // Stable's and Daily's say the newest out (ylspcm on X)
-      sub.textContent = u.channel === "daily"
-        ? t(u.newest ? "Up to date on Daily · {v} is out on Every version" : "Up to date on Daily", { v: u.newest })
-        : u.newest ? t("Up to date on Stable · {v} is out on Every version", { v: u.newest }) : t(u.channel ? "Up to date on Stable" : "Up to date");
+      // Stable's and Daily's say the newest out (ylspcm on X); newer than
+      // the channel's, that nothing comes until it passes (realfxw on X)
+      sub.textContent = t(u.ahead ? "Newer than {c}'s {d}; it updates once {c} passes it" : u.channel == "daily" ? "Up to date on Daily" : u.channel ? "Up to date on Stable" : "Up to date", { c: t(u.channel == "daily" ? "Daily" : "Stable"), d: u.latest }) + (u.newest ? " · " + t("{v} is out on Every version", { v: u.newest }) : "");
+      if (u.ahead) sub.classList.add("wraps");
       if (u.newest) btn(t("Switch to Every version"), () => savePrefs({ ...prefsKeep(prefs), updateChannel: "" }));
       btn(t("Check"), check);
       break;
@@ -22769,8 +22732,10 @@ async function renderUpdate(r, u) {
   }
   // magpie started again as it is (yansheng1003 on X), in versionrow.js;
   // not beside an update on offer, whose own path restarts, nor past a
-  // narrow row's room
-  if (!/^(ready|downloading|found|available|blocked)$/.test(u.state) && !u.newest && !(u.state === "error" && u.latest)) btn(t("Restart"), () => import("./versionrow.js").then(() => restartSelf(r, u)), u.state === "checking");
+  // narrow row's room. Named for what it does: a bare Restart beside
+  // Check read as installing an update (realfxw on X restarted again and
+  // again on a version newer than Daily's)
+  if (!/^(ready|downloading|found|available|blocked)$/.test(u.state) && !u.newest && !(u.state === "error" && u.latest)) btn(t("Restart only"), () => import("./versionrow.js").then(() => restartSelf(r, u)), u.state === "checking");
   if (kept && !pageShown) kept.remove();
 }
 
@@ -23106,10 +23071,13 @@ const scrolledFrom = new WeakMap();
 // to keep in place (keepInView, the Routing page's lists under parts that
 // redraw on their own): then it is where that part is on screen as the
 // reader leaves it, and the view follows it (scroll anchoring WebKit lacked).
-const pinOf = new Map(), pinAt = new WeakMap();
-function keepInView(v, part) {
+// A view whose part comes and goes (`only`, the Usage page's cards) leaves
+// the browser's own anchoring on while it keeps none.
+const pinOf = new Map(), pinAt = new WeakMap(), pinOnly = new WeakSet();
+function keepInView(v, part, only) {
   pinOf.set(v, part);
-  v.style.overflowAnchor = "none"; // the browser's own would anchor on another part, and fight this
+  if (only) pinOnly.add(v);
+  else v.style.overflowAnchor = "none"; // the browser's own would anchor on another part, and fight this
   pinSizes.observe(v);
   for (const c of v.children) pinSizes.observe(c);
 }
@@ -23117,17 +23085,29 @@ function readerLeaves(v) {
   readerAt.set(v, v.scrollTop);
   // a view at its top stays at its top: nothing in it is kept in place
   const p = pinOf.has(v) && v.scrollTop >= 1 ? pinOf.get(v)() : null;
-  pinAt.set(v, p ? [p, onScreen(p, v)] : null);
+  pinAt.set(v, p ? [p, onScreen(p, v), p.parentElement] : null);
+  if (pinOnly.has(v)) v.style.overflowAnchor = p ? "none" : "";
+}
+// the cards the reader moves stay where they put them: none is kept in place
+// till the reader scrolls again (keepInView's part is none while arranging),
+// the browser's own anchoring back as it is with none
+function unpin(v) {
+  pinAt.delete(v);
+  v.style.overflowAnchor = "";
 }
 function pinnedAt(v) {
   const a = pinAt.get(v);
+  // a part drawn again (a card by its data-key) is found again in its box
+  if (a && !a[0].isConnected && a[0].dataset.key) a[0] = a[2].querySelector(`:scope>[data-key="${CSS.escape(a[0].dataset.key)}"]`) || a[0];
   return a && a[0].isConnected && a[0].offsetParent ? v.scrollTop + onScreen(a[0], v) - a[1] : null;
 }
 // laid out, not yet painted: a view with a part kept in place follows it
 // as soon as what's above it has changed size, before the reader sees it
-const pinSizes = new ResizeObserver(() => {
-  for (const v of pinOf.keys()) if (!v.hidden && held?.v !== v && performance.now() >= purposeUntil) backToReader(v);
-});
+// (followPin; a part redrawn or moved with nothing changing size calls it)
+function followPin(v) {
+  if (pinOf.has(v) && (!pinOnly.has(v) || pinAt.get(v)) && !v.hidden && held?.v !== v && performance.now() >= purposeUntil) backToReader(v);
+}
+const pinSizes = new ResizeObserver(() => { for (const v of pinOf.keys()) followPin(v); });
 function backToReader(v) {
   if (v.hidden) return;
   const pinned = pinnedAt(v);
@@ -23616,6 +23596,20 @@ async function openSettingsAt(e, tab, row) {
   row.classList.add("flash");
 }
 $("#prefs").onclick = () => { window.navFold?.("settings") || openSettings(); $("#prefs").blur(); };
+// Settings' search from any page (canlee886 on X): it finds the settings of
+// every page, finder.js. Back goes to the page it was brought up from
+async function findAnywhere() {
+  $("#find").blur();
+  if (mode !== "window") return openSettings();
+  closeProtoMenu();
+  closeAgentMenu();
+  jumpFrom("settings");
+  if (!await show("settings")) return;
+  const q = $("#setQ");
+  q.focus({ preventScroll: true });
+  q.select();
+}
+$("#find").onclick = findAnywhere;
 
 // The header's refresh reads again what the page shown draws (#844)
 function refreshKind() {
@@ -23759,7 +23753,7 @@ function fitTop() {
   st?.classList.toggle("tight", st.scrollWidth > st.clientWidth);
   // a phone's browser: the tabs have a row of their own (app.css), at their size;
   // and beside the sidebar the header holds only where the reader is and the icons
-  if (phoneWeb() || sideNav()) { top.classList.remove("tight", "cramped", "inrow", "crowded", "packed"); return; }
+  if (phoneWeb() || sideNav()) { top.classList.remove("spare", "tight", "cramped", "inrow", "crowded", "packed"); return; }
   const fits = () => {
     const a = actions.getBoundingClientRect();
     // the buttons sit against the padding; under a page zoom (the text size)
@@ -23772,7 +23766,10 @@ function fitTop() {
     const n = nav.getBoundingClientRect();
     return left + 8 <= n.left && n.right + 8 <= a.left;
   };
-  top.classList.remove("tight", "cramped", "inrow", "crowded", "packed");
+  top.classList.remove("spare", "tight", "cramped", "inrow", "crowded", "packed");
+  if (fits()) return;
+  // Find goes first: ⌘K and Settings' own box still reach it
+  top.classList.add("spare");
   if (fits()) return;
   top.classList.add("tight");
   if (fits()) return;

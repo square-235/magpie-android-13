@@ -295,6 +295,18 @@ call magpie had routed was counted again as a local session's whatever
 provider id ZCode wrote beside it (nori_tsukiji on X). Verification:
 `TestZCodeCallsPairWithTheGatewaysRecords`.
 
+Pairing needs the tokens and end time to agree, so a routed call they don't
+(a try the gateway and ZCode count differently) was still listed twice. A
+call whose provider is the gateway is left out of ZCode's calls before any
+pairing: the id magpie writes (`magpie`), and any provider the user added by
+hand whose base URL in `config.json` or `provider_config.json` is this
+machine (loopback, `localhost`, one of its addresses) at the gateway's port
+(`zcodeGateway`, `gatewayBase`; jiangshangmuyun on X: "new-provider" at
+`127.0.0.1:3425`, one call listed as "new-provider · Local session" among
+the gateway's rows). It reads the configuration as it is now, as
+`workbuddyGateway` does. Verification: `TestZCodeHandAddedGatewayProvider`,
+`TestGatewayBase`.
+
 The Claude subscription bridge's own Claude Code runs save their sessions
 in a Claude folder the readers list (the user's own, or a saved account's
 under `claude-accounts`), often in the caller's project. They aren't the
@@ -441,11 +453,20 @@ covers them), and `sessions/manage` carries the same as `reads`. While
 `asked` is false the Sessions page shows the consent (`consentCard` in
 the sessions plugin): each agent found with a switch, off; Allow selected
 saves `all: false` with each agent picked or not, Allow all `all: true`.
-A choice with `all` false reads no agent it doesn't name, so one found
-after it (Antigravity 2.0 installed after Allow selected: baysonfox on
-X) is `new` in `found` (on disk, not named, not read), and the Sessions
-page asks about those once (`laterCard`): Show their sessions sends
-each `true`, Keep off `false`, so it isn't new again.
+A choice with `all` false reads no agent it doesn't name. An agent off
+and found here is `new` in `found` unless it was turned off on its own:
+a post without `all` that sets it `false` (Keep off, a Settings ›
+Privacy row, `magpie sessions read off <agent>`) records it in
+`sessionReads.kept`, and one that sets it `true` takes it out. So an
+agent found after the first choice, and one left off in that choice's
+list (Antigravity 2.0 beside agy CLI: baysonfox on X, whose app calls
+made without magpie were counted nowhere), are asked about once more:
+on the Sessions page (`laterCard`: Show their sessions sends each
+`true`, Keep off `false`) and above Usage › Requests' rows (`readsLater`
+in the usage plugin's `page.js`: Count / Don't count, the same posts).
+An agent turned off in Settings before `kept` existed has no entry and
+is asked once (`TestSessionReadsUncheckedAgentAskedAgain`,
+`TestSessionReadsTurnedOffNotAskedAgain`).
 Settings › Privacy, *Agents' session history* (`renderSessionReads` in
 the sessions plugin's `settings.js`), has *Agents found later* (`all`, sent with each listed agent
 at the value its row shows) and a row per agent.
@@ -1002,6 +1023,15 @@ picks it up from any folder; when agy is set to use magpie it is the
 agent's launch command (the gateway's variables and `--model`) with
 `--conversation` after it (`sessions.AgyStart`, set by package agent).
 Subagents (`parent_conversation_id`) and agy in WSL are not read.
+agy's calls are also read from the profile T3 Code gives each of its
+Antigravity instances (`t3AgyDirs`): T3 Code runs `agy acp --gemini-dir
+<profile> --app-data-dir antigravity-acp` on the instance's own Google
+sign-in, the profile under `<T3 Code's folder>/userdata/providers/antigravity/`
+(or `dev/…` for its dev server; the folder is `$T3CODE_HOME` or `~/.t3`,
+`appdir.T3Code`), and those requests go to Google, not through the gateway
+(zzzkl on X; `TestAgyCallsInT3Code`, on what agy 1.5.10 wrote run that way).
+`Found` lists agy for those folders too. The Sessions page doesn't list
+them: `agy --conversation` would look in agy's own folder.
 Verification: `TestAgySessions`, `TestAgyTitleLater`, `TestAgyGrows`,
 `TestAgyTranscript`, `TestAgyFolder`, `TestAgyRowOnly`, on conversations agy 1.3.5 and 1.4.7
 wrote in a sandbox.
@@ -1052,6 +1082,24 @@ writes rebuilt the whole ledger, and the app grew to 85 GB. Verification:
 `TestConcurrentCallsShareOneRead`, `TestAgentCallsReadsOneAgent`,
 `TestCodexModelEffort*` in `codex_effort_shared_test.go` (the codex-only
 answer equals the whole ledger's), and `sessions-overview-once.test.cjs`.
+
+The calls a Sessions read rides along for an idle Claude Code session
+(not changed within the hour) it reads from the start go to a pack
+(`calls-v15/*.pack`), not to a shard of the session's own: one file for
+every such session the pass read, written when the pass ends (and every
+32 MB, and in `Saved`), with each session's frames as its shard would
+hold them and an index with a CRC at its end. A session being written
+keeps its shard and `.rev`, which the lines it gains are appended to.
+A session's own shard, which any later read of it writes whole (a pack is never appended to), is read before the pack. A
+pack that can't be read whole is as if it were not there, and its
+sessions are read again; the hourly sweep removes a pack none of whose
+sessions is listed. Before this, a cold read of 12,000 sessions made
+~21,000 files, and on Windows Defender scanned each as it closed: a
+cold page took 20.7 to 31.7 s on xiaomi-gpu, against 5.7 to 5.9 s with
+the pack, and 2.0 to 2.2 s on a restart (shangyuan0818 on X). See
+[`internal/sessions/call_pack.go`](../../internal/sessions/call_pack.go),
+`TestColdSessionsReadWritesOnePack`, `TestPackedCallsServeRequests` and
+`TestPackedSessionGrows`.
 
 ### Calls an app reports itself
 
