@@ -63,7 +63,10 @@ body.window .lib-head { top: -2px; margin: -2px 0 0; padding: 8px 0 4px; }
 /* its switch stays beside its text in a narrow window, as a setting's does */
 .lib-list .row.lib-hub { flex-wrap: nowrap; }
 .lib-hub .name { white-space: normal; }
-.lib-hub .lib-hubstats { margin-top: 4px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* one line, cut where it runs out: a check ending adds its tools to it in
+   place, and the router sits over the list, so a line more would move
+   every server row under the pointer (the whole count is its title) */
+.lib-hub .lib-hubstats { margin-top: 4px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* the address any other app connects at, under the switch */
 .lib-list .row.lib-hubat { flex-wrap: nowrap; align-items: center; }
 .lib-hubat > .lib-glyph { align-self: center; margin-top: 0; }
@@ -221,6 +224,9 @@ button.row.lib-hubfolded:hover { background: var(--pill); }
 .lib-srclink:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 /* kept in ~/.agents/skills: moved into the library on a click (tnt1223) */
 .lib-src > .lib-handover { flex: 0 2 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; height: auto; border: 0; background: none; font-size: 11px; color: var(--accent); padding: 0 2px; margin-left: 4px; border-radius: 3px; white-space: nowrap; }
+/* a native row's plugin or package: shows only what it declares */
+.lib-srcpick { font: inherit; color: var(--muted); background: none; border: 0; padding: 0; height: auto; border-radius: 3px; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .lib-srcpick:hover { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; } }
 .lib-src > .lib-handover:hover { text-decoration: underline; text-underline-offset: 2px; }
 .lib-confirm.lib-muted { color: var(--muted); }
 
@@ -419,6 +425,9 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-rowacts { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity .14s; }
 .lib-row:hover .lib-rowacts, .lib-rowacts:focus-within { opacity: 1; }
 .lib-icon { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; }
+/* a row's buttons keep their size: a long command squeezed them, so each
+   row's Bring in and Remove sat at another x down the list */
+.lib-row > .lib-icon, .lib-row > .action { flex: none; }
 .lib-rowacts.busy { opacity: 1; }
 .lib-icon.busy, .lib-icon.busy:disabled { opacity: 1; color: var(--muted); }
 /* busy: app.js glyphBusy has put the spinner's arc in place of the glyph */
