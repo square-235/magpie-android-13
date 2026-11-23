@@ -89,6 +89,14 @@ type PresetDef struct {
 	Videos       []string `json:"videos,omitempty"`
 	Speakers     []string `json:"speakers,omitempty"`
 	Transcribers []string `json:"transcribers,omitempty"`
+	// Searches is the vendor's word that it answers a web search tool
+	// offered on its Anthropic and Responses APIs by itself
+	// (web_search_20250305, web_search), as Provider.Searches is the
+	// user's: a partner that runs them (CoreCode). A provider added from
+	// it searches so with nothing set (PresetSearches). Codex's web.run
+	// is not covered: it asks alpha/search, which only the user's
+	// Provider.Searches sends a relay.
+	Searches bool `json:"searches,omitempty"`
 }
 
 // Region is one base-URL option of a preset that offers several. The first
@@ -422,8 +430,8 @@ var presets = []PresetDef{
 			{ID: "agent", Name: "Agent Plan", Chat: "https://ark.cn-beijing.volces.com/api/plan/v3", Responses: "https://ark.cn-beijing.volces.com/api/plan/v3", Anthropic: "https://ark.cn-beijing.volces.com/api/plan",
 				Models: arkPlanModels, Images: arkPlanImages,
 				Embeddings: []string{"doubao-embedding-vision"},
-				Drawers:    []string{"doubao-seedream-5-0-pro", "doubao-seedream-5.0-flash"},
-				Videos:     []string{"doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini", "doubao-seedance-2.5"}},
+				Drawers:    []string{"doubao-seedream-5-0-pro", "doubao-seedream-5.0-flash", "doubao-seedream-5.5"},
+				Videos:     []string{"doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-2.0-mini", "doubao-seedance-2.5", "doubao-seedance-2.5-flash"}},
 			{ID: "api", Name: "Pay as you go", Chat: "https://ark.cn-beijing.volces.com/api/v3", Responses: "https://ark.cn-beijing.volces.com/api/v3", Lists: true},
 		},
 		NoList: true},
@@ -965,6 +973,31 @@ func Preset(id string) *PresetDef {
 		return pr
 	}
 	return partnerPreset(id)
+}
+
+// PresetSearches is whether p, a key+URL provider, searches the web by
+// itself because its preset says so (PresetDef.Searches), at an address
+// of that preset's: one moved to another host by hand is the user's to
+// say. A partner's word holds while it is listed and after, as the
+// provider's other settings from it do (partnerPreset).
+func PresetSearches(p Provider) bool {
+	if p.Account != nil || p.IsPlugin() || p.Preset == "" {
+		return false
+	}
+	pr := Preset(p.Preset)
+	if pr == nil || !pr.Searches {
+		return false
+	}
+	hosts := []string{HostOf(pr.Anthropic), HostOf(pr.Responses)}
+	for _, r := range pr.Regions {
+		hosts = append(hosts, HostOf(r.Anthropic), HostOf(r.Responses))
+	}
+	for _, u := range []string{p.Anthropic, p.Responses} {
+		if h := HostOf(u); h != "" && slices.Contains(hosts, h) {
+			return true
+		}
+	}
+	return false
 }
 
 // builtinPreset is the preset of that id built into magpie, partners'
