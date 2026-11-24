@@ -269,17 +269,23 @@ var presets = []PresetDef{
 		// a GLM Coding Plan is served at its own OpenAI endpoint: a plan's key
 		// sent to the pay-as-you-go one is told it has no balance. The plan
 		// serves the Responses API at /api/v1 as well: its tool pages give
-		// it for Codex, wire_api = "responses" (#306)
+		// it for Codex, wire_api = "responses" (#306). The plan's models are
+		// looked up in models.dev's catalog of the plan first: a model the
+		// plan has before pay as you go does (GLM-5.4, which takes images;
+		// ApocalypseYun on X) is listed there alone, and read as a text
+		// model of no known window. membershipCatalogs keeps its $0 out of
+		// prices.
 		RegionLabel: "Plan", KeyPlans: true, Regions: []Region{
-			{ID: "api", Name: "Pay as you go", Chat: "https://open.bigmodel.cn/api/paas/v4", Anthropic: "https://open.bigmodel.cn/api/anthropic"},
-			{ID: "coding", Name: "Coding Plan", Chat: "https://open.bigmodel.cn/api/coding/paas/v4", Responses: "https://open.bigmodel.cn/api/v1", Anthropic: "https://open.bigmodel.cn/api/anthropic"},
+			{ID: "api", Name: "Pay as you go", Chat: "https://open.bigmodel.cn/api/paas/v4", Anthropic: "https://open.bigmodel.cn/api/anthropic", Catalog: "zhipuai"},
+			{ID: "coding", Name: "Coding Plan", Chat: "https://open.bigmodel.cn/api/coding/paas/v4", Responses: "https://open.bigmodel.cn/api/v1", Anthropic: "https://open.bigmodel.cn/api/anthropic", Catalog: "zhipuai-coding-plan, zhipuai"},
 		}},
 	{ID: "zai", Name: "Z.ai", Icon: "zai", Kind: KindVendor, Catalog: "zhipuai",
 		Chat: "https://api.z.ai/api/paas/v4", Anthropic: "https://api.z.ai/api/anthropic",
 		Website: "https://z.ai", KeysURL: "https://z.ai/manage-apikey/apikey-list",
+		// the plan's models looked up in its own catalog first, as Zhipu's
 		RegionLabel: "Plan", KeyPlans: true, Regions: []Region{
-			{ID: "api", Name: "Pay as you go", Chat: "https://api.z.ai/api/paas/v4", Anthropic: "https://api.z.ai/api/anthropic"},
-			{ID: "coding", Name: "Coding Plan", Chat: "https://api.z.ai/api/coding/paas/v4", Responses: "https://api.z.ai/api/v1", Anthropic: "https://api.z.ai/api/anthropic"},
+			{ID: "api", Name: "Pay as you go", Chat: "https://api.z.ai/api/paas/v4", Anthropic: "https://api.z.ai/api/anthropic", Catalog: "zhipuai"},
+			{ID: "coding", Name: "Coding Plan", Chat: "https://api.z.ai/api/coding/paas/v4", Responses: "https://api.z.ai/api/v1", Anthropic: "https://api.z.ai/api/anthropic", Catalog: "zai-coding-plan, zhipuai"},
 		}},
 	{ID: "minimax", Name: "MiniMax", Icon: "minimax-color", Kind: KindVendor, Catalog: "minimax",
 		Chat: "https://api.minimax.io/v1", Anthropic: "https://api.minimax.io/anthropic",
@@ -500,7 +506,10 @@ var presets = []PresetDef{
 		Website: "https://docs.qwencloud.com/developer-guides/getting-started/regions", KeysURL: "https://home.qwencloud.com/api-keys",
 		Regions: qwenCloudRegions("ap-southeast-1", "us-east-1", "eu-central-1", "ap-northeast-1", "cn-hongkong", "cn-beijing")},
 	{ID: "mistral", Name: "Mistral", Icon: "mistral-color", Kind: KindVendor, Catalog: "mistral",
-		Chat:    "https://api.mistral.ai/v1",
+		Chat: "https://api.mistral.ai/v1",
+		// a Vibe plan's key too (Pro, Student, Team: jtbbtnt54249 on X), got
+		// from the editor's sign-in (mistral_signin.go)
+		Note:    "API key or Vibe plan",
 		Website: "https://console.mistral.ai", KeysURL: "https://console.mistral.ai/api-keys"},
 	// Voyage AI makes embedding and rerank models alone, at
 	// api.voyageai.com/v1/embeddings and /v1/rerank with a Bearer key
