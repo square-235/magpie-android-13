@@ -86,6 +86,10 @@ func agentOf(r *http.Request) string {
 	if codexForClaudeCode(r.Header) {
 		return "codex"
 	}
+	if a := cloneOf(r); a != "" {
+		// omp in Claude Code's headers (claude_clones.go)
+		return a
+	}
 	return usage.AgentOf(ua)
 }
 
@@ -937,6 +941,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// loops' next look (#3185)
 	go filememo.Watch(freshCtx, pluginrt.Path(), settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
 	go pluginrt.KeepFresh(freshCtx, filememo.OthersEvery, settings.Path(), provider.Path(), plugin.ListPath(), plugin.ToolsPath(), access.Path())
+	// and the OpenCode plugins another magpie turned on or off, added,
+	// removed or updated (magpie plugin … in a terminal) are this one's at
+	// once, as the window's change is, not on the next request
+	go plugin.KeepNoticing(freshCtx, filememo.OthersEvery)
 	// and the MCP hub's servers that the Library no longer gives are ended
 	// It reads MCPHub, which a test swaps, so the gateway's end waits for
 	// it: once ListenAndServe has returned, nothing it started still looks.
@@ -963,6 +971,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		go provider.KeepCodexWindowsWarm(ctx)
 		go provider.KeepClaudeWindowsWarm(ctx, warmClaude)
 		go provider.KeepAgyWindowsWarm(ctx)
+		// and keeps Antigravity's fast-tools plugin starting a magpie that
+		// is there, once it is on
+		go keepFastTools()
 		// and spends a Codex reset about to run out unused, for the accounts
 		// that let it
 		go provider.KeepResetsFromRunningOut(ctx)
@@ -1248,6 +1259,17 @@ func (s *Server) routes() *routeMux {
 	mux.HandleFunc(VisionMCPPath, s.visionMCP)
 	mux.HandleFunc(MemoryMCPPath, s.memoryMCP)
 	mux.HandleFunc(SessionsMCPPath, s.sessionsMCP)
+	mux.HandleFunc(ArtifactsMCPPath, s.artifactsMCP)
+	// an artifact's page and files, in a sandbox of their own (artifacts_mcp.go)
+	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}", s.artifactPage)
+	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/{path...}", s.artifactPage)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"db", s.artifactDB)
+	mux.HandleFunc("GET "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"events", s.artifactEvents)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"publish", s.artifactPublish)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"meta", s.artifactMeta)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"upload", s.artifactUpload)
+	mux.HandleFunc("POST "+ArtifactPagePath+"{ref}/"+artifactAPIDir+"assets", s.artifactAssets)
+	mux.HandleFunc("GET "+artifactBlobPath+"{id}", s.artifactBlob)
 	mux.HandleFunc(ImageMCPPath, s.imageMCP)
 	mux.HandleFunc(BrowserMCPPath, s.browserMCP)
 	mux.HandleFunc("GET "+BrowserExtensionPath, s.browserExtension)
@@ -1291,7 +1313,7 @@ var catalogSize stamped[struct{}, int]
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "magpie", "version": Version, "models": catalogSize.get(struct{}{}, func() int { return len(provider.Catalog()) }), "window": Window,
-		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", NativePath + "{provider}/{path}", "/v1/embeddings", "/v1/rerank", "/v1/decisions", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/realtime", "/v1/magpie/quotas", "/v1/magpie/quotas/history", AccountsPath, "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", StatuslinePath, "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, MemoryMCPPath, SessionsMCPPath, ImageMCPPath, BrowserMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
+		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", NativePath + "{provider}/{path}", "/v1/embeddings", "/v1/rerank", "/v1/decisions", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech", "/v1/realtime", "/v1/magpie/quotas", "/v1/magpie/quotas/history", AccountsPath, "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", StatuslinePath, "/v1/magpie/trace", OwnMCPPath, SearchMCPPath, VisionMCPPath, MemoryMCPPath, SessionsMCPPath, ArtifactsMCPPath, ImageMCPPath, BrowserMCPPath, ToolsMCPPath, HubMCPAll, HubMCPPath + "{agent}"}}
 	// which process serves, for another magpie on this computer to name it
 	// on its Routing page (#2606); not told to another machine
 	if local(r) {
@@ -2274,6 +2296,7 @@ func (s *Server) countTokens(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Anthropic, 400, err.Error())
 		return
 	}
+	r = withClone(r, provider.Anthropic, body)
 	// counted as it will be sent: its tool exchange mended where it
 	// doesn't pair (tool_blocks_paired.go)
 	body = toolBlocksPaired(body)
@@ -2499,6 +2522,9 @@ func (s *Server) handle(from provider.Protocol) http.HandlerFunc {
 		// Qoder 1.1.82 and later name no session: the one of its own
 		// session files the request holds the prompts of (qoder_session.go)
 		r = qoderSession(r, from, body)
+		// an agent in Claude Code's headers is named as itself
+		// (claude_clones.go)
+		r = withClone(r, from, body)
 		// a Claude Code Message Thread magpie keeps no history for: sent
 		// again whole, without it (message_threads.go, #2480)
 		if from == provider.Anthropic && namesThread(body) {
@@ -3878,6 +3904,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		patienceFallback = waitsOf(p.Patience, singlePatience)
 	}
 	patience = maxWaits(cands, patienceFallback)
+	if patienceSpared(r) {
+		patience = 0 // a classifier with another after it (askChat)
+	}
 	var busyNow []busyTry  // the members of this round that failed so
 	rounds := 0            // the rounds they were asked again in
 	var waitFrom time.Time // when every member had first failed so
@@ -6641,6 +6670,9 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	// the tool turns' thinking a provider's model asked for before
 	// (thinking_back.go)
 	body = s.withThinkingBack(p, to, body)
+	// a Copilot account's sealed reasoning back on the tool turns it came
+	// with (copilot_opaque.go)
+	body = withCopilotOpaque(p, to, body)
 	// DeepSeek's own API: inline images it holds for this key named by
 	// file id, uploaded once (deepseek_files.go)
 	body, byFile := s.withDeepSeekFiles(reqCtx, p, to, path, body)
@@ -7006,6 +7038,8 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	// what a Codex account's reply says it has used, for its cap (#1295)
 	heardCodexLimits(p, res)
 	heardCodexTurnState(turnAcct, turnOf, res)
+	// and a Copilot account's sealed reasoning, kept by its tool calls
+	heardCopilotOpaque(p, to, body, res)
 	noteSignIn(ctx, p.Account, req, res)
 	return res, nil
 }
@@ -8473,7 +8507,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// Where a reply says its end (saysItsEnd), one that counted no
 		// usage either was cut, not empty: Command Code's killed worker
 		// ends after its role chunk, told below as a cut
-		msg := p.Name + ": " + emptyReply
+		msg := emptyReplyFailed(p.Name, sniff.u)
 		// the line left pending is a usage frame's or [DONE]: dropped too
 		holdTail, heldTail, pending = false, nil, nil
 		w.Write(append(apart(), streamFailure(provider.Chat, msg)...))
@@ -10172,7 +10206,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	// a Chat reply that said nothing and never gave a finish_reason is
 	// empty too, as streamTranslated has it (28b8244d4)
 	if (empty || repliesCounted(actual) && uncounted(col.res.Usage) || cutVoidAt(actual) && col.res.Stop == "") && !saidAnything(col.res.Parts) && answersNothing(col.res.Stop) {
-		msg := p.Name + ": " + emptyReply
+		msg := emptyReplyFailed(p.Name, col.res.Usage)
 		return writeError(w, from, 502, msg), msg
 	}
 	if cutVoidAt(actual) && replyCheck(r.Context()) == nil &&
@@ -10203,6 +10237,29 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 
 // emptyReply is what a reply that says nothing fails with.
 const emptyReply = "an empty reply (the model answered nothing; try again)"
+
+// emptyReplyFailed is what p's reply that said nothing fails with: the
+// empty reply's error, and, when its usage counted output tokens, how
+// many, of them how many reasoning. Copilot's gemini-4-hydrogen ended a
+// reply with no text, call or finish_reason having counted 2351 reasoning
+// tokens of its 2359, six times running for one conversation
+// (yuushabu_buyinn on X), and "try again" alone said nothing of that. The
+// words are only what the usage counted: what to do when trying again
+// ends the same way is said as a choice, not as the cause.
+func emptyReplyFailed(name string, u Usage) string {
+	msg := name + ": " + emptyReply
+	switch {
+	case u.Reasoning > 0 && u.Output >= u.Reasoning:
+		msg += fmt.Sprintf(" — the model reasoned for %d of the %d output tokens it counted, and its reply carried no text or tool call", u.Reasoning, u.Output)
+	case u.Reasoning > 0:
+		msg += fmt.Sprintf(" — the model counted %d reasoning tokens, and its reply carried no text or tool call", u.Reasoning)
+	case u.Output > 0:
+		msg += fmt.Sprintf(" — the model counted %d output tokens, and its reply carried no text or tool call", u.Output)
+	default:
+		return msg
+	}
+	return msg + "; if trying again ends the same way, switch to another model or compact the conversation"
+}
 
 // emptyFails tells whether a reply in proto that says nothing is a
 // failure. Gemini's, Antigravity's among them, now and then ends with
