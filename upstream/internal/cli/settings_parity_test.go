@@ -297,6 +297,7 @@ var notYet = map[string]string{
 	"POST /api/settings/bare-ids":                S2, // api.go
 	"POST /api/settings/busy-load":               S2, // api.go
 	"POST /api/settings/checkin-account":         S2, // api.go
+	"GET /api/settings/claude-options/{id}":      S2, // prompt cache and commit trailer for a selected Claude Code instance
 	"POST /api/settings/claude-cache":            S2, // tune.go
 	"POST /api/settings/claude-attribution":      S2, // tune.go
 	"POST /api/settings/codex-agents-v1":         S2, // api.go
@@ -417,6 +418,7 @@ var notYet = map[string]string{
 	"POST /api/library/market/about":             L,  // library.go
 	"POST /api/library/mcp-account":              L,  // library.go
 	"POST /api/library/mcp-signin":               L,  // library.go
+	"POST /api/library/mcp-signin/{id}/callback": L,  // library.go: the pasted callback URL finishes a sign-in whose loopback the browser can't reach
 	"POST /api/library/mcp-signin/{id}/cancel":   L,  // library.go
 	"POST /api/library/mcp-signout":              L,  // library.go
 	"POST /api/library/mcp/check":                L,  // library.go
@@ -438,6 +440,7 @@ var notYet = map[string]string{
 	"POST /api/library/commands/probe":           L,  // library.go
 	"GET /api/memory":                            L,  // memory.go
 	"POST /api/memory":                           L,  // memory.go
+	"GET /api/memory/stats":                      L,  // memory.go
 	"POST /api/memory/digest":                    L,  // memory.go
 	"POST /api/memory/remove":                    L,  // memory.go
 	"POST /api/memory/status":                    L,  // memory.go
