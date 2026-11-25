@@ -351,9 +351,10 @@ type providerJSON struct {
 	// (provider.TestAs), for a relay that serves only them: the chip's
 	// right-click offers each, and says why one can't be when it can't
 	TestsAs map[string]string `json:"testsAs,omitempty"`
-	// TestPicks is the accounts or keys that are on when there are two
-	// or more (provider.TestPicks): the chip's right-click offers a
-	// test on one of them
+	// TestPicks is the accounts or keys, on or off, when there are two
+	// or more or one is off (provider.TestPicks): the chip's right-click
+	// offers a test on one of them, an account off tested before it is
+	// turned on
 	TestPicks []provider.TestPick `json:"testPicks,omitempty"`
 	// DecideTest is set when its decision models can each be sent a
 	// System One question (provider.AsksDecideModels): a mixed
@@ -573,6 +574,9 @@ type accessKeyJSON struct {
 	Vendor    string `json:"vendor"`
 	ID        string `json:"id"`
 	SecretSet bool   `json:"secretSet"`
+	// TokenSet is that an AWS access key has a session token saved, which
+	// is never sent here either
+	TokenSet bool `json:"tokenSet,omitempty"`
 }
 
 // presetAccessKey is whose account access key a preset's plans are read
@@ -1086,7 +1090,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		vendor, _ = presetAccessKey(*pr)
 	}
 	if vendor != "" || p.AccessKeyID != "" || p.SecretAccessKey != "" {
-		out.AccessKey = &accessKeyJSON{Vendor: vendor, ID: p.AccessKeyID, SecretSet: p.SecretAccessKey != ""}
+		out.AccessKey = &accessKeyJSON{Vendor: vendor, ID: p.AccessKeyID, SecretSet: p.SecretAccessKey != "", TokenSet: p.SessionToken != ""}
 	}
 	if p.IsVertex() {
 		out.Vertex = &provider.Vertex{}
@@ -2075,6 +2079,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// when sent blank, unless ClearAccessKey drops it.
 			AccessKeyID    *string `json:"accessKeyID"`
 			ClearAccessKey bool    `json:"clearAccessKey"`
+			// ClearSessionToken drops an AWS access key's session token
+			// (SessionToken), which a blank one keeps while the key's ID
+			// is the same (#7687)
+			ClearSessionToken bool `json:"clearSessionToken"`
 			// From is the id the provider had: another is a rename
 			From string `json:"from"`
 			// LibraryMCP, on a Remote magpie, is its editor's switch: its
@@ -2348,6 +2356,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				pr.ReplyHeaders = in.ReplyHeaders
 				pr.PassHeaders = in.PassHeaders
 				pr.SecretAccessKey = in.SecretAccessKey
+				pr.SessionToken = in.SessionToken
 				pr.Vertex = in.Vertex
 				pr.Searches = in.Searches
 				pr.PinUpstream = in.PinUpstream
@@ -2494,6 +2503,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				in.AccessKeyID = strings.TrimSpace(*req.AccessKeyID)
 			}
 			in.SecretAccessKey = strings.TrimSpace(in.SecretAccessKey)
+			in.SessionToken = strings.TrimSpace(in.SessionToken)
 			var old *provider.Provider
 			if req.New && in.NativeCompaction && !in.CarriesCompaction() {
 				fail(rw, fmt.Errorf("%s can't carry Codex's native compaction: only a provider with a Responses API, a ChatGPT account or GitHub Copilot can", cmp.Or(in.Name, in.ID)))
@@ -2744,6 +2754,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				if in.SecretAccessKey == "" && old != nil && !req.ClearAccessKey {
 					in.SecretAccessKey = old.SecretAccessKey
+				}
+				// an AWS access key's session token likewise, while the
+				// key is the one it was given with: another key's would
+				// only get its requests refused (#7687)
+				if in.SessionToken == "" && old != nil && !req.ClearAccessKey && !req.ClearSessionToken && in.AccessKeyID == old.AccessKeyID {
+					in.SessionToken = old.SessionToken
 				}
 				// and a Vertex AI provider's project and credentials
 				if in.Vertex == nil && old != nil {

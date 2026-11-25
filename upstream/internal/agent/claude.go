@@ -164,6 +164,39 @@ func claudeCloud(at place, path string) string {
 	return ""
 }
 
+// claudeBaseURLElsewhere says where Claude Code's own settings name an
+// ANTHROPIC_BASE_URL other than the gateway, which it applies over an env an
+// outer tool adds to the process (as T3 Code adds magpie's instance env), so
+// the Claude Code at path sends its requests there and never reaches magpie;
+// the file as the agent names it and the URL, both "" when none does. Claude
+// Code puts the env of .claude.json, then the user's settings, then managed
+// settings over the environment it was started in (claudeCloud), so the first
+// of managed, settings and .claude.json that names one is the value it goes
+// by. A base URL that reaches magpie another way (a reverse proxy,
+// reachesMagpie) is magpie's. The shell isn't read: the instance env
+// overwrites a base URL exported there, so only these files win over it.
+func claudeBaseURLElsewhere(at place, path string) (string, string) {
+	managed := claudeManaged()
+	if at.sys != nil {
+		managed = at.sys("/etc/claude-code/managed-settings.json")
+	}
+	global := claudeGlobal(at, filepath.Dir(path))
+	for _, f := range []string{managed, path, global} {
+		v, has := edit.GetJSON(f, "env.ANTHROPIC_BASE_URL")
+		if !has {
+			continue
+		}
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		if v == at.gw() || reachesMagpie(v, at.gw()) {
+			return "", ""
+		}
+		return at.native(f), v
+	}
+	return "", ""
+}
+
 // claudeGlobal is the global config of the Claude Code whose folder is dir
 // (its .claude.json), where Claude Code 2.1.316 reads it: a .config.json in
 // the folder that isn't empty, left by an older Claude Code, else
@@ -2318,7 +2351,9 @@ func claudeIn(at place) *Agent {
 	}
 	// subagents: the model one runs on when it names none (general-purpose,
 	// an agent of the user's without a model:). Unset, the session's, as
-	// before; an agent that names a tier (Explore's haiku) takes the tier's.
+	// before. Explore and Plan say inherit, so Claude Code never reads the
+	// variable for them; the gateway moves their turns onto it
+	// (gateway.claudeSubagentPick, #7176).
 	// setSubagent writes the subagents' model and effort. With no model,
 	// the variable goes and the effort is kept unwritten (subagentSaved):
 	// the main model at an effort would pin every subagent to it.
@@ -2576,9 +2611,10 @@ func claudeIn(at place) *Agent {
 		ID: "claude", Name: "Claude Code", Icon: "claudecode-color", Aliases: []string{"cc", "claude-code"},
 		UA:  []string{"claude-cli", "claude-code"},
 		Bin: "claude", Dir: filepath.Dir(path), Path: path, signIn: ".credentials.json",
-		Fields:       fields,
-		ModelAliases: claudeAliases,
-		Telemetry:    claudeTelemetry(at, path),
+		claudeSettings: &ClaudeSettings{path: path, distro: at.wsl},
+		Fields:         fields,
+		ModelAliases:   claudeAliases,
+		Telemetry:      claudeTelemetry(at, path),
 		// Claude Code as it was before magpie: its default puts it back as
 		// installed, on Anthropic's endpoint, where this brings back the
 		// endpoint, token and model the user had

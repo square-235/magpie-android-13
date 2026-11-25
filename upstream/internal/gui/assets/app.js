@@ -372,7 +372,7 @@ function toneCheck(img) {
     swap();
   }, { once: true });
 }
-const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "openbot", "avibe", "kun", "nowledge-mem"]);
+const pngIcons = new Set(["aigocode", "crush", "zcode", "alma", "hanako", "cindy", "lody", "typesafe", "atomcode", "snow", "mlx-serve", "gpustack", "mothx", "zoo-code", "kimi-code-desktop", "catpaw", "openbot", "avibe", "kun", "nowledge-mem"]);
 
 // lazy: a picture in a long list (Plugins' rows) is asked for near the
 // screen: each SVG an <img> draws is a ~0.6 MB webview document, kept (#909)
@@ -691,7 +691,7 @@ function renderAgents() {
         return row;
       }
       who.append(cliTag(a));
-      if (a.wired && connectable(a)) row.append(connectSwitch(a));
+      if (a.wired) row.append(connectSwitch(a));
       return row;
     }
     // on the name's line; a row with 「接入」 says it under the name
@@ -8172,7 +8172,8 @@ function advancedSet(d, p) {
     [d.concurrency, d.maxAccounts, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.topUpRate ?? p?.topUpRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!d.rateWindows?.length ||
     !!(d.searches || d.authHeader || d.passUserAgent === false || d.unredacted || d.countFree || d.billing || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.noBalanceProbe || d.http1 || d.socket || d.imageFilesOff || d.passErrors || d.clientCert || d.serverCA || d.serverPin || d.resolve) ||
-    !!d.fallback?.length || !!(p?.balanceToken?.set || p?.connectAgents || p?.maxImages);
+    !!d.fallback?.length || !!(p?.balanceToken?.set || p?.connectAgents || p?.maxImages) ||
+    (p?.accessKey?.vendor === "aws" && !!(p.accessKey.id || p.accessKey.secretSet));
 }
 function priceRateError(ed) {
   shown(ed.querySelector("input.price-rate"))?.focus(NO_SCROLL);
@@ -10266,13 +10267,15 @@ function drawEditor(p, presetID) {
     ed.append(...field(t("Team project ID"), proj, t("Only for a key on a team's GLM Coding Plan: both are in {p}'s console, under the team's organization and project. With them the Usage page shows the team's 5-hour and weekly windows.", { p: pr?.name || p.name })));
   }
 
-  // plan windows told only to an access key (Volcengine #1427, Tencent #1574);
-  // the saved Secret never comes back here
+  // plan windows told only to an access key (Volcengine #1427, Tencent #1574),
+  // or Bedrock's AWS access key that signs its requests in place of the API
+  // key (#7687); the saved Secret never comes back here
   const access = p ? p.accessKey : pr?.accessKey ? { vendor: pr.accessKeyVendor || "volcengine", id: "", secretSet: false } : null;
   let accessAt = () => {}, accessShown = () => !!access;
+  const aws = access?.vendor === "aws";
   if (access) {
     const tc = access.vendor === "tencent";
-    const idName = tc ? t("SecretId") : t("AccessKey ID"), secretName = tc ? t("SecretKey") : t("Secret Access Key");
+    const idName = tc ? t("SecretId") : aws ? t("Access key ID") : t("AccessKey ID"), secretName = tc ? t("SecretKey") : aws ? t("Secret access key") : t("Secret Access Key");
     if (draft.accessKeyID === undefined) draft.accessKeyID = access.id || "";
     const ak = input(draft.accessKeyID, idName);
     ak.classList.add("volc-ak");
@@ -10287,20 +10290,28 @@ function drawEditor(p, presetID) {
     if (saved) {
       const side = el("div", "side");
       const drop = el("button", "text", t("Remove"));
-      drop.onclick = () => { draft.clearAccessKey = true; draft.accessKeyID = ""; draft.secretAccessKey = ""; ak.value = ""; sk.value = ""; sk.placeholder = secretName; drop.remove(); };
+      drop.onclick = () => { draft.clearAccessKey = true; draft.accessKeyID = ""; draft.secretAccessKey = ""; draft.sessionToken = ""; ak.value = ""; sk.value = ""; sk.placeholder = secretName; drop.remove(); dropToken(); };
       side.append(drop);
       pair.append(side);
     }
+    // a temporary AWS key's session token, under the Secret (awstoken.js)
+    let dropToken = () => {};
     const rows = [
       // what a RAM user's key needs (aliRAMHint, MetalHqa on X)
       ...field(idName, ak, access.vendor === "alibaba" ? t(ALI_RAM) : ""),
-      ...field(secretName, pair, tc
+      ...field(secretName, pair, aws
+        ? t("In place of the API key: an AWS access key that may call Bedrock, which signs each request. A temporary key needs its session token too.")
+        : tc
         ? t("Token Plan Enterprise's usage is told only to the Tencent Cloud account's API key (console → Access management → API keys), not to the plan's API key. Give its SecretId and SecretKey here for the Usage page to show it; a sub-user's key that may read TokenHub is enough. It is used for nothing else.")
         : access.vendor === "alibaba"
         ? t("The plan's usage is told only to the Alibaba Cloud account's AccessKey (console → AccessKey), not to the plan's API key. Give its AccessKey ID and Secret here for the Usage page to show it. It is used for nothing else.")
         : t("The plan's 5-hour, weekly and monthly windows are told only to the account's access key (Volcengine console → API Access Keys), not to the plan's API key. Give it here for the Usage page to show them; it is used for nothing else.")),
     ];
-    ed.append(...rows);
+    // rarely used beside the API key: at the top of Advanced (#7687)
+    if (aws) {
+      advIn.prepend(...rows);
+      import("./awstoken.js").then(() => { dropToken = awsToken(rows.at(-1), access, draft); }, () => {});
+    } else ed.append(...rows);
     // the plan at some regions only (Tencent's 企业版)
     const at = pr?.accessKeyRegions;
     if (at?.length) {
@@ -10640,7 +10651,11 @@ function drawEditor(p, presetID) {
       body.accessKeyID = draft.accessKeyID || "";
       if (draft.secretAccessKey) body.secretAccessKey = draft.secretAccessKey;
       else if (draft.clearAccessKey) body.clearAccessKey = true;
-      if (accessShown() && body.accessKeyID && !body.secretAccessKey && !(access.secretSet && !draft.clearAccessKey)) { ed.querySelector(".volc-sk")?.focus(NO_SCROLL); return editorError(t("Give the access key's Secret too"), "warn"); }
+      if (aws) {
+        if (draft.sessionToken) body.sessionToken = draft.sessionToken;
+        else if (draft.clearSessionToken) body.clearSessionToken = true;
+      }
+      if (accessShown() && body.accessKeyID && !body.secretAccessKey && !(access.secretSet && !draft.clearAccessKey)) { if (aws) adv.open = true; ed.querySelector(".volc-sk")?.focus(NO_SCROLL); return editorError(t("Give the access key's Secret too"), "warn"); }
     }
     if (vertex) body.vertex = vertexOfDraft();
     if (isNew && custom && !body.name) { name.focus(); return editorError(t("Give it a name"), "warn"); }
@@ -11646,7 +11661,7 @@ function renderModels(p) {
           const why = p.testsAs[as] ? t(p.testsAs[as]) : "";
           acts.push({ name, icon: PLAY_ICON, off: !!why, why, tip: t("Asked as {agent} asks, for a relay that serves only {agent}", { agent }), run: () => testOne(id, as) });
         }
-        if (p.testPicks) acts.push({ name: "Test on account…", icon: PLAY_ICON, tip: t("Pick the account or key the test is sent to"), run: () => openProtoMenu(c, p.testPicks.map((k) => ({ v: k.id, name: k.name, literalName: true })), null, (v) => testOne(id, "", v), "Account to test", "model-account-menu") });
+        if (p.testPicks) acts.push({ name: "Test on account…", icon: PLAY_ICON, tip: t("Pick the account or key the test is sent to"), run: () => openProtoMenu(c, p.testPicks.map((k) => ({ v: k.id, literalName: true, ...k })), null, (v) => testOne(id, "", v), "Account to test", "model-account-menu") });
       }
       // its id as agents and the gateway name it, to paste where a model is
       // typed (ARNO, Discord: 右击菜单除了测试模型外，还能添加拷贝模型id的功能)

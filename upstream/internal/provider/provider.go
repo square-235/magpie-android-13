@@ -73,10 +73,14 @@ type Provider struct {
 	// tells Token Plan 企业版's usage to (tencent_usage.go), or an Alibaba
 	// Cloud account's AccessKey ID and Secret (TakesAlibabaAccessKey), what
 	// its console tells a Token Plan's usage to (alibaba_usage.go); not the plan's
-	// inference key in Key. They are kept, backed up and synced as the keys are: the Secret
-	// is never sent to the GUI, and a backup without keys has neither.
+	// inference key in Key. On Amazon Bedrock they are an AWS access key,
+	// which signs its requests (SigV4) in place of a Bedrock API key
+	// (SignsWithAccessKey, #7687), with SessionToken a temporary one's.
+	// They are kept, backed up and synced as the keys are: the Secret and
+	// the token are never sent to the GUI, and a backup without keys has none.
 	AccessKeyID     string `json:"accessKeyID,omitempty"`
 	SecretAccessKey string `json:"secretAccessKey,omitempty"`
+	SessionToken    string `json:"sessionToken,omitempty"`
 
 	// KeyName names the key in use, and Keys are the provider's other
 	// accounts: keys saved to switch to (see keys.go).
@@ -1602,14 +1606,21 @@ func AddCopy(p Provider, from string) (string, error) {
 		p.Key, p.KeyName, p.KeyProtocol, p.KeyWeight, p.KeyPlan = src.Key, src.KeyName, src.KeyProtocol, src.KeyWeight, src.KeyPlan
 		p.Keys = slices.Clone(src.Keys)
 		p.Routing, p.Sink, p.Affinity = src.Routing, src.Sink, src.Affinity
-	}
-	if p.BalanceToken == "" {
-		p.BalanceToken = src.BalanceToken
+		// the balance token belongs to the account the keys sign in to, so it
+		// comes with them. A copy pasted its own key is another account
+		// (zhonglin on X): inheriting from's token would ask from's account
+		// and show its balance twice, the copy's own account never asked.
+		if p.BalanceToken == "" {
+			p.BalanceToken = src.BalanceToken
+		}
 	}
 	// the access key as the copy's editor showed it: the form sends its ID
 	// but never the saved Secret, which went missing from the copy (#1821)
 	if p.SecretAccessKey == "" && (p.AccessKeyID == "" || p.AccessKeyID == src.AccessKeyID) {
 		p.AccessKeyID, p.SecretAccessKey = src.AccessKeyID, src.SecretAccessKey
+		if p.SessionToken == "" {
+			p.SessionToken = src.SessionToken
+		}
 	}
 	if p.ZhipuTeam == nil {
 		p.ZhipuTeam = src.ZhipuTeam
@@ -1855,6 +1866,10 @@ func Delete(id string) error {
 // saved by hand, while the same server at 127.0.0.1 could.
 func keyOptional(p Provider) bool {
 	if pr := Preset(p.Preset); pr != nil && pr.NoKey {
+		return true
+	}
+	// Bedrock signed with an AWS access key in place of its API key (#7687)
+	if p.SignsWithAccessKey() {
 		return true
 	}
 	h := p.Host()

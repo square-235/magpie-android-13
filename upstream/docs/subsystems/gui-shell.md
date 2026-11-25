@@ -284,10 +284,11 @@ and the bar, then when that window first starts again, the soonest of the
 accounts' ("renews in 2h", as an account's row says it; Sdsi134a on X),
 every window and when the first of them resets on hover. Only
 when every account in it was read, none is free, and all are on one plan;
-otherwise, while the fold is open or a kept day is shown, and while the
-groups page's Hide plans is on (`plansHidden`, `magpie.routingGroupPlans`),
-it says nothing of it and each account's row has its own. See
-`routing-fold-accounts-together.test.cjs`.
+otherwise, and while the fold is open or a kept day is shown, it says
+nothing of it and each account's row has its own. The groups page's Hide
+plans (`plansHidden`, `magpie.routingGroupPlans`) is that page's own and
+leaves the fold alone (#6861: once clicked, it took every fold's bar away
+here for good). See `routing-fold-accounts-together.test.cjs`.
 
 A group in the group's heading (`li.rt-sub`, `subNode`) folds the same way
 (`toggleSub`): folded, it says how many it routes to and what they do
@@ -1228,6 +1229,19 @@ one thread was magpie's own: the no-activate hook, left on while
 `endProcess` and `awaitExit` stay: for the other detaches, for an
 `os.Exit` while the app still runs (Wails' on a fatal error), and for
 versions before the fix.
+
+The old one waits up to 20s (`startWait`) for the new one to write the
+file `MAGPIE_STARTED` names (`startChecked` in
+[`blocked.go`](../../internal/update/blocked.go)), and else ends it, puts
+itself back and notes the version as refused (#894). That file is made in
+the temp folder, or beside the exe when the temp folder can't be written,
+as when TEMP names a drive that isn't there: every update was refused
+then, which is one way to 柒拾's "didn't start within 20s" on Discord
+(`markerPath`, `TestRelaunchWithoutATempFolder`). `Forward`'s does the same.
+Its name ends in a random suffix and it is made new and the user's own
+(`os.CreateTemp`, 0600): /tmp is shared on Linux, and a link another
+user left at a fixed name was written through, over the file it named
+(`TestRelaunchMarkerNotAGuessableName`).
 
 Two magpies never show at once. On a Mac the old one lets go of its
 instance lock before it gives the socket (`releaseInstance`), so the new
