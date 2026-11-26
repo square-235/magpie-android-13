@@ -134,6 +134,11 @@ type Settings struct {
 	// who codes past 1am). The Usage page, its daily cards and the gateway
 	// keys' daily and calendar caps cut their days there.
 	DayStart int `json:"dayStart,omitempty"`
+	// TimeZone is the IANA zone ("Asia/Shanghai") this magpie's days and
+	// times are in, in place of the system's (JackyFill on X: a magpie on a
+	// server and one on the desk, read on one scale). Empty follows the
+	// system. See Location.
+	TimeZone string `json:"timeZone,omitempty"`
 	// Dock keeps magpie in the Mac's Dock as well as the menu bar, for a
 	// menu bar too full to show its icon.
 	Dock bool `json:"dock,omitempty"`
@@ -347,6 +352,11 @@ type Settings struct {
 	Port int `json:"port,omitempty"`
 	// LANKeyID remembers the default named key created when sharing is enabled.
 	LANKeyID string `json:"lanKeyId,omitempty"`
+	// HideRequestText is Settings › Privacy's Show request content turned
+	// off (llxth1 on X): the gateway keeps no request's text or bodies in
+	// memory, and the Routing and Gateway pages show none
+	// (gateway/request_text.go). The request archive is apart from it.
+	HideRequestText bool `json:"hideRequestText,omitempty"`
 	// RequestArchive keeps each call the gateway serves — its headers and
 	// bodies both ways, secrets taken out — in the S3 bucket sync keeps
 	// its backup in (gateway/archive.go), for looking into a request later.
@@ -775,6 +785,13 @@ type Settings struct {
 	// opening was too slow to have by default (the owner, 10-21: "太卡");
 	// one who turned it on keeps it on (LightweightOn).
 	Lightweight *bool `json:"lightweight,omitempty"`
+	// GPURendering is Linux's Settings › General › Advanced › GPU
+	// rendering: whether WebKitGTK composites the pages on the GPU, read
+	// at the app's start (gui's webkit_linux.go). Nil is magpie's pick for
+	// this computer: off without a GPU and under Wayland unless the
+	// NVIDIA driver is loaded (ZDegress on X, #5176, #6184). This
+	// computer's own (KeepOwn).
+	GPURendering *bool `json:"gpuRendering,omitempty"`
 	// QuitNoAsk lets a Quit the user chooses quit at once while agents go
 	// through magpie, without the question that names them (gui's
 	// quitask.go). Off by default, it asks; the question's "Don't ask
@@ -1855,7 +1872,8 @@ func (s Settings) Compact() int {
 // KeepOwn puts back cur's settings that are this computer's own, which a
 // sync or a restored backup never brings from another: the window's size,
 // place and whether it was maximised, the proxy (and plugin downloads'), the gateway's port, whether it
-// is shared on the local network and the addresses let in to it, the
+// is shared on the local network and the addresses let in to it, whether
+// the pages are drawn on the GPU (GPURendering), the
 // address Claude Desktop is pointed at (DesktopGateway), what
 // its MCP router says of itself, what this magpie is called (Name), the Dock, gateway mode, whether WSL is
 // looked in, whether agents' sign-ins are read, when allowances are read, the terminal app a session resumes
@@ -1870,6 +1888,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.SessionReads = cur.SessionReads
 	s.UIFont, s.CodeFont = cur.UIFont, cur.CodeFont
 	s.Window, s.Proxy, s.Port, s.Dock, s.DockWindow, s.Lightweight = cur.Window, cur.Proxy, cur.Port, cur.Dock, cur.DockWindow, cur.Lightweight
+	s.GPURendering = cur.GPURendering
 	s.DockNever, s.DockSettled = cur.DockNever, cur.DockSettled
 	s.ProxyCustom, s.Proxies, s.ProxyNames = cur.ProxyCustom, cur.Proxies, cur.ProxyNames
 	s.PluginProxy, s.PluginProxyCustom = cur.PluginProxy, cur.PluginProxyCustom
@@ -2779,6 +2798,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	if s.DayStart < 0 || s.DayStart > 6 {
 		return fmt.Errorf("a day starts at an hour from 0 to 6, not %d", s.DayStart)
+	}
+	if s.TimeZone != "" && !ValidTimeZone(s.TimeZone) {
+		return fmt.Errorf("a time zone is an IANA name such as Asia/Shanghai, or empty to follow the system, not %q", s.TimeZone)
 	}
 	if s.UsageAlert < 0 || s.UsageAlert > 100 {
 		return fmt.Errorf("a usage alert is at a percentage from 1 to 100, or 0 for off, not %d", s.UsageAlert)

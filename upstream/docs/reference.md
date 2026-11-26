@@ -227,7 +227,8 @@ a local test upstream, with no vendor credentials.
 #### DeepSeek Harness: the DeepSeek row by hand
 
 Connecting dsh gives it magpie's own routes on dsh's pi-ai adapter
-(`magpie`, `magpie-responses`, `magpie-anthropic`). dsh's DeepSeek row
+(`magpie`, `magpie-responses`, `magpie-anthropic`, and
+`magpie-gemini` from dsh 0.2.2-rc.2). dsh's DeepSeek row
 (`llm-deepseek`, the `deepseek-official` route) is dsh's: magpie never
 points it anywhere, and Disconnect leaves an entry of yours there alone.
 That row does more for DeepSeek's own models than pi-ai does: when dsh's
@@ -1156,6 +1157,12 @@ the `ark-beta-systemone-api: true` header magpie adds on Ark's host, and its
 one decision model `doubao-seed-2-1-lite-260915`. The Coding and Agent
 Plans' paths don't serve it, so it bills as pay as you go.
 
+A Google Gemini provider with an AI Studio key (the `google` preset) decides
+with `google/gemini-decision-1` on Google's Decisions API, on the same keys.
+`/v1/systemone` sends it the state, the questions, and `images` and `audio`,
+each a list of data: URLs or URLs. A decision model that can't take audio
+is refused a request with audio, with a 400 that says so.
+
 Qwen Cloud (qwencloud.com), Alibaba's international Qwen platform, has keys
 of its own, made at home.qwencloud.com. Its pay as you go is `qwencloud`,
 at `{region}.maas.qwencloudapi.com` in six regions (`ap-southeast-1`, the
@@ -1319,14 +1326,20 @@ credentials are read when a request is signed.
 Each location serves models of its own, and Vertex AI has no list to ask which,
 so magpie gives each location the models it answered with on 2026-10-06
 (and Gemini 4: `gemini-4-argon` since 2026-10-13, `gemini-4-carbon` since
-2026-11-10 and `gemini-4-hydrogen` since 2026-11-12, at `global`, `us` and
-`eu`):
+2026-11-10, `gemini-4-hydrogen` since 2026-11-12 and `gemini-4-neon` since
+2026-11-18, at `global`, `us` and `eu`):
 
 | Location | Models |
 | --- | --- |
-| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2`, `claude-fable-5-1` |
-| `us`, `eu` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-flash-lite` |
+| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-neon`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2`, `claude-fable-5-1` |
+| `us`, `eu` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-neon`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-flash-lite` |
 | A region | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+
+A Gemini 4 or later model Google releases after these joins `global`, `us`
+and `eu` (and express mode) once [models.dev](https://models.dev)'s
+`google-vertex` entry lists it, ahead of the Gemini 4 models above, with no
+magpie update: magpie's catalog syncs from models.dev. A preview or a cyber
+model, which Google gives on its allowlist, is typed in.
 
 A region that serves one more, as asia-northeast1 serves `gemini-3.5-flash`,
 has it typed in with the rest you want:
@@ -2332,6 +2345,13 @@ each of these groups ordered by the share used.
   is. Each member's own accounts go as its provider routes them, and the
   Routing page says an account went after those known only of one
   weighed against a known account of the same member.
+- **Before expiry, one by one** (`pace-drain`): picks the account as Use
+  before expiry does, the highest pace first, and then stays on it, as
+  Until used up does, until it is used up (100%), refused for its quota or
+  credit, or fails; then it picks again by pace. A pick isn't left for
+  another whose pace has risen since, nor taken back by one that renews;
+  so each account's allowance is used up in turn, the one that would lose
+  the most at its reset first.
 - **In turn**: each turn of a conversation goes to the next account. A new
   conversation goes to the account the fewest other conversations of the
   last 30 minutes are on.
@@ -2831,7 +2851,11 @@ account or key. `?models=1` adds each one's `models`: the id of every
 model it can be asked for, its provider's whole list (not the first 24
 agents are offered of a provider with no picks), less a model the user
 keeps off that account and one on none of the provider's APIs. Each is
-asked as `<provider>/<id>`, offered to agents or not. It is asked as
+asked as `<provider>/<id>`, offered to agents or not. `?models=full`
+gives the same models as `/v1/models`' rows instead of ids, built by the
+same code: `id` (`<provider>/<id>`), `display_name`, `reasoning_levels`,
+`context_window`, `max_output_tokens`, `modalities`, `pricing`,
+`magpie_label` and the rest. It is asked as
 `/v1/magpie/quotas` is: this machine, or another with a key of a gateway
 shared on the local network; a read-only
 key may read it, and a key held to a budget, models or accounts only when
@@ -4181,6 +4205,7 @@ magpie settings set noBird on   # checked and saved as the window saves it
 magpie settings set redactWords acme,globex
 magpie settings reset theme     # back to its default
 magpie settings set dayStart 4   # a day starts at 4:00 (0 to 6): the Usage page and daily and monthly key caps cut days there; the Sessions page does not yet
+magpie settings set timeZone Asia/Shanghai   # this magpie's days and times in that zone, not the computer's: Usage, Sessions, the TUI and CLI, key caps, the menu bar, quota alerts, and every time the window shows; reset follows the system
 
 magpie quota                    # what is left of every subscription, plan and key balance
 magpie quota refresh codex      # read Codex's cards again now (once per 30s)

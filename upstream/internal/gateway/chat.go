@@ -411,8 +411,28 @@ var failedAsText = map[string]bool{"devin": true, "qoder": true, "qoder-cn": tru
 // deepseek-v4.1-flash, whose host doesn't say so), Command Code's
 // plugin, which replays it for a Go key as the built-in did to
 // /alpha/generate, and Qoder's, which sends it on as Qoder's own client
-// does (uk.jent on Discord; plugin 0.2.42).
+// does (uk.jent on Discord; plugin 0.2.42). Each of these is sent
+// noReasoning on a tool turn that has none (chatWantsReasoning).
+//
+// Devin's plugin reads it too (0.1.36, plugins#703) and gives it to a
+// model that isn't Claude as the turn's thinking: swe-2 thinks on a tool
+// loop's later steps only when the steps before carry theirs. Measured
+// 2026-11-25 on swe-2-high through magpie, five read_file steps then the
+// next: a streamed Chat request with each step's reasoning_content
+// thought 5 of 5, the same without it 0 of 5, and a Codex Responses body
+// with each step's reasoning item, built here without it, 0 of 5
+// (@Anotiaww on X). Devin is sent no noReasoning: the plugin would give
+// swe-2 a thought it never had.
 func chatReplaysReasoning(host, model string) bool {
+	return chatWantsReasoning(host, model) || host == "devin"
+}
+
+// chatWantsReasoning is whether a Chat upstream that has a turn's
+// reasoning back (chatReplaysReasoning) wants some on every tool turn,
+// noReasoning when the client kept none: DeepSeek refuses a request
+// without it (#1462), and Command Code's and Qoder's plugins read the
+// space as none.
+func chatWantsReasoning(host, model string) bool {
 	return strings.Contains(host, "deepseek") || strings.Contains(strings.ToLower(model), "deepseek") || host == provider.CommandCodePlanID || host == "qoder" || host == "qoder-cn"
 }
 
@@ -441,7 +461,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 	if r.System != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": r.System})
 	}
-	replay := chatReplaysReasoning(host, model)
+	replay, wants := chatReplaysReasoning(host, model), chatWantsReasoning(host, model)
 	// MiniMax's own Chat API gives a model's thinking in the text, between
 	// <think> tags, and wants it back there on the turns after (its
 	// interleaved thinking): the decoder takes it out as thinking (#1267),
@@ -547,7 +567,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 				}
 			} else if think != "" && replay {
 				am["reasoning_content"] = think
-			} else if replay && (len(calls) > 0 || afterTool) {
+			} else if wants && (len(calls) > 0 || afterTool) {
 				// a tool call with no thinking (another model's turn), or a
 				// reply to a tool result with none, which DeepSeek turns the
 				// whole request away for (#1462, #1822)
@@ -1203,6 +1223,14 @@ type cUsage struct {
 }
 
 func (u cUsage) usage() Usage {
+	out, _ := u.counted()
+	return out
+}
+
+// counted is the usage, and whether prompt_tokens took in what was read
+// from the cache and written to it (OpenAI's way, and every other's but
+// a relay's in Anthropic's names that counts less than its cache).
+func (u cUsage) counted() (Usage, bool) {
 	out := Usage{Output: u.CompletionTokens, cacheUnknown: u.MagpieCacheUnknown}
 	if d := u.PromptTokensDetails; d != nil {
 		out.CacheRead, out.CacheWrite = d.CachedTokens, d.CacheWriteTokens
@@ -1236,7 +1264,17 @@ func (u cUsage) usage() Usage {
 		out.Deferred = &Usage{Input: max(d.PromptTokens-d.CachedTokens-d.CacheWriteTokens, 0), Output: d.CompletionTokens,
 			CacheRead: d.CachedTokens, CacheWrite: d.CacheWriteTokens}
 	}
-	return out
+	return out, whole
+}
+
+// streamed is a chunk's usage as the reply's so far: a stream that counts
+// its prompt on more than one chunk tells it once (promptCount).
+func (u cUsage) streamed(p *promptCount) Usage {
+	out, whole := u.counted()
+	if !whole {
+		return out
+	}
+	return p.fit(out, u.PromptTokens)
 }
 
 func (u Usage) chat() map[string]any {
@@ -1264,6 +1302,7 @@ type chatDecoder struct {
 	toolDone  bool      // they are whole JSON: a call that starts now comes after it
 	held      []*heldCall
 	choice    string // index of the first choice seen; an empty string means none yet
+	prompt    promptCount
 	// Gemini's OpenAI-compatible API, asked for thoughts, may give them
 	// in the text as a leading <thought>…</thought>, and MiniMax's Chat
 	// API (#1267), like the open models served without a reasoning
@@ -1521,7 +1560,7 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		// Anthropic's message_start does (#1887)
 		var prompt Usage
 		if ch.Usage != nil && ch.Usage.PromptTokens > 0 {
-			u := ch.Usage.usage()
+			u := ch.Usage.streamed(&d.prompt)
 			prompt = Usage{Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
 		}
 		emit(Event{Kind: KStart, MsgID: ch.ID, Model: ch.Model, Usage: prompt})
@@ -1583,7 +1622,7 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		}
 	}
 	if ch.Usage != nil && (ch.Usage.PromptTokens > 0 || ch.Usage.CompletionTokens > 0 || ch.Usage.MagpieDeferred != nil || ch.Usage.Credit != nil) {
-		emit(Event{Kind: KUsage, Usage: ch.Usage.usage()})
+		emit(Event{Kind: KUsage, Usage: ch.Usage.streamed(&d.prompt)})
 	}
 	return nil
 }

@@ -344,6 +344,12 @@ type stateJSON struct {
 	// window offers to make theirs again; "" when magpie can save
 	ConfigBlocked string            `json:"configBlocked,omitempty"`
 	Settings      settings.Settings `json:"settings"`
+	// JSRoutings are the routings JS gateway plugins serve now
+	// ("<plugin>/<name>"), for every routing picker: here, not only in
+	// settingsJSON, which the page reads on Settings alone, so a page
+	// drawn from a state read anew (after each change) still offers them
+	// (guhailin3 on X, #6026)
+	JSRoutings []middleware.Routing `json:"jsRoutings"`
 	// FX is the dollar-to-yuan rate the cny currency choice shows costs at,
 	// here too (not only in settingsJSON) so a cost drawn before the reader
 	// ever opens Settings already converts, if cny was chosen last time.
@@ -453,9 +459,6 @@ type settingsJSON struct {
 	// PanelKeys is whether the quick panel's shortcut can be set here
 	// (panelkey.go)
 	PanelKeys panelKeysJSON `json:"panelKeys"`
-	// JSRoutings are the routings JS gateway plugins serve now
-	// ("<plugin>/<name>"), for the routing pickers
-	JSRoutings []middleware.Routing `json:"jsRoutings"`
 	// PublicURL is MAGPIE_PUBLIC_URL while other machines are let in
 	// (shared, or MAGPIE_ADDR on the network): where they reach the
 	// gateway, shown beside the local address agents here are pointed at
@@ -493,6 +496,9 @@ type settingsJSON struct {
 	// WSL is whether there is WSL to look in for agents (Windows), for
 	// Settings' Detect agents in WSL (#1264)
 	WSL bool `json:"wsl,omitempty"`
+	// GPU is Linux's GPU rendering row (gpurender.go): magpie's pick,
+	// this run's, and the WEBKIT_* variables the user set; nil elsewhere
+	GPU *gpuJSON `json:"gpu,omitempty"`
 	// Rekeyed is what an agent beyond loopback, given the sharing key,
 	// couldn't be set again with when sharing changed (agent.Rekey)
 	Rekeyed string `json:"rekeyed,omitempty"`
@@ -894,7 +900,6 @@ func settingsState() settingsJSON {
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
 	s.PanelKeys = panelKeysState()
-	s.JSRoutings = middleware.Routings()
 	s.OnNetwork = gateway.OnNetwork()
 	if list, env := gateway.AllowIPs(); env {
 		s.AllowIPsEnv, s.AllowIPsFromEnv = os.Getenv(gateway.AllowIPsEnv), list
@@ -908,6 +913,7 @@ func settingsState() settingsJSON {
 		s.PublicKind = gateway.URLKind(s.PublicURL)
 	}
 	s.WSL = runtime.GOOS == "windows"
+	s.GPU = gpuRow()
 	s.Web = webPage.Load()
 	s.GatewayOn, s.GatewayWhy = gatewayMode(s.Web)
 	s.GatewayPaused = pausedNow()
@@ -1352,6 +1358,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// and the accent and wallpaper of the user's own (appearance.go),
 		// drawn before the first paint
 		boot["look"] = lookKey(s)
+		// and the time zone this magpie is set to (Settings' timeZone,
+		// JackyFill on X), the page's from the first line: tzshim.js
+		// puts Date and Intl in it, after bootPrefs, below
+		if s.TimeZone != "" && settings.ValidTimeZone(s.TimeZone) {
+			boot["timeZone"] = s.TimeZone
+		}
 		b, _ := json.Marshal(boot)
 		rw.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		rw.Header().Set("Cache-Control", "no-store")
@@ -1367,6 +1379,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			c, _ := json.Marshal(css)
 			out = append(out, `(function(){var e=document.createElement("style");e.id="lookCSS";e.textContent=`...)
 			out = append(append(out, c...), ";document.head.appendChild(e)})();\n"...)
+		}
+		if _, ok := boot["timeZone"]; ok {
+			if js, err := fs.ReadFile(staticFS(), "tzshim.js"); err == nil {
+				out = append(out, js...)
+			}
 		}
 		rw.Write(out)
 	})
@@ -3414,6 +3431,7 @@ func stateSettings(s settings.Settings) settings.Settings {
 func state() stateJSON {
 	s := stateJSON{Agents: []agentJSON{}, Profiles: []profileJSON{}, Catalog: catalog.Source(), Settings: settings.Shared()} // only encoded, never changed
 	s.Settings = stateSettings(s.Settings)
+	s.JSRoutings = middleware.Routings()
 	// state() is asked for after nearly every click, so the rate — a
 	// network fetch once every TTL — is only worth its rare latency when
 	// cny is actually chosen; usd never looks at it

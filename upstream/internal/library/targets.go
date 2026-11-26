@@ -438,6 +438,14 @@ func targetOf(a *agent.Agent) *Target {
 		// HOME_SKILL_FOLDER). Its MCP servers are rows in its SQLite
 		// database (McpServerStore), which magpie doesn't write.
 		t.Skills = sharedSkillsDir()
+	case "dim":
+		// Dim reads the user's skills from ~/.agents/skills and a project's
+		// from <cwd>/.agents/skills (dim-agent-capabilities' skills
+		// catalog: SKILLS_DIR under the platform's home, $HOME or
+		// %USERPROFILE%, and under the folder it runs in; arcships/dim
+		// c68dad5). Skills only: Dim's MCP servers and instructions aren't
+		// given, and nothing here touches its sign-in or its requests.
+		t.Skills = sharedSkillsDir()
 	case "hermes":
 		// Hermes Agent reads mcp_servers from $HERMES_HOME/config.yaml, the
 		// file magpie sets its model in too (tools/mcp_tool.py), and skills
@@ -1297,6 +1305,12 @@ func Takes(q, kind string) (string, error) {
 		}
 	}
 	what := map[string]string{"instructions": "instructions", "mcp": "MCP servers", "skills": "skills"}[kind]
+	// one on another computer using the router (remote_agents.go) takes
+	// its servers there, while it isn't on this one: an app found by its
+	// program alone (Kiro CLI) too
+	if kind == "mcp" && a.WSL == "" && isRemote(a.ID) && targetByID(a.ID) == nil {
+		return a.ID, nil
+	}
 	// an app found by its program alone (Kiro CLI), or by its own folder
 	// (TRAE CN), that isn't here: told so, not recorded and then given
 	// nothing, as Targets leaves it out
