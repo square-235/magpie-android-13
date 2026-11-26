@@ -727,8 +727,12 @@ func (s *Server) Recent() []Call {
 // RouteCall is the call the Routing page's request route was, while it is
 // still in the ring.
 func (s *Server) RouteCall(route int64) (Call, bool) {
+	hide := HidesRequestText()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if hide {
+		s.forgetRingText()
+	}
 	for i := len(s.recent) - 1; i >= 0; i-- {
 		if route != 0 && s.recent[i].Route == route {
 			return s.recent[i], true
@@ -739,8 +743,12 @@ func (s *Server) RouteCall(route int64) (Call, bool) {
 
 // RecentCall is the call numbered id while it is still in the ring.
 func (s *Server) RecentCall(id uint64) (Call, bool) {
+	hide := HidesRequestText()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if hide {
+		s.forgetRingText()
+	}
 	for _, c := range s.recent {
 		if c.ID == id {
 			return c, true
@@ -759,8 +767,17 @@ func (s *Server) record(c Call) {
 		archive(c)
 		c.wire = nil
 	}
+	// Show request content off: the ring keeps no call's bodies, and lets
+	// go of those kept before (request_text.go)
+	hide := HidesRequestText()
+	if hide {
+		c = withoutText(c)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if hide {
+		s.forgetRingText()
+	}
 	s.calls++
 	c.ID = s.calls
 	s.recent = keepRecent(s.recent, c)
@@ -1030,10 +1047,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 				return awake.Display
 			}
 			return awake.System
-		}, func() awake.State {
-			b := s.Busy()
-			return awake.State{Busy: b.Any(), Last: b.Last}
-		})
+		}, s.awakeState)
 	})
 	// and, on Windows, serves WSL distros under NAT at Windows' address on
 	// their network (wsl.go)
@@ -1062,17 +1076,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		// away, and its client opens a new one
 		s.realtimes.end()
 		go func() { defer close(sockets); s.sockets.drain(c); s.realtimes.wait(c) }()
-		if err := srv.Shutdown(c); err != nil {
-			// the requests still answering are cut where they are, and
-			// an agent streaming one reads a reply broken off (Codex:
-			// "error decoding response body")
-			log.Printf("gateway: ending after %s with requests still in flight; they are cut (%v)", s.drainFor(), err)
-			// Shutdown leaves them answering: closing their connections
-			// cancels each one's context, so its upstream call ends too
-			// and holds nothing (provider.Hold) past the gateway's end in
-			// a process that goes on (a restart, a test)
-			srv.Close()
-		}
+		s.shutdownServer(srv, c)
 		<-sockets
 		// An inline description may still have to save after its request
 		// ended, or was canceled: wait for every such description to save or
@@ -1107,6 +1111,32 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		ln = next
 	}
+}
+
+// shutdownServer ends srv's serving: the requests in flight are given
+// the drain to finish, and the ones still answering when the drain is
+// over are cut.
+//
+// A listener closed before the shutdown is not a cut request. On Windows
+// serveWSL closes the listeners it opened on the WSL networks when the
+// gateway's context ends, and the shutdown closes them again: its second
+// close says the network connection is closed, and the drain reads that
+// as a timeout and says the requests in flight were cut — every Windows
+// quit said so, with no request in flight (#7729).
+func (s *Server) shutdownServer(srv *http.Server, c context.Context) {
+	err := srv.Shutdown(c)
+	if err == nil || errors.Is(err, net.ErrClosed) {
+		return
+	}
+	// the requests still answering are cut where they are, and
+	// an agent streaming one reads a reply broken off (Codex:
+	// "error decoding response body")
+	log.Printf("gateway: ending after %s with requests still in flight; they are cut (%v)", s.drainFor(), err)
+	// Shutdown leaves them answering: closing their connections
+	// cancels each one's context, so its upstream call ends too
+	// and holds nothing (provider.Hold) past the gateway's end in
+	// a process that goes on (a restart, a test)
+	srv.Close()
 }
 
 // Handler routes the client APIs.
@@ -1674,6 +1704,54 @@ func toolsTold(m map[string]any, e provider.Entry) {
 	m["supported_parameters"] = params
 }
 
+// modelRows builds a chat model's row of /v1/models as every client is
+// told it: modelObject, the tools it takes (toolsTold), the tiers Codex
+// here is offered on it, its price for a caller told prices, and its
+// label. listModels and AccountsPath's ?models=full both build their rows
+// here, so a plugin reading a model from either reads the same fields.
+type modelRows struct {
+	tiers   map[string][]any
+	priceOf func(provider.Entry) (catalog.Price, bool)
+	// prices: magpie_price as well, for another magpie that asks
+	// (PricesHeader)
+	prices bool
+}
+
+// newModelRows is modelRows for r's caller over shown, the entries listed:
+// the tiers read once for the list, and the settings, groups and
+// providers a price is read from once too (EntryPricer). Prices are told
+// only to this computer and to one this magpie is shared with by a gateway
+// key, as they are the user's own settings.
+func newModelRows(r *http.Request, shown []provider.Entry) modelRows {
+	told := local(r) || sharedWith(r)
+	rs := modelRows{tiers: codexTiers(shown), prices: told && r.Header.Get(provider.PricesHeader) != ""}
+	if told {
+		rs.priceOf = provider.EntryPricer(settings.Load(), provider.GroupFinder())
+	}
+	return rs
+}
+
+// row is e's row, label its name as the agents' lists here call it
+// (LabelsFor): with its provider's after it unless the user wants it
+// plain, so two providers' models of one name are told apart.
+func (rs modelRows) row(e provider.Entry, label string) map[string]any {
+	m := modelObject(e)
+	toolsTold(m, e)
+	if ts := rs.tiers[e.ID]; len(ts) > 0 {
+		m["service_tiers"] = ts
+	}
+	if rs.priceOf != nil {
+		if pr, ok := rs.priceOf(e); ok {
+			m["pricing"] = catalog.OpenRouterPricing(pr)
+			if rs.prices {
+				m["magpie_price"] = pr
+			}
+		}
+	}
+	m["magpie_label"] = label
+	return m
+}
+
 // pricedModelObject is modelObject with the model's pricing, as the list
 // gives it, for the callers the list tells it to.
 func pricedModelObject(r *http.Request, e provider.Entry) map[string]any {
@@ -1984,17 +2062,12 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			// what the Usage page counts the model at, the user's own included.
 			// The settings, groups and providers are read once for the list
 			// (EntryPricer), not once a model
-			told := local(r) || sharedWith(r)
-			prices := told && r.Header.Get(provider.PricesHeader) != ""
-			var priceOf func(provider.Entry) (catalog.Price, bool)
-			if told {
-				priceOf = provider.EntryPricer(settings.Load(), provider.GroupFinder())
-			}
+			//
 			// the tiers Codex here is offered on each model (#1234), for every
 			// client: another magpie offers them to its own Codex, and Cindy
 			// shows its Fast switch on a model whose tiers hold priority
-			// (#1914). A model with none says nothing
-			tiers := codexTiers(shown)
+			// (#1914). A model with none says nothing (modelRows)
+			rs := newModelRows(r, shown)
 			// each routing group's members, looked up once a list, for
 			// another magpie's magpie_prefers
 			var membersOf func(string) []provider.Member
@@ -2039,8 +2112,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			// (claude_discovery.go)
 			discovers, who := !magpie && claudeCodeDiscovers(r), access.Caller(r.Context())
 			for i, e := range rows {
-				m := modelObject(e)
-				toolsTold(m, e)
+				m := rs.row(e, labels[i])
 				id, bare := ids[i]
 				if bare {
 					m["id"] = id
@@ -2070,22 +2142,6 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 						m["magpie_prefers"] = pe
 					}
 				}
-				if ts := tiers[e.ID]; len(ts) > 0 {
-					m["service_tiers"] = ts
-				}
-				if told {
-					if pr, ok := priceOf(e); ok {
-						m["pricing"] = catalog.OpenRouterPricing(pr)
-						if prices {
-							m["magpie_price"] = pr
-						}
-					}
-				}
-				// for another magpie: its name as the agents' lists here call
-				// it, with its provider's after it unless the user wants it
-				// plain, so two providers' models of one name are told apart
-				// there as they are here
-				m["magpie_label"] = labels[i]
 				// for DeepSeek Harness: the same name as its name. Its
 				// Models page's model discovery (llm-pi-ai's readListing)
 				// names a row by name, then display_name, and display_name
@@ -4177,10 +4233,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				}
 				held = true
 			}
-			_, ended, _ := s.lanes.out(c.who())
-			nearCapAgain(r.Context(), c, nearUsed, nearAhead, held, ended)
+			_, ended, back := s.lanes.out(c.who())
+			if nearCapAgain(r.Context(), c, nearUsed, nearAhead, held, ended) {
+				// every turn back before it was read is in it
+				s.lanes.readThrough(c.who(), back)
+			}
 			nearDone = done
-			if h := capHeld(c.p, c.p, c.model, time.Now()); h != nil {
+			// let in, the turn is out on the account from here, as a turn
+			// found far from its cap is from its check: a turn checked
+			// before this one took its lane saw none out, was found far
+			// at a reading 6 points under its cap, and the two went past
+			// it together. One step with the far turns' check and count
+			s.nearCap.check.Lock()
+			h := s.nearCapHeld(c, time.Now())
+			if h == nil {
+				onWay = s.lanes.plan(c.who())
+			}
+			s.nearCap.check.Unlock()
+			if h != nil {
 				nearDone()
 				nearDone = nil
 				c.capped = h
@@ -7347,7 +7417,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// Kimi and OpenAI turn the whole request away for: what a fork
 		// at an earlier turn or a stopped reply leaves (Paidaixinbao on X)
 		body = toolPairsOut(body)
-		if mistral := p.VendorPreset() == "mistral" || p.VendorHost() == "api.mistral.ai"; !mistral && (chatReplaysReasoning(buildHost(p), model) || chatReplaysReasoning(buildHost(p), upstream)) {
+		if mistral := p.VendorPreset() == "mistral" || p.VendorHost() == "api.mistral.ai"; !mistral && (chatWantsReasoning(buildHost(p), model) || chatWantsReasoning(buildHost(p), upstream)) {
 			// a tool call the client kept no thinking for, which DeepSeek
 			// turns the whole request away for (#1462)
 			body = withReasoningOnToolTurns(body)
@@ -8154,7 +8224,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		}
 	}
 	// a message the upstream gave no phase gets one, as OpenAI's own
-	// models' do (phase.go, #2437); it goes last, as it holds events back
+	// models' do (phase.go, #2437), and its output_text parts the
+	// annotations list the AI SDK requires (output_text_shape.go); it
+	// goes last, as it holds events back
 	var phases *phaseTidy
 	if proto == provider.Responses {
 		phases = &phaseTidy{sse: sse}
