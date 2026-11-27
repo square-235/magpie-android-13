@@ -331,6 +331,7 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-problems-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .lib-problems-head b { flex: 1 1 10em; font-weight: 600; min-width: 0; overflow-wrap: break-word; }
 .lib-problems-head .action { flex: none; margin-left: auto; }
+.lib-problems-head .lib-problems-all { margin-left: auto; height: 24px; }
 .lib-problems-head .lib-x { margin: -4px -6px -4px -2px; color: var(--muted); }
 .lib-problems-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
 .lib-problems ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 15px; display: grid; gap: 4px; }
@@ -480,6 +481,9 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-pick { display: flex; align-items: flex-start; gap: 10px; padding: 7px 6px; border-radius: 8px; cursor: default; }
 .lib-pick:hover:not(.dim) { background: var(--pill); }
 .lib-pick.dim { opacity: .55; }
+/* a row is a label, and an editor sets its labels (a form's names) right:
+   in a sheet the row still reads from its tick (AXmake110 on X) */
+.editor label.lib-pick { text-align: start; }
 .lib-pick input { margin: 2px 0 0; accent-color: var(--fg); flex: none; }
 .lib-pick .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .lib-pick .name { font-size: 13px; font-weight: 500; }
@@ -950,6 +954,8 @@ body.window .lib-list .lib-row { --lib-indent: 38px; }
 .lib-serverhead .note + .lib-viewpick { margin-left: 0; }
 /* a row's note, the user's own words, over the muted line it stands for */
 .lib-row .sub.lib-subnote { color: var(--fg-2); }
+.lib-row .sub.lib-twins { white-space: normal; overflow-wrap: anywhere; color: var(--muted); }
+.lib-row .sub.lib-twins[hidden] { display: none; }
 /* a skill's note, over its SKILL.md */
 .lib-skillnote { display: flex; flex-direction: column; gap: 4px; }
 .lib-reader .lib-skillnote label { text-align: left; padding-top: 0; }

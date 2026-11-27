@@ -100,7 +100,7 @@ func libraryView(res *library.Result) (libraryJSON, error) { return libraryRead(
 func libraryRead(res *library.Result, glance bool) (libraryJSON, error) {
 	lastProblems.Lock()
 	if res != nil {
-		lastProblems.p = res.Problems
+		lastProblems.p = res.Standing(lastProblems.p)
 	}
 	p := lastProblems.p
 	lastProblems.Unlock()
@@ -123,6 +123,27 @@ type instructionsJSON struct {
 	Instructions *library.InstructionsView `json:"instructions"`
 	Result       *library.Result           `json:"result,omitempty"`
 	Problems     []library.Problem         `json:"problems,omitempty"`
+}
+
+// mcpJSON answers a change to the MCP servers alone
+// (library.Result.MCPOnly): the part of the page it can change
+// (library.ReadMCP), the page keeping the rest it has. Reading the whole
+// page again went through every agent's skill folders as well, seconds of
+// each Save on Windows (zysicyj on X).
+type mcpJSON struct {
+	Part     string            `json:"part"` // "mcp"
+	MCP      *library.View     `json:"mcp"`
+	Result   *library.Result   `json:"result,omitempty"`
+	Problems []library.Problem `json:"problems"`
+}
+
+func mcpView(res *library.Result) (mcpJSON, error) {
+	lastProblems.Lock()
+	lastProblems.p = res.Standing(lastProblems.p)
+	p := lastProblems.p
+	lastProblems.Unlock()
+	v, err := library.ReadMCP(p)
+	return mcpJSON{Part: "mcp", MCP: v, Result: res, Problems: p}, err
 }
 
 func instructionsView(res *library.Result) (instructionsJSON, error) {
@@ -820,6 +841,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// a skill's file saved: its place in the skill, its new text,
 			// and what it held when the page opened it
 			File, Text, Was string
+			// every agent's own skills in the library's way, by agent
+			// (skills/use-library-all, skills/keep-own-all)
+			Own map[string][]string `json:"own"`
 			library.InstructionsChange
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1018,6 +1042,9 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.SkillRouterHow(in.Name, in.On)
 		case "skills/keep-own":
 			res, err = library.KeepAgentSkills(oneOrMore(in.Name, in.Names), in.Agent)
+		case "skills/use-library-all", "skills/keep-own-all":
+			// the warning's every agent at once, one sync for them all
+			res, err = library.SettleOwnSkills(in.Own, r.PathValue("action") == "use-library-all")
 		case "market/server":
 			res, err = library.InstallServer(in.ID, in.Values, in.Agents)
 		case "market/skill":
@@ -1079,6 +1106,15 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		}
 		if err != nil {
 			fail(rw, err)
+			return
+		}
+		if res.MCPOnly() {
+			v, err := mcpView(res)
+			if err != nil {
+				fail(rw, err)
+				return
+			}
+			writeJSON(rw, v)
 			return
 		}
 		if r.PathValue("what") == "instructions" {

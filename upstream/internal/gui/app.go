@@ -99,6 +99,9 @@ type host struct {
 	niri      omarchy.NiriPanel
 	niriWatch sync.Once
 	iconX     atomic.Pointer[int]
+	// and Umbriel the same way (#7881)
+	umbriel      omarchy.UmbrielPanel
+	umbrielWatch sync.Once
 
 	// closing is set while a full-screen main window, closed, leaves full
 	// screen; it is hidden once it has
@@ -151,7 +154,11 @@ func (h *host) MainShown() bool { return application.InvokeSyncWithResult(h.main
 
 // Import opens the window on an import link, for the user to confirm.
 func (h *host) Import(link string) {
-	if view, ok := pluginView(link, time.Now()); ok {
+	view, ok := groupView(link, time.Now())
+	if !ok {
+		view, ok = pluginView(link, time.Now())
+	}
+	if ok {
 		if view != "" {
 			h.whenReady(func() { h.ShowMain(view) })
 		}
@@ -205,7 +212,7 @@ func (h *host) ChooseFolder(title string) (string, error) {
 }
 
 // panelTitle names the panel for Hyprland's rule, which places it, and
-// for niri, which finds it by it (the main window is "magpie")
+// for niri and Umbriel, which find it by it (the main window is "magpie")
 const panelTitle = "magpie panel"
 
 // FitPanel grows or shrinks the panel to its content and keeps it anchored
@@ -452,6 +459,7 @@ func Run(version string, showMain bool, link string) error {
 		// so do the threads.
 		OnShutdown: func() {
 			unhookNoActivate()
+			stopEfficiencyMode()
 			stopServing()
 			proc.EndProbes()
 			if handedOver.Load() {
@@ -740,6 +748,7 @@ func Run(version string, showMain bool, link string) error {
 	if runtime.GOOS == "windows" {
 		h.main.OnWindowEvent(events.Windows.WebViewNavigationCompleted, func(*application.WindowEvent) { markReady() })
 		h.mendOnWake()
+		h.startEfficiencyMode()
 	} else {
 		h.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 			if runtime.GOOS != "darwin" {
@@ -809,6 +818,7 @@ func Run(version string, showMain bool, link string) error {
 		startAppPage(h, gw)
 	}
 	defer unhookNoActivate()
+	defer stopEfficiencyMode()
 	return h.app.Run()
 }
 
@@ -1029,11 +1039,17 @@ func (h *host) togglePanelNow() {
 		}
 		h.placePanel()
 	}
-	// niri places it as it opens (see omarchy.NiriPanel), by the click
-	// that opened it, if a click did
-	if x := h.iconX.Swap(nil); omarchy.Niri() && !h.panel.IsVisible() {
-		h.niriWatch.Do(func() { go h.niri.Watch(panelTitle) })
-		h.niri.Opening(x)
+	// niri and Umbriel place it as it opens (see omarchy.NiriPanel and
+	// omarchy.UmbrielPanel), by the click that opened it, if a click did
+	if x := h.iconX.Swap(nil); (omarchy.Niri() || omarchy.Umbriel()) && !h.panel.IsVisible() {
+		switch {
+		case omarchy.Niri():
+			h.niriWatch.Do(func() { go h.niri.Watch(panelTitle) })
+			h.niri.Opening(x)
+		case omarchy.Umbriel():
+			h.umbrielWatch.Do(func() { go h.umbriel.Watch(panelTitle) })
+			h.umbriel.Opening(x)
+		}
 	}
 	if runtime.GOOS == "darwin" {
 		// Wails' ToggleWindow goes by IsVisible, which on the Mac is the

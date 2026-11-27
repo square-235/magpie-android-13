@@ -637,6 +637,11 @@ type Provider struct {
 	// group rate). A key not in it has 1; a rate in KeyPriceRates is
 	// never multiplied (see key_rate.go).
 	KeyRateFactors map[string]float64 `json:"keyRateFactors,omitempty"`
+	// AgentAccounts is the account or key, by its id (AccountIDs), each
+	// agent set to one uses alone, by the agent's id (nb5p on Discord: one
+	// relay key for Claude Code, another for Codex); an agent not in it
+	// uses every one (agent_accounts.go)
+	AgentAccounts map[string]string `json:"agentAccounts,omitempty"`
 	// zeroRate marks a PriceRate of 0 that is a rate, a free group's, not
 	// the price as listed; set by atKeyRate alone
 	zeroRate bool
@@ -660,6 +665,11 @@ type Provider struct {
 	// BalanceURL (see TakesBalanceToken). It is asked with nothing else but
 	// the provider's headers, when the endpoint is one named.
 	BalanceToken string `json:"balanceToken,omitempty"`
+	// KeyBalanceAuth is, by KeyID, the access token and user id of the
+	// account a key belongs to, where it isn't BalanceToken's (keys of two
+	// accounts at one relay): that key's balance is asked with them (see
+	// key_balance_auth.go). A key not in it is asked as the provider says.
+	KeyBalanceAuth map[string]KeyBalanceAuth `json:"keyBalanceAuth,omitempty"`
 	// ZhipuTeam, for a Zhipu or Z.ai key on a team's GLM Coding Plan, is
 	// the team's organization and project, from the BigModel console: the
 	// team's windows are told to the key only with them (see
@@ -805,6 +815,14 @@ type file struct {
 	// Searches are the web search APIs a model's search goes to when no
 	// provider can search (see search_api.go).
 	Searches []SearchAPI `json:"searches,omitempty"`
+	// SearchesSet: Searches has held a search API, so an empty one is the
+	// user's (they removed the last); magpie adds none of its own then
+	// (AdoptSignedInSearch). Kept from the read on, whatever is stored.
+	SearchesSet bool `json:"searchesSet,omitempty"`
+	// SearchesCarried are the withdrawn plugins' search APIs whose
+	// successor's API magpie put beside them once (carrySearch), so one
+	// the user removes after that stays removed.
+	SearchesCarried []string `json:"searchesCarried,omitempty"`
 	// NoAutoGroups: the user turned off the groups magpie finds on its
 	// own (SetAutoGroups); the groups they made or changed stay.
 	NoAutoGroups bool `json:"noAutoGroups,omitempty"`
@@ -916,6 +934,7 @@ func read() (file, error) {
 			return file{}, &unreadableError{Path(), err}
 		}
 	}
+	f.SearchesSet = f.SearchesSet || len(f.Searches) > 0
 	return f, nil
 }
 
@@ -975,14 +994,21 @@ func store(f file) error {
 	for i := range f.Groups {
 		f.Groups[i] = f.Groups[i].stored()
 	}
+	f.SearchesSet = f.SearchesSet || len(f.Searches) > 0
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := lastgood.Keep(p, validProviders, 0o600); err != nil {
+	// a file edited by hand that doesn't parse is the user's, left as it
+	// is: read gave its last good generation, and writing that with this
+	// change over it lost the edit (sarosaka1023 on X)
+	if err := lastgood.KeepEdited(p, validProviders, 0o600); err != nil {
+		if e := (*lastgood.EditedError)(nil); errors.As(err, &e) {
+			return &unreadableError{p, errors.New(e.Why)}
+		}
 		return err
 	}
-	if err := writePrivate(p, append(b, '\n')); err != nil {
+	if err := writeStored(p, append(b, '\n')); err != nil {
 		return err
 	}
 	pruneIcons(f)
@@ -1055,6 +1081,8 @@ func (p Provider) clone() Provider {
 	p.KeyOwnBalances = maps.Clone(p.KeyOwnBalances)
 	p.KeyPriceRates = maps.Clone(p.KeyPriceRates)
 	p.KeyRateFactors = maps.Clone(p.KeyRateFactors)
+	p.KeyBalanceAuth = maps.Clone(p.KeyBalanceAuth)
+	p.AgentAccounts = maps.Clone(p.AgentAccounts)
 	if p.AccountWindowCaps != nil {
 		m := make(map[string]map[string]int, len(p.AccountWindowCaps))
 		for k, v := range p.AccountWindowCaps {
@@ -1181,6 +1209,7 @@ func accountSettings(a, pk Provider) Provider {
 	a.UseFirst = pk.UseFirst
 	a.NoStandIn = pk.NoStandIn
 	a.AccountNames = pk.AccountNames
+	a.AgentAccounts = pk.AgentAccounts // the account each agent uses
 	a.MaxConcurrency, a.PinUpstream = pk.MaxConcurrency, pk.PinUpstream
 	a.MaxAccounts = pk.MaxAccounts
 	a.AccountConcurrency, a.QueueLimit, a.QueueWait = pk.AccountConcurrency, pk.QueueLimit, pk.QueueWait
@@ -1672,6 +1701,10 @@ func AddCopy(p Provider, from string) (string, error) {
 		if p.BalanceToken == "" {
 			p.BalanceToken = src.BalanceToken
 		}
+		// each key's own, likewise
+		if p.KeyBalanceAuth == nil {
+			p.KeyBalanceAuth = maps.Clone(src.KeyBalanceAuth)
+		}
 	}
 	// the access key as the copy's editor showed it: the form sends its ID
 	// but never the saved Secret, which went missing from the copy (#1821)
@@ -1983,6 +2016,8 @@ func normalize(p Provider) Provider {
 	p.KeyOwnBalances = normalKeyOwnBalances(p.KeyOwnBalances)
 	p.KeyPriceRates = normalKeyPriceRates(p.KeyPriceRates)
 	p.KeyRateFactors = normalKeyRateFactors(p.KeyRateFactors)
+	p.AgentAccounts = normalAgentAccounts(p.AgentAccounts)
+	p.KeyBalanceAuth = normalKeyBalanceAuth(p.KeyBalanceAuth, p)
 	if TopUpRateOK(p.TopUpRate) != "" {
 		p.TopUpRate = 0
 	}

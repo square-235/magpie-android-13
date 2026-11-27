@@ -146,20 +146,10 @@ func claudeCloud(at place, path string) string {
 // given ("" for the shell): one in path itself is what connecting Claude
 // Code takes out (dropClouds), so Check's, and one elsewhere Outside's.
 func claudeCloudAt(at place, path string) (string, string) {
-	managed := claudeManagedAt(at)
-	global := claudeGlobal(at, filepath.Dir(path))
 	for _, k := range agentenv.ClaudeProviders {
-		set := false
-		for _, f := range []string{managed, path, global} {
-			v, has := edit.GetJSON(f, "env."+k)
-			if !has {
-				continue
-			}
-			if claudeSwitchOn(v) {
-				return f, noticeClaudeCloudFile.say("file", at.native(f), "var", k, "cloud", claudeClouds[k])
-			}
-			set = true
-			break
+		v, f, set := claudeEnvAt(at, path, k)
+		if set && claudeSwitchOn(v) {
+			return f, noticeClaudeCloudFile.say("file", at.native(f), "var", k, "cloud", claudeClouds[k])
 		}
 		// a distro's environment magpie can't read
 		if !set && at.spell == nil && claudeSwitchOn(claudeShellEnv(k)) {
@@ -167,6 +157,22 @@ func claudeCloudAt(at place, path string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// claudeEnvAt is the value of the variable k that the Claude Code whose
+// settings.json is at path goes by from its settings files, and the file
+// it is set in, as given: Claude Code puts the env of .claude.json, then
+// of the user's settings, then of an administrator's managed settings over
+// the environment it was started in, so the first of managed, path and
+// .claude.json that has k is the one. set is false when none has it (or
+// can be read), and the environment it was started in decides.
+func claudeEnvAt(at place, path, k string) (v, file string, set bool) {
+	for _, f := range []string{claudeManagedAt(at), path, claudeGlobal(at, filepath.Dir(path))} {
+		if v, has := edit.GetJSON(f, "env."+k); has {
+			return v, f, true
+		}
+	}
+	return "", "", false
 }
 
 // claudeManagedAt is the managed settings file (an administrator's) of
@@ -367,6 +373,16 @@ const claudeContextEnv = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 // first token); settings.FullContext leaves it out, and so does a Claude
 // model, which Anthropic runs to its whole window.
 const claudeCompactEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
+// claudeCompactPctEnv is the percent of its auto-compact window at which
+// Claude Code compacts (2.1.327's autocompact threshold: floor(window ×
+// pct / 100), never past the window less 13K, its default; 1 to 100, any
+// other value ignored). magpie writes the percent the user picked for
+// Claude Code (settings.AgentCompactPcts; moooyo on Discord), and leaves
+// one the user set themselves. 2.1.332 reads it only while the window has a
+// source other than "auto": magpie's models ("unknown-model") or a window
+// set anywhere; an Anthropic model with none compacts at the API's limit.
+const claudeCompactPctEnv = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
 
 // claudeOutputEnv is the longest reply Claude Code asks a model for. One it
 // doesn't know (any but Claude's own names) it asks for 32000 at most
@@ -735,7 +751,19 @@ func tierEfforts(model string) []string {
 	return claudeEffortsFor(model)
 }
 
-func claude(home string) *Agent { return claudeIn(here(home)) }
+// claude is Claude Code on this machine. Cindy's bundled copy runs with
+// the user's ~/.claude and ~/.claude.json and makes them on its first run,
+// so with only that copy here they are Cindy's, no Claude Code to list
+// (otherCopy, T_t__biu on X, #7872); its row in the Library stays, as
+// Cindy's copy reads CLAUDE.md, the MCP servers in ~/.claude.json and the
+// skills as Claude Code does (shared, sharedApp).
+func claude(home string) *Agent {
+	a := claudeIn(here(home))
+	a.otherCopy = func() bool { return claudeOnlyCindys(a, home) }
+	a.shared = a.Name
+	a.sharedApp = cindyClaudeHere
+	return a
+}
 
 // claudeRouted says the Claude Code at a place, its settings.json at path,
 // sends its requests to magpie's gateway: its ANTHROPIC_BASE_URL is the
@@ -777,8 +805,18 @@ func claudeIn(at place) *Agent {
 	// answered (#1985, claudeProxied), which a pick keeps (gwAt)
 	routed := func() bool { return claudeRouted(at, path) }
 	gwAt := func() string {
-		if u := env("ANTHROPIC_BASE_URL"); claudeProxied(at, path, u) {
+		u := env("ANTHROPIC_BASE_URL")
+		if claudeProxied(at, path, u) {
 			return u
+		}
+		// behind billion-context's lane (its plugin's …/bili/<upstream>):
+		// the gateway takes the upstream's place, so Claude Code goes
+		// through bili to magpie whether bili or magpie came first, and
+		// after the gateway's port moved (XueYukii on X, #7846). What it
+		// forwarded to before is stashed with the user's endpoint and
+		// comes back behind the lane on Disconnect.
+		if p, _, ok := biliLane(u); ok {
+			return p + at.gw()
 		}
 		return at.gw()
 	}
@@ -1090,6 +1128,40 @@ func claudeIn(at place) *Agent {
 			return edit.DelJSON(path, "env."+claudeCompactEnv)
 		}
 		return nil
+	}
+	// the compaction percent magpie last wrote, kept apart from the
+	// user's own in the same way
+	pctKey := at.key("claude.compact_pct")
+	pctOurs := func() bool {
+		cur := env(claudeCompactPctEnv)
+		return cur != "" && cur == stashShared()[pctKey]
+	}
+	dropPct := func() error {
+		defer forget(pctKey)
+		if pctOurs() {
+			return edit.DelJSON(path, "env."+claudeCompactPctEnv)
+		}
+		return nil
+	}
+	// writePct has Claude Code compact at the percent of its window the
+	// user picked for it (settings.AgentCompactPcts), whatever the
+	// window: magpie's, the user's own autoCompactWindow, or the model's
+	// whole one. None picked, Claude Code compacts where it does itself.
+	writePct := func() error {
+		if env(claudeCompactPctEnv) != "" && !pctOurs() {
+			forget(pctKey)
+			return nil
+		}
+		p := settings.Load().CompactPercent("claude")
+		if p == 0 || p == 100 {
+			return dropPct()
+		}
+		v := strconv.Itoa(p)
+		stash(map[string]string{pctKey: v})
+		if env(claudeCompactPctEnv) == v {
+			return nil
+		}
+		return edit.SetJSON(path, edit.KV{Path: "env." + claudeCompactPctEnv, Value: v})
 	}
 	// budgeted is set by writeWindow, which runs before writeCompact,
 	// while each model has its own window under modelSettings (claudePlan):
@@ -1787,6 +1859,9 @@ func claudeIn(at place) *Agent {
 		if err := dropCompact(); err != nil {
 			return "", err
 		}
+		if err := dropPct(); err != nil {
+			return "", err
+		}
 		// the window and capabilities stay as Claude Desktop's Code tab
 		// needs them while Desktop is on magpie (#1458)
 		if err := desktopOnly(); err != nil {
@@ -2151,6 +2226,9 @@ func claudeIn(at place) *Agent {
 		}
 		onboard()
 		if err := writeCompact(); err != nil {
+			return err
+		}
+		if err := writePct(); err != nil {
 			return err
 		}
 		if err := writePicker(); err != nil {
@@ -2729,6 +2807,9 @@ func claudeIn(at place) *Agent {
 				return err
 			}
 			if err := writeCompact(); err != nil {
+				return err
+			}
+			if err := writePct(); err != nil {
 				return err
 			}
 			if err := writePicker(); err != nil {

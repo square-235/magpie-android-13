@@ -120,6 +120,9 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		// it, as handle's and gemini's do (Jason on Discord: a held Codex
 		// turn showed as no model, "magpie · 0 on")
 		noteAsked(r.Context(), model)
+		// normalize Codex's "fast" word before the configured tier override,
+		// as /v1/responses does (gateway.go)
+		body = fastTier(body)
 		// the service tier set for Codex, in place of the one it asked
 		body = codexTiered(r, body, model)
 		body = keyTiered(r, body, model)
@@ -344,7 +347,8 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		defer recorded()
 		// and the tool loop it may be stuck in spends that sign-in's
 		// allowance as it would a magpie model's
-		if s.stoppedToolLoop(w, r, provider.Responses, body) {
+		var stopped bool
+		if body, stopped = s.toolLoopGuard(w, r, provider.Responses, body); stopped {
 			return
 		}
 		// Codex's own sign-in: the request hooks, not the middleware
@@ -662,48 +666,9 @@ func withoutSealedMessages(body []byte) ([]byte, bool) {
 	}
 	changed := false
 	for i, raw := range items {
-		var item map[string]json.RawMessage
-		if json.Unmarshal(raw, &item) != nil || string(item["type"]) != `"agent_message"` {
-			continue
+		if b, ok := withoutSealedAgentMessage(raw, nativeSealedAgentPayload.MatchString); ok {
+			items[i], changed = b, true
 		}
-		var parts []map[string]any
-		if json.Unmarshal(item["content"], &parts) != nil {
-			continue
-		}
-		message, sealed := false, false
-		for _, p := range parts {
-			switch p["type"] {
-			case "input_text":
-				t, _ := p["text"].(string)
-				message = message || strings.HasPrefix(t, "Message Type: MESSAGE\n")
-			case "encrypted_content":
-				c, _ := p["encrypted_content"].(string)
-				sealed = sealed || nativeSealedAgentPayload.MatchString(c)
-			}
-		}
-		if !message || !sealed {
-			continue
-		}
-		var from string
-		json.Unmarshal(item["author"], &from)
-		if from == "" {
-			from = "another agent"
-		}
-		note := "[magpie: this message from " + from + " was sealed by the ChatGPT backend, which answered that agent on one of Codex's own models, and only it can open it; this model can't, so it was left out. An agent's final result still reaches the agent that spawned it as text.]"
-		for j, p := range parts {
-			if c, _ := p["encrypted_content"].(string); p["type"] == "encrypted_content" && nativeSealedAgentPayload.MatchString(c) {
-				parts[j] = map[string]any{"type": "input_text", "text": note}
-			}
-		}
-		b, err := marshalPlain(parts)
-		if err != nil {
-			continue
-		}
-		item["content"] = b
-		if b, err = marshalPlain(item); err != nil {
-			continue
-		}
-		items[i], changed = b, true
 	}
 	if !changed {
 		return body, false
@@ -717,6 +682,61 @@ func withoutSealedMessages(body []byte) ([]byte, bool) {
 		return body, false
 	}
 	return nb, true
+}
+
+// withoutSealedAgentMessage is a single agent_message input item with each
+// matching encrypted_content part replaced by an explanatory note when the
+// item carries Message Type: MESSAGE (leaving NEW_TASK and unlabeled tasks
+// untouched). A nil strip matches any non-empty encrypted_content.
+func withoutSealedAgentMessage(raw []byte, strip func(string) bool) ([]byte, bool) {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(raw, &item) != nil || string(item["type"]) != `"agent_message"` {
+		return nil, false
+	}
+	var parts []map[string]any
+	if json.Unmarshal(item["content"], &parts) != nil {
+		return nil, false
+	}
+	matches := func(c string) bool { return c != "" && (strip == nil || strip(c)) }
+	message, sealed := false, false
+	for _, p := range parts {
+		switch p["type"] {
+		case "input_text":
+			t, _ := p["text"].(string)
+			message = message || strings.HasPrefix(t, "Message Type: MESSAGE\n")
+		case "encrypted_content":
+			c, _ := p["encrypted_content"].(string)
+			sealed = sealed || matches(c)
+		}
+	}
+	if !message || !sealed {
+		return nil, false
+	}
+	var from string
+	json.Unmarshal(item["author"], &from)
+	if from == "" {
+		from = "another agent"
+	}
+	// The note goes upstream in the input, to whichever vendor serves the
+	// turn (OpenAI's own on a foreign-seal retry, #7830), so it names
+	// neither magpie nor a vendor: the server that sealed the message is
+	// a third-party Responses provider as often as the ChatGPT backend.
+	note := "[This message from " + from + " was sealed by the server that answered that agent, and only that server can open it, so it was left out here. An agent's final result still reaches the agent that spawned it as text.]"
+	for j, p := range parts {
+		if c, _ := p["encrypted_content"].(string); p["type"] == "encrypted_content" && matches(c) {
+			parts[j] = map[string]any{"type": "input_text", "text": note}
+		}
+	}
+	b, err := marshalPlain(parts)
+	if err != nil {
+		return nil, false
+	}
+	item["content"] = b
+	b, err = marshalPlain(item)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
 
 // compactSigninHeld is the calling key when its accounts (#905) hold a
@@ -837,8 +857,7 @@ func codexAccounts(r *http.Request, model string) (string, bool) {
 	// may not use spent, a model it may not asked for. Neither list set,
 	// the relay is the key's as it always was
 	_, keyHeld := keyHolds(r)
-	_, accHeld := accountHolds(r)
-	if keyHeld || accHeld {
+	if keyHeld || accountHoldsOn(r, "codex") {
 		return id, true
 	}
 	// Codex's sign-in known to be out (of its allowance, no credits): a
@@ -1062,6 +1081,11 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		// url_citation) as Codex stored it, turned them away alike
 		// (#4921)
 		body = withoutOffsetlessCitations(body)
+		// a client-written service_tier the ChatGPT backend refuses (such
+		// as "flex", an OpenAI API billing tier) would 400 every turn of
+		// the thread (#7793); keep only the tiers the backend takes,
+		// matching provider.codexBody on /v1/responses
+		body = codexTierTakenOut(body)
 	}
 	u := base + rest
 	if r.URL.RawQuery != "" {
@@ -3451,6 +3475,9 @@ func callItemIDs(body []byte) []byte {
 // too long. Expected a string with maximum length 64, but got a string
 // with length 428 instead." — and, the tail being the character
 // refusal's alone, every turn of the session after it the same way.
+// A call_id over the 64 is refused in the same words under
+// 'input[n].call_id' ("got a string with length 87", IotXws97689 on X),
+// which boundCallIDs mends as plainItemIDs mends an id.
 // It is the tail within 1000 characters of the head: the regexp
 // .{0,1000}? it was unrolled to 88kB of program, held from start to exit.
 func itemIDRefusal(b []byte) bool {
@@ -3469,12 +3496,13 @@ func itemIDRefusal(b []byte) bool {
 	return false
 }
 
-var itemIDRefusalHead = lazyre.New(`Invalid 'input\[\d+\]\.id'`)
+var itemIDRefusalHead = lazyre.New(`Invalid 'input\[\d+\]\.(?:call_)?id'`)
 
 // itemIDRefusalTails are the tails an item id refusal words itself in:
 // the id had a character OpenAI's don't have, or was longer than they
 // take. The length tail is OpenAI's own for a string over its schema's
-// bound, which the head's input[n].id holds to item ids alone.
+// bound, which the head's input[n].id and input[n].call_id hold to ids
+// alone.
 var itemIDRefusalTails = [][]byte{
 	[]byte("Expected an ID that contains letters, numbers, underscores, or dashes"),
 	[]byte("Expected a string with maximum length"),

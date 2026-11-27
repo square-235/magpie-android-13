@@ -63,7 +63,10 @@ const (
 	// answered it whatever happens: resting, all but used up or past the
 	// usage cap set on it, it is still the one asked, and its error goes
 	// to the agent rather than the conversation to another. A usage cap
-	// still keeps new conversations off it.
+	// still keeps new conversations off it. A refusal by the vendor's
+	// safety filter is the exception: it is about the words, which that
+	// account refuses every time, so the others are asked after it, and
+	// the one that answers keeps the conversation.
 	AffinityStrict = "strict"
 )
 
@@ -2474,7 +2477,24 @@ func DeleteGroup(id string) error {
 	if !found {
 		return fmt.Errorf("no group %q", id)
 	}
-	return store(f)
+	if err := store(f); err != nil {
+		return err
+	}
+	groupsGone([]string{id})
+	return nil
+}
+
+// GroupsGone, when set, is told the ids of the user's groups that were
+// removed, once the removal is stored: by DeleteGroup (and so
+// DeleteGroups) and by a sync that mirrors another computer's groups.
+// groupshare sets it, so a group made later under the same id is not
+// taken as the one that was shared or imported (#7883).
+var GroupsGone func(ids []string)
+
+func groupsGone(ids []string) {
+	if f := GroupsGone; f != nil && len(ids) > 0 {
+		f(ids)
+	}
 }
 
 // DeleteGroups removes several groups at once, as DeleteGroup does each

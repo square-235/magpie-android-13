@@ -745,11 +745,13 @@ func grokBalanceOut(p provider.Provider, status int, body []byte) bool {
 // restrictedSaid says an error is one magpie already put in words as an
 // account its vendor restricted: WorkBuddy's 11140 as the built-in
 // translates it, or as the plugin does, both ending in
-// provider.WBRestrictedHint, and ZCode's Start Plan 3012 as the ZCode
-// plugin puts it (provider.ZCodeRestrictedHint, plugins#348). magpie's own
-// words, which no vendor says, so they are read whoever answered.
+// provider.WBRestrictedHint, ZCode's Start Plan 3012 as the ZCode
+// plugin puts it (provider.ZCodeRestrictedHint, plugins#348), and GitHub
+// turning a Copilot account away under its terms (provider.CopilotToSHint,
+// yidasanqian on X). magpie's own words, which no vendor says, so they
+// are read whoever answered.
 func restrictedSaid(status int, body []byte) bool {
-	return status >= 400 && (bodyHas(body, provider.WBRestrictedHint) || bodyHas(body, provider.ZCodeRestrictedHint))
+	return status >= 400 && (bodyHas(body, provider.WBRestrictedHint) || bodyHas(body, provider.ZCodeRestrictedHint) || bodyHas(body, provider.CopilotToSHint))
 }
 
 // restrictedRefused says p's vendor restricted the account: magpie's words
@@ -1255,21 +1257,33 @@ func restrictedHeld(c candidate) (int, string, bool) {
 
 // resetsIn is how long until a used-up ChatGPT account is back, as its
 // refusal says: {"error":{"type":"usage_limit_reached","resets_at":<unix>,
-// "resets_in_seconds":<n>}}. Zero when it doesn't say.
+// "resets_in_seconds":<n>}}. A stream's error frame is kept as its error
+// object alone (holdWriter.errBody), so the same members on the body
+// itself count too: doubao-work ends a stream begun with reasoning with
+// {"error":{"status":429,"resets_at":<the 1st of next month>}}, and read
+// only under "error" that rest was the 15 minutes guessed for no word of
+// a reset (aaron0x10 on X). Zero when it doesn't say.
 func resetsIn(body []byte, now time.Time) time.Duration {
+	type said struct {
+		At int64 `json:"resets_at"`
+		In int64 `json:"resets_in_seconds"`
+	}
 	var e struct {
-		Error struct {
-			At int64 `json:"resets_at"`
-			In int64 `json:"resets_in_seconds"`
-		} `json:"error"`
+		Error said `json:"error"`
+		said
 	}
 	if json.Unmarshal(body, &e) != nil {
 		return 0
 	}
-	if t := time.Unix(e.Error.At, 0); e.Error.At > 0 && t.After(now) {
-		return t.Sub(now)
+	for _, s := range []said{e.Error, e.said} {
+		if t := time.Unix(s.At, 0); s.At > 0 && t.After(now) {
+			return t.Sub(now)
+		}
+		if s.In > 0 {
+			return time.Duration(s.In) * time.Second
+		}
 	}
-	return time.Duration(max(e.Error.In, 0)) * time.Second
+	return 0
 }
 
 // resetsAt is how long until a used-up subscription is back, as its
@@ -1581,6 +1595,11 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// request is asked again, and no rest and no failure counted (#2873)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
+	if c.off {
+		// an account or key turned off, pinned (pinOff): routing leaves it
+		// out as it is, and a rest would stand over it once it is on
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
 	if c.p.PassesErrors() {
 		// the user leaves its errors to the client (errors=pass): none of
 		// its keys is set aside for one, and the next request is asked
@@ -1593,7 +1612,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// as soon as the switch is off
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
-	if offlineFailure(c, status, body) {
+	if s.offlineFailure(c, status, body) {
 		// this computer had no network: the provider is as good as it
 		// was, and is asked again once the network is back (offline.go)
 		return Rest{Why: failOffline, Status: status, By: "off", Until: now}
@@ -2280,7 +2299,7 @@ func remoteModelRest(c candidate, why string, header http.Header) bool {
 // rest after a failure that says nothing of why (RestCapOff) isn't
 // rested, nor its slow starts counted.
 func restSlow(c candidate, now time.Time) (Rest, bool) {
-	if c.p.NoFailRest() {
+	if c.p.NoFailRest() || c.off {
 		return Rest{}, false
 	}
 	id := c.restID()

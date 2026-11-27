@@ -17,6 +17,7 @@ import (
 
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -248,8 +249,13 @@ func (p *appPage) apply() {
 }
 
 // busySays is why the page couldn't listen on port: most often another
-// program has it (magpie web, or the magpie before a restart to update).
+// program has it (magpie web, or the magpie before a restart to update);
+// on Windows the port may be one it reserves, which trying again doesn't
+// get past (proc.PortReserved).
 func busySays(port int, err error) string {
+	if proc.PortReserved(err) {
+		return errPortBlocked(port, err).Error()
+	}
 	return fmt.Sprintf("port %d can't be taken (%v): magpie tries again every few seconds", port, err)
 }
 
@@ -332,12 +338,20 @@ func appPageRoutes(mux *http.ServeMux) {
 				c.Port = 0
 			}
 		}
+		old := c.Key
 		if in.NewKey || CheckWebKey(c.Key) != nil {
 			c.Key = NewWebKey()
 		}
 		if err := saveAppPage(c); err != nil {
 			fail(rw, err)
 			return
+		}
+		// the passkeys made under the old key go with it: none signs
+		// in under the new one (webGuard), and none is left behind
+		if old != c.Key && old != "" {
+			if err := dropPasskeysUnder(old); err != nil {
+				log.Printf("browser access: the old key's passkeys can't be removed: %v", err)
+			}
 		}
 		appPageServer.apply()
 		appPageServer.nudge()

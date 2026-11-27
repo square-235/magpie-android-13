@@ -28,7 +28,7 @@ var settingFields = []string{
 	// on or off
 	"Off",
 	// routing
-	"Fallback", "Routing", "Sink", "UseFirst", "NoStandIn", "Affinity",
+	"Fallback", "Routing", "Sink", "UseFirst", "NoStandIn", "Affinity", "AgentAccounts",
 	// limits and rests
 	"MaxConcurrency", "MaxAccounts", "AccountConcurrency", "AccountWeights", "QueueLimit", "QueueWait",
 	"MaxRPM", "MaxImages", "QuotaRest", "QuotaResetAt", "RestCap", "LimitRestOff",
@@ -36,6 +36,7 @@ var settingFields = []string{
 	// prices and balances
 	"PriceRate", "CountFree", "Billing", "RateWindows", "KeyOwnBalances", "KeyPriceRates", "TopUpRate",
 	"RateReadHours", "KeyRateFactors", "BalanceURL", "BalancePath", "BalanceMethod", "NoBalanceProbe", "BalanceToken",
+	"KeyBalanceAuth",
 	// requests
 	"Headers", "ExtraBody", "ReplyHeaders", "PassHeaders", "Searches", "CodexAsSent", "ImageFilesOff",
 	"UpstreamProviders", "PromptAsWritten", "AdditionalTools", "AdditionalToolsOff", "PassErrors", "Patience",

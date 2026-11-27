@@ -193,6 +193,7 @@ var cliForRoute = map[string]string{
 	"POST /api/artifacts/delete":           "magpie artifacts delete",
 	"POST /api/artifacts/share":            "magpie artifacts share",
 	"POST /api/artifacts/unshare":          "magpie artifacts unshare",
+	"POST /api/artifacts/owner-link":       "magpie artifacts open-shared",
 	"GET /api/davsync":                     "magpie webdav",
 	"POST /api/backup/export":              "magpie backup",
 	"POST /api/backup/import":              "magpie restore",
@@ -238,6 +239,7 @@ var cliForRoute = map[string]string{
 	"GET /api/update":                      "magpie update check",
 	"POST /api/update/check":               "magpie update check",
 	"POST /api/settings/agent-compact":     "magpie model compact",
+	"POST /api/settings/agent-compact-pct": "magpie model compact-pct",
 	"POST /api/settings/agent-contexts":    "magpie model window",
 	"POST /api/settings/agent-suffix":      "magpie model suffix",
 	"POST /api/settings/context-cap":       "magpie model context-cap",
@@ -312,6 +314,7 @@ var notYet = map[string]string{
 	"POST /api/settings/codex-open":              S2, // api.go
 	"POST /api/settings/codex-predictions":       S2, // api.go
 	"POST /api/settings/codex-reset-lead":        S2, // api.go
+	"POST /api/settings/codex-reset-days":        S2, // api.go
 	"POST /api/settings/codex-suggestions":       S2, // api.go
 	"POST /api/settings/codex-titles":            S2, // api.go
 	"POST /api/settings/codex-warm-at":           S2, // api.go
@@ -361,6 +364,10 @@ var notYet = map[string]string{
 	"POST /api/settings/archive":                 S2, // archive.go
 	"GET /api/web-page":                          W,  // apppage.go
 	"POST /api/web-page":                         W,  // apppage.go
+	"GET /api/passkeys":                          W,  // passkey.go: a browser's passkeys, made in that browser
+	"POST /api/passkeys/options":                 W,  // passkey.go
+	"POST /api/passkeys/add":                     W,  // passkey.go
+	"POST /api/passkeys/remove":                  W,  // passkey.go
 	"GET /api/plugins/builtin":                   P,  // builtins.go
 	"POST /api/plugins/builtin":                  P,  // builtins.go
 	"GET /api/plugins/counts":                    P,  // plugins_counts.go: Discover's installs and likes

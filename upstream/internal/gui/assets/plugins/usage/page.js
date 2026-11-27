@@ -2645,6 +2645,41 @@ function drawLedSpeed(l) {
   box.append(head, scroll);
 }
 
+// each MCP tool's calls in the period, while the purpose picks the tool
+// calls (tomtanir and lyl50478600 on X): how many, how often, how many
+// failed, the most called first (usage.ToolCalls). Their rows are below.
+function drawLedTools(l) {
+  const box = $("#ledTools");
+  const list = l.tools || [];
+  box.hidden = !list.length;
+  box.replaceChildren();
+  if (box.hidden) return;
+  const head = el("div", "led-bar");
+  head.append(el("b", "led-spd-t", t("Tool calls")));
+  const table = el("table", "led-spd led-tools by-prov");
+  const hr = el("tr");
+  for (const [label, cls] of [["Tool", "nm"], ["Calls", "n"], ["Per day", "n"], ["Failed", "n"]]) hr.append(el("th", cls, t(label)));
+  const thead = el("thead");
+  thead.append(hr);
+  const body = el("tbody");
+  const rate = (n) => n.toLocaleString(intlLang(), { maximumFractionDigits: n < 10 ? 1 : 0 });
+  for (const x of list) {
+    const tr = el("tr");
+    const name = el("td", "nm", x.tool || "—");
+    const server = el("div", "led-spd-prov", x.server || "magpie");
+    name.append(server);
+    name.title = (x.tool || "—") + " · " + server.textContent;
+    const fail = el("td", "n" + (x.failed ? " off" : " faint"), ledNum(x.failed || 0));
+    fail.title = t("{n} of {m} failed", { n: ledNum(x.failed || 0), m: ledNum(x.calls) });
+    tr.append(name, el("td", "n", ledNum(x.calls)), el("td", "n", rate(x.per_day || 0)), fail);
+    body.append(tr);
+  }
+  table.append(thead, body);
+  const scroll = el("div", "led-spd-scroll");
+  scroll.append(table);
+  box.append(head, scroll);
+}
+
 // ---- what the bytes sent upstream were made of (theforeveriris on X:
 // "8.6 GB up from plain-text projects?"). Every request sends the whole
 // conversation again, so a request's bytes are about its context; the
@@ -2751,6 +2786,7 @@ function renderLedgerDash(l) {
   dash.hidden = !l.total && !l.day;
   if (dash.hidden) return;
   drawLedSpeed(l);
+  drawLedTools(l);
   ledUpLast = l;
   drawLedUp(l);
   const total = allTokens(l);
@@ -3588,7 +3624,7 @@ function ledProviderMore(p) {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
     if (!p.deleted) {
-      openProtoMenu(b, merged.map((m) => ({ v: m.id, name: t("Separate {name}", { name: m.name }), literalName: true, note: "List its requests on their own again" })), "", async (id) => {
+      provCombo("provPop", b, { items: merged.map((m) => ({ id: m.id, name: t("Separate {name}", { name: m.name }), note: t("List its requests on their own again") })), head: "Merged providers", align: "right", pick: async (id) => {
         const m = merged.find((x) => x.id === id);
         try {
           await api("usage/deleted", { id, into: "" });
@@ -3597,7 +3633,7 @@ function ledProviderMore(p) {
           await reload();
           status(t("{name}'s requests are listed on their own again", { name: m.name }));
         } catch (err) { status(err.message, "err"); }
-      }, "Merged providers", "sess-menu", "right");
+      } });
       return;
     }
     openProtoMenu(b, [
@@ -3609,10 +3645,10 @@ function ledProviderMore(p) {
   const mergeInto = async () => {
     let into;
     try { into = await api("usage/deleted/into"); } catch (err) { return status(err.message, "err"); }
-    const opts = into.map((x) => ({ v: x.id, name: x.name, literalName: true, note: x.name === x.id ? "" : x.id }));
-    if (!opts.length) return status(t("No provider to merge into"), "err");
-    openProtoMenu(b, opts, "", async (id) => {
-      const to = opts.find((o) => o.v === id);
+    const items = into.map((x) => ({ id: x.id, name: x.name, icon: x.icon, note: x.name === x.id ? "" : x.id }));
+    if (!items.length) return status(t("No provider to merge into"), "err");
+    provCombo("provPop", b, { items, head: "Merge into", align: "right", pick: async (id) => {
+      const to = items.find((x) => x.id === id);
       try {
         await send({ into: id });
         ledProvider = id;
@@ -3620,7 +3656,7 @@ function ledProviderMore(p) {
         await reload();
         status(t("{from}'s requests are listed under {to} now", { from: p.name, to: to.name }));
       } catch (err) { status(err.message, "err"); }
-    }, "Merge into", "sess-menu", "right", false, opts.length > 8 ? "Search providers…" : "");
+    } });
   };
   // the filter's own button takes the name, as a key's row does
   const renameDeleted = () => {
@@ -3690,7 +3726,7 @@ function renderLedger() {
   $("#ledPurpose").title = t("Purpose");
   sessPick($("#ledComputer"), "All computers", ledComputer, computers, "Computer", (v) => { ledComputer = v; ledOwn("computer"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledAgent"), "All agents", ledAgent, l.agents.map((a) => ({ v: a.id, name: a.name, note: "", icon: a.icon || "generic" })), "Agent", (v) => { ledAgent = v; ledOwn("agent"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
-  sessPick($("#ledProvider"), "All providers", ledProvider, providers.map((p) => ({ v: p.id, name: t(p.name), note: p.deleted ? t("Deleted {date}", { date: new Date(p.deleted).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }) }) : "" })), "Provider", (v) => { ledProvider = v; ledOwn("provider"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
+  provCombo("provPick", $("#ledProvider"), { items: providers.map((p) => ({ id: p.id, name: t(p.name), icon: p.icon, note: p.deleted ? t("Deleted {date}", { date: new Date(p.deleted).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }) }) : "" })), value: ledProvider, all: "All providers", head: "Provider", pick: (v) => { ledProvider = v; ledOwn("provider"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); } });
   ledProviderMore(providers.find((p) => p.id === ledProvider));
   // a model beside the provider (OHHHHHH05 on X): the models the other filters keep, by tokens;
   // the page's totals, cells and chart are then that model's, gateway and session-log calls alike

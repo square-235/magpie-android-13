@@ -103,6 +103,10 @@ type candidate struct {
 	// given a request for want of a slot (laneMate) nor kept on by a
 	// conversation (affine)
 	reserve int
+	// off is an account or key the user turned off, sent a request pinned
+	// to it (pinOff): its failure rests nothing, as a test sent to it
+	// writes nothing, and routing goes on leaving it out
+	off bool
 }
 
 // unmasked says a request to the try goes as written: its groups say so,
@@ -129,8 +133,9 @@ type capHold struct {
 	// (carefulDoubt), cap then the account's own
 	unread string
 	// turn: held short of cap, as a turn there is taken to spend this
-	// many points, and those come back no reading has yet (nearCapHeld)
-	turn float64
+	// many points, and those come back no reading has yet (nearCapHeld);
+	// ahead of it what those are taken to spend
+	turn, ahead float64
 	// spend: a key held at the spend cap set on it (provider.SpendCap),
 	// cap then 100 and used the share of it spent
 	spend *spendHold
@@ -1087,7 +1092,7 @@ func heldReasons(ws []Weighed, now time.Time) ([]string, time.Time) {
 		}
 		s := fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, past its %d%% cap", w.Name, w.Who, w.Used, w.Capped)
 		if w.CapTurn > 0 && w.Used < float64(w.Capped) {
-			s = fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, and its next turn would take it past its %d%% cap: a turn there has spent up to %s points", w.Name, w.Who, w.Used, w.Capped, amountText(w.CapTurn))
+			s = fmt.Sprintf("%s (%s) is at %.0f%% of a usage window, and its next turn would take it past its %d%% cap: %s", w.Name, w.Who, w.Used, w.Capped, capTurnWhy(w.CapTurn, w.CapAhead))
 		}
 		if w.CapAmount > 0 {
 			s = fmt.Sprintf("%s (%s) has used %s %s of a usage window, past its cap of %s", w.Name, w.Who, amountText(w.CapCount), w.CapUnit, amountText(w.CapAmount))
@@ -1132,6 +1137,28 @@ func spendOnly(ws []Weighed) bool {
 		n++
 	}
 	return n > 0
+}
+
+// capTurnWhy says why an account near its cap is held short of it by
+// turn points (Weighed.CapTurn): what a turn there has spent, and what
+// turns its reading doesn't have yet are taken to spend (ahead, of turn).
+func capTurnWhy(turn, ahead float64) string {
+	var why []string
+	if own := turn - ahead; own > 0.005 {
+		why = append(why, "a turn there has spent up to "+pointsText(own))
+	}
+	if ahead > 0 {
+		why = append(why, "turns its last reading doesn't have yet are taken to spend "+pointsText(ahead))
+	}
+	return strings.Join(why, ", and ")
+}
+
+// pointsText is v points of a usage window.
+func pointsText(v float64) string {
+	if t := amountText(v); t != "1" {
+		return t + " points"
+	}
+	return "1 point"
 }
 
 // amountText is a window's count as a cap at a fixed amount says it: whole
@@ -1290,7 +1317,7 @@ func barredOf(cs []candidate, q provider.Provider, fallback bool, from provider.
 		w := weighed(c, q, weighing{}, fallback, from)
 		w.Unlisted, w.Via = true, via
 		if h := c.capped; h != nil {
-			w.Capped, w.Used, w.NoCredits, w.ExtraUsage, w.Unread, w.CapTurn = h.cap, h.used, h.noCredits, h.extra, h.unread, h.turn
+			w.Capped, w.Used, w.NoCredits, w.ExtraUsage, w.Unread, w.CapTurn, w.CapAhead = h.cap, h.used, h.noCredits, h.extra, h.unread, h.turn, h.ahead
 			w.CapAmount, w.CapCount, w.CapUnit = h.amount, h.count, h.unit
 			if sp := h.spend; sp != nil {
 				w.SpendCap, w.Spent, w.SpendPeriod = sp.usd, sp.spent, sp.period
@@ -2130,13 +2157,16 @@ func elsewhere(left []candidate, c candidate) []candidate {
 // says the service was disabled in this account before the request came,
 // a ruling on the account, not on what was sent, so the provider's other
 // accounts are asked (bestony on Discord). Nor does Anthropic's disabling
-// of a Claude account or organization (claudeAccountOff): the same.
+// of a Claude account or organization (claudeAccountOff): the same. Nor
+// GitHub's turning a Copilot account away under its terms
+// (provider.CopilotToSHint): it refuses the account's GitHub token before
+// the request is sent, so nothing of the request was read.
 func riskRefused(c candidate, status int, header http.Header, body []byte) bool {
 	if failureOf(c, status, body) != failRestricted || remoteModelRest(c, failRestricted, header) {
 		return false
 	}
 	status = carriedStatus(status, body)
-	return !googleSuspended(c.p, status, body) && !claudeAccountOff(c.p, status, body)
+	return !googleSuspended(c.p, status, body) && !claudeAccountOff(c.p, status, body) && !bodyHas(wordsOf(body), provider.CopilotToSHint)
 }
 
 // elsewhereWeighed is elsewhere on a list of candidates beside their
@@ -2513,6 +2543,14 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	case wait > longestPause:
 		return 0, false
 	case busyStatus(status):
+		if restrictedSaid(status, body) {
+			// an account its vendor restricted is out till the vendor
+			// lifts it: GitHub's refusal of a Copilot account under its
+			// terms comes as the sign-in's 502, and was asked again as a
+			// busy one, 15 trades a request from an account GitHub had
+			// just turned away for its use (yidasanqian on X)
+			return 0, false
+		}
 		if bodyHas(body, didNotStream) || bodyHas(body, cutVoidWords) {
 			// a void cut at its length fails the same every ask: the
 			// budget went to reasoning, and mostly would again — the same
@@ -2532,8 +2570,9 @@ func passing(status int, header http.Header, body []byte, again int) (time.Durat
 	case status == 429:
 		// a relay's 429 often says nothing of when (#503: "负载已饱和，请稍
 		// 后再试"); a plan used up or no money left won't clear in seconds,
-		// nor an account's token wall (walled)
-		return wait, again < rateRetries && failure(status, body) == failRate && !creditWords.Match(wordsOf(body)) && !walled(body)
+		// nor an account's token wall (walled); billing advice beside a
+		// limit per minute is not money spent (moneySaid, #7274)
+		return wait, again < rateRetries && failure(status, body) == failRate && !moneySaid(body) && !walled(body)
 	case regionRefused(status, wordsOf(body)):
 		// refused at the edge the connection reached, which a new
 		// connection a moment later may not be (#5182: answered 12s on);
@@ -4735,6 +4774,13 @@ var sensitiveCode = lazyre.New(`SensitiveContentDetected$`)
 // its usage policy, rather than malformed.
 var flaggedWords = lazyre.New(`(?i)flagged|usage polic`)
 
+// magpieRefusedLine is the line another magpie ends its error with when
+// its member's safety filter refused the request and nobody there
+// answered it (refusalTold, refusedError): "magpie: <model> refused this
+// request (safety filter: <code>) via <provider>", in a 400 with no code
+// of its own. Its code is the submatch.
+var magpieRefusedLine = lazyre.New(`(?:^|\n)magpie: [^\n]* refused this request \(safety filter: ([^)\s]+)\) via `)
+
 // policyRefusal tells whether an error — an error object, a body holding
 // one, or a stream's error event — is the vendor's safety filter refusing
 // the request: Azure's content_filter, OpenAI's content_policy_violation,
@@ -4787,6 +4833,14 @@ func policyRefusal(raw []byte) (string, bool) {
 		return note(c)
 	case strings.TrimSpace(msg) == highRiskRefusal:
 		return note("high risk")
+	}
+	if m := magpieRefusedLine.FindStringSubmatch(msg); m != nil {
+		// another magpie's refusal (a remote magpie a provider points
+		// at): its member's filter refused, which is about the content,
+		// not this account, as every refusal is (Winnie7572 on X: the
+		// group ended at it). Its member's words go on, without its line.
+		msg, _, _ = strings.Cut(msg, magpieSays)
+		return note(m[1])
 	}
 	return "", false
 }
@@ -5021,6 +5075,28 @@ func namedStatus(body []byte) int {
 	return textStatus(string(body))
 }
 
+// namedEventStatus is the status a well-formed stream error event names
+// for itself (namedStatusOf), its response's error's first, else its own
+// error's; 0 when it names none. Only carriedError read it, for an error
+// in a shape its protocol's decoder can't read: an Anthropic event's
+// {"type":"error","error":{"type":"permission_error","status":403,…}},
+// as the agy-cli plugin ends a stream for an account Google suspended,
+// was read by its words as a 502, so the account was not set aside as
+// suspended and the request was sent to it again and again (plugins#1563:
+// tries=10 in a minute, each a new agy session at Google).
+func namedEventStatus(data string) int {
+	var v struct {
+		Error    json.RawMessage `json:"error"`
+		Response struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(data), &v) != nil {
+		return 0
+	}
+	return cmp.Or(namedStatusOf(v.Response.Error), namedStatusOf(v.Error))
+}
+
 // namedStatusOf is the status an error object names for itself (#4855):
 // a plugin that ends an OpenAI-compatible stream after its 200 can only
 // say what went wrong in the frame, and the status it names there is the
@@ -5130,7 +5206,13 @@ func streamStatus(msg string) int {
 // that one. The error says why none is left: no such account, one that
 // doesn't list the model, or one resting. A name that isn't ASCII comes
 // percent-encoded (pinnedName), and matches as written or decoded.
-func pinTo(raw string, cands []candidate, pl planned) ([]candidate, planned, int, string) {
+//
+// One the user turned off is found too, when no account routing plans is
+// named (pinOff): it is sent the request alone, as Test on account…
+// sends one a test (tmr11235 on X: a plugin testing an account before it
+// is turned on). offOK is false for a caller held to limits (keyHolds,
+// accountHolds), which is told no rather than reaching it.
+func pinTo(raw string, cands []candidate, pl planned, from provider.Protocol, offOK bool) ([]candidate, planned, int, string) {
 	want := pinnedName(raw)
 	// by its stable id too, as AccountsPath lists it: "<provider>/<id>",
 	// or the id alone; a key so, whatever it is named
@@ -5172,6 +5254,16 @@ func pinTo(raw string, cands []candidate, pl planned) ([]candidate, planned, int
 		if match(w, nil) {
 			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model)
 		}
+	}
+	if c, w, found := pinOff(raw, want, targets, cands, pl, from); found {
+		switch {
+		case !offOK:
+			return nil, pl, http.StatusForbidden, fmt.Sprintf("%s: %s is turned off in magpie, and a gateway key held to limits doesn't send to an account that is off", AccountHeader, w.Who)
+		case w.Unlisted:
+			return nil, pl, http.StatusBadRequest, fmt.Sprintf("%s: %s's plan doesn't list %s", AccountHeader, w.Who, w.Model)
+		}
+		w.Unlisted = false
+		return []candidate{c}, planned{order: []Weighed{w}}, 0, ""
 	}
 	var have []string
 	for _, w := range append(slices.Clone(pl.order), pl.left...) {

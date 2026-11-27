@@ -4,8 +4,9 @@ The full manual: every agent magpie wires, every provider option, the gateway, r
 
 Renamed a project folder? See [relocating Claude Code sessions](session-relocation.md).
 
-One place to pick every agent's model: Codex on DeepSeek, Claude Code
-on Kimi, Gemini CLI on GLM, from the menu bar. [usemagpie.ai](https://usemagpie.ai)
+Every plan you pay for, in one pool, for any agent: Claude Code on your
+ChatGPT Pro, Codex on your Claude Max, Claude Desktop on your GLM Coding
+Plan. When one runs out, the next takes over. [usemagpie.ai](https://usemagpie.ai)
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF)
 
@@ -720,6 +721,7 @@ magpie gateway-key limit <id> reset    # count its usage from 0 again (reset 2: 
 magpie gateway-key limit <id> off      # no limit
 magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
+magpie gateway-key models <id> none    # no model: a key for MCP servers only
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> codex/!me@example.com  # every account but these, later ones too
 magpie gateway-key accounts <id> all    # every account
@@ -792,7 +794,11 @@ budget, models or accounts is also told `heldTo` (`budget`, `models`,
 `accounts`), `models` (what it may use), `quotas` (whether its owner lets
 it see quotas and the status line) and, while that is on,
 `quotaProviders` (the providers whose cards it is told); `limited` stays
-about its budget alone. A magpie that has this
+about its budget alone. A key that may use all of magpie (no budget,
+models, accounts or MCP servers, not read-only, issued or expiring, no
+cap on requests at once) is told `full: true`; a magpie that adds this
+one as a Remote magpie with such a key takes its MCP servers, skills and
+prompts at once. A magpie that has this
 one as a Remote magpie provider shows each of its keys' limits on its
 Usage page this way (#1547). Requests from
 this computer that send no gateway key are not limited; a gateway key used
@@ -871,6 +877,31 @@ under a held key is held to its issuer's list too. `GET /v1/magpie/limit`
 tells a held key its list as `mcp`. A model's own web search, which magpie
 serves through its search when the provider has none, is not an MCP call
 and is not held by this list.
+
+A key's two surfaces, the models and the MCP servers, are chosen on their
+own (ifitscolorful on X): **No model** at the top of the key's models menu,
+or `magpie gateway-key models <id> none`, makes a key for MCP servers only,
+and **No MCP server** (`gateway-key mcp <id> none`) one for models only. A
+key with neither choice, as every key made before, has both. The gateway
+refuses a key for MCP servers only every route that uses a model or tells
+of them, by the route the request is sent to before anything is read or
+sent upstream (`keySurfaceGuard`): chat completions, responses (its
+WebSocket too), messages and count_tokens, embeddings, rerank, images,
+audio, video, realtime, `/v1/decisions` and `/v1/systemone`, Gemini's,
+Ollama's and Codex's routes, a vendor's own API, the chat page, an
+artifact page's model, speech, dictation and send-to-agent calls, every
+model list, the quotas, the accounts and routing behind them. The answer
+is a 403 with `gateway_key_mcp_only`. A key for models only is refused
+every MCP route the same way, with `gateway_key_no_mcp`: the hub,
+`/mcp/<name>`, `/mcp/run/<name>`, magpie's own servers,
+`/v1/magpie/mcp` and an artifact page's MCP calls (before, it reached them and was given no tool). A key
+issued under either is held to the same. From another computer, a key for
+MCP servers only is given the Library's servers that run as programs on
+this computer, as a key with every model is: its MCP list, not a model
+limit, is what holds it, so hold it to the servers it needs. magpie's own
+servers that ask a model (`magpie-vision`, `magpie-image`) still work for
+it, with the model magpie is set to use for them; leave them out of its
+MCP list to keep it off them.
 
 A gateway key can also be held to some **accounts** (#905): the accounts
 and keys its requests may use, picked in the same menu right after their
@@ -1534,8 +1565,14 @@ A plugin can add a web search API to Settings › Models › Web search with a
 `search` hook (magpie's own; OpenCode ignores it). It is listed after
 Tavily, Brave and the rest under its own name, and added, keyed, switched
 off, reordered and removed like them (`magpie search add <plugin>:<id> <key>`
-on the command line). magpie keeps its keys (several, tried in turn, a refused
-one resting), its order and its place in the request log, masks the query
+on the command line, where the plugin's name or the id alone will do when it
+names one API; an empty `magpie search` lists the plugins' APIs). An API
+that signs in to the plugin's own provider (agy-cli's) is added by itself
+when you sign in to that provider and no search API was ever set up; one you
+remove stays removed. A list that has the withdrawn Antigravity plugin's
+search gets agy-cli's in front of it, once, while you are signed in to
+agy-cli. magpie keeps its keys (several, tried in turn, a refused one
+resting), its order and its place in the request log, masks the query
 as it does for every search API, and asks the plugin only while the
 plugin is on and the Web search plugin is.
 
@@ -2847,7 +2884,10 @@ provider, those whose vendor tells no quota included, by identifiers only:
 never the key), `kind` (`account` or `key`), `label`, `user`, `plan`, `on`
 and `pin`, `"<provider>/<id>"`. `?provider=<id>` lists one provider's.
 `X-Magpie-Account: <pin>` (or the id alone) pins a request to that
-account or key. `?models=1` adds each one's `models`: the id of every
+account or key, one turned off (`on: false`) too: it is sent that request
+alone, routing still leaves it out, and its failure rests nothing. A
+gateway key held to models, accounts or limits is told 403 for one that
+is off. `?models=1` adds each one's `models`: the id of every
 model it can be asked for, its provider's whole list (not the first 24
 agents are offered of a provider with no picks), less a model the user
 keeps off that account and one on none of the provider's APIs. Each is
@@ -4797,6 +4837,15 @@ and models to look after first, by magpie's own ids only:
   `~/.config/magpie/plugin-likes.json`. The code is
   [internal/stats/plugins.go](../internal/stats/plugins.go) and
   [site/pluginstats.js](../site/pluginstats.js).
+- to usemagpie.ai too, which of the routing groups shared there were
+  imported here from a link and are still here, by their share ids only
+  (`POST /api/groups/report`, at most 50), with the same id, so the
+  gallery can say how many use each (the ids that reported it in 7 days).
+  A group of the user's own, one imported from text, and a group's name or
+  members here never go; a computer that never imported one sends nothing.
+  A like on a shared group goes there too. The code is
+  [internal/groupshare](../internal/groupshare/groupshare.go) and
+  [site/groups.js](../site/groups.js).
 
 No names, base URLs, accounts, keys, prompts or usage go. Turn that part off
 in Settings → Privacy → Share the agents, providers, models and plugins I use; the

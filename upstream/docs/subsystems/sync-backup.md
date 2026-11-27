@@ -258,10 +258,13 @@ it does, and take it back.
   before any write, here or on the server. A part's plan says `in`, `up`,
   `same` or `off`, whether it replaces a change made here (`replaces`), and
   its items added, removed or changed; memory, sign-ins and plugins removed
-  by another computer are counted. `Plan.Token` hashes what the sync would
-  do; `SyncPreviewed(token)` runs only while a new plan has the same token,
-  else `ErrPlanChanged` and the GUI shows the new plan. A preview from the
-  form (`PreviewWith`) is of the unsaved setup, and its Save and sync is
+  by another computer are counted. Successful previews always return `parts`
+  as an array. When `syncOnce` returns early because neither side has changed,
+  `parts` is empty and Settings shows “Nothing to sync”. `Plan.Token` hashes
+  what the sync would do. `SyncPreviewed(token)` runs only while a new plan
+  has the same token. Otherwise it returns `ErrPlanChanged` and the GUI
+  shows the new plan. A preview from the form (`PreviewWith`) is of the
+  unsaved setup, and its Save and sync is
   the form's ordinary save, without a token. Reached by Settings → Sync →
   Preview a sync, the form's Preview, `/api/davsync/preview`,
   `/api/davsync/sync-previewed` and `magpie <webdav|s3|github> preview`.
@@ -408,6 +411,17 @@ moves magpie's own files and cache to another disk, and back.
   `cli.Main` before anything reads a file, after the old process is gone
   and only when no gateway answers. It is made once: a failure is not asked
   for again, and why is kept in `move-result.json` for the row.
+- **Held on Windows (#7812):** there a folder can't be renamed while a
+  process has a file in it open, and an agent keeps the MCP servers it
+  started from `mcp-npm` for its whole session. `AskMove` refuses while a
+  process this magpie didn't start runs from its folders (`HeldBy`, set by
+  the cli on Windows from `proc.Family`, matched by command line in
+  `Holding`), naming each one and what started it. At the move, after up to
+  10s for what ran under the old magpie to end (`waitFree`), `movable`
+  renames each folder to `<folder>.moving-check` and back before anything
+  is copied; a refusal is a `HeldError` and nothing is touched.
+  `Unreachable`, at every start, puts back a `.moving-check` left by a
+  magpie that died between the two renames.
 - **How:** within one disk, a rename. Across disks, a copy, and the old
   folder is put aside (`.moved`) until the link is made, then removed; a
   failed copy removes the half copy and leaves the old folder as it was.
@@ -426,7 +440,9 @@ moves magpie's own files and cache to another disk, and back.
 Routes: `GET /api/datafolder`, `POST /api/datafolder/{move,home,cancel,reveal}`
 ([`datafolder.go`](../../internal/gui/datafolder.go)). Tests:
 `internal/appdir/move_test.go` (both disks, refused targets, a failed copy,
-disk gone, once only), `move_windows_test.go` (the junction),
+disk gone, once only), `held_test.go` (what holds the folders, nothing
+copied when held, the check's leftover), `move_windows_test.go` (the
+junction), `held_windows_test.go` (a file held open),
 `TestDataFolderMoveRestarts` and `data-folder.test.cjs`.
 
 ## Sign-ins, when picked

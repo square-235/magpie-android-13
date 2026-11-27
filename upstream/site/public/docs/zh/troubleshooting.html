@@ -213,6 +213,8 @@
       <tr><th>报错</th><th>原因</th><th>解决</th></tr>
       <tr><td>model disabled</td><td>你在 magpie 里关掉了这个模型。</td><td>在它的供应商里重新打开。</td></tr>
       <tr><td>model not allowed for the gateway key</td><td>这个网关密钥限定了可用的模型。</td><td>用 <code>magpie gateway-key models &lt;id&gt;</code> 查看或修改。</td></tr>
+      <tr><td>gateway_key_mcp_only</td><td>这个网关密钥只能用 MCP 服务器，不能用模型。</td><td><code>magpie gateway-key models &lt;id&gt; all</code>，或在 <span class="ui">网关</span> › <span class="ui">网关密钥</span> 里选它的模型。</td></tr>
+      <tr><td>gateway_key_no_mcp</td><td>这个网关密钥只能用模型，不能用 MCP 服务器。</td><td><code>magpie gateway-key mcp &lt;id&gt; all</code>，或在密钥的 ⋯ 菜单里选它的 MCP 服务器。</td></tr>
       <tr><td>magpie doesn’t answer the web page …</td><td>有网页在浏览器里调用网关。</td><td>把它加到 <span class="ui">设置</span> › <span class="ui">网络与共享</span> › <span class="ui">网页</span>，并发送网关密钥。</td></tr>
     </table></div>
 
@@ -272,6 +274,7 @@
       <tr><td>端口 … 已被其他程序占用，请换一个</td><td>换一个空闲端口。</td></tr>
       <tr><td>另一个 magpie 正在 … 提供网关：请在那边设端口，或先退出它</td><td>运行了两个 magpie，退出一个。</td></tr>
       <tr><td>端口 … 被其他程序占用（可能是 magpie web）：magpie 每隔几秒会再试一次</td><td>找到占用端口的程序，或把网关换到别的端口。</td></tr>
+      <tr><td>Windows 为 Hyper-V、WSL 或 Docker 保留了端口 …</td><td>没有程序占用它，所以 netstat 里看不到。把网关换到别的端口，或以管理员身份运行 <code>net stop winnat</code>，再运行 <code>net start winnat</code>。<code>netsh interface ipv4 show excludedportrange protocol=tcp</code> 可以列出保留的端口范围。</td></tr>
       <tr><td>MAGPIE_ADDR=… 设置了网关的完整地址</td><td>取消或修改 <code>MAGPIE_ADDR</code>。</td></tr>
     </table></div>
 

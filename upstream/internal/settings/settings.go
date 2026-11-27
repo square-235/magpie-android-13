@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
@@ -61,6 +62,12 @@ var CodexClients = []string{"", "desktop"}
 // Codex asks) first.
 var CodexServiceTiers = []string{"", CodexTierStandard, "priority", "ultrafast"}
 
+// Contrast's values beside "", which follows the system.
+const (
+	ContrastMore   = "more"
+	ContrastNormal = "normal"
+)
+
 // Settings is what the user chose. "" and "system" both mean "follow the OS".
 type Settings struct {
 	Theme string `json:"theme,omitempty"` // system | light | dark
@@ -76,6 +83,11 @@ type Settings struct {
 	// Plugins page's README, for a small server where its watch for them
 	// is work enough to matter (Yayoi_no_yume on X). Off means shown.
 	NoBird bool `json:"noBird,omitempty"`
+	// Contrast is Increase contrast, as the system's: darker text, edges
+	// that read at 3:1 and plainer selection, for low vision
+	// (usrname1833 on Discord). "" follows the system's
+	// prefers-contrast, ContrastMore turns it on, ContrastNormal off.
+	Contrast string `json:"contrast,omitempty"`
 	// Accent is the colour picked for magpie's buttons, links and
 	// selection, as #rrggbb; "" keeps magpie's own (CHENGJIAHEGOXIS on
 	// X). Each theme draws it as dark or light as its text needs.
@@ -446,6 +458,17 @@ type Settings struct {
 	// say, how early is the same trade for each. Read through
 	// ResetLead, which takes a value out of range for the default.
 	CodexResetLead int `json:"codexResetLead,omitempty"`
+	// CodexResetDaysLeast and CodexResetDaysMost are the days a Codex
+	// reset may have left before it runs out for it to be used by itself,
+	// at either time (shangyuan0818 on X: 0 to 7, only the cards about to
+	// go spent when the week runs out): at least the first, at most the
+	// second, 0 for no bound. Days are 24 hours from now on the wall
+	// clock, not calendar days, so the zone the computer is in changes
+	// nothing. A reset that never runs out has no days left to count and
+	// is in range only with no most. Used by hand, any reset goes. Read
+	// through ResetDays.
+	CodexResetDaysLeast int `json:"codexResetDaysLeast,omitempty"`
+	CodexResetDaysMost  int `json:"codexResetDaysMost,omitempty"`
 	// CodexNoCredits are the ChatGPT accounts (lower-case) that don't
 	// spend their credits: once a usage window is used up, routing holds
 	// the account as used up and goes on to the user's other accounts,
@@ -548,6 +571,13 @@ type Settings struct {
 	// (the lookup failed) holds nothing. Off, as by default, magpie only
 	// warns.
 	ClaudeRegionHold bool `json:"claudeRegionHold,omitempty"`
+	// ClaudeWaysOut are the ways out to the internet the user lets Claude
+	// subscription requests take: regions by ISO 3166-1 code (US), and
+	// addresses, an IP or a CIDR range (mamba on Discord). A way out in
+	// none of them is judged as one outside Anthropic's list: warned of,
+	// and held while ClaudeRegionHold is on. Empty, as by default,
+	// Anthropic's Supported Regions Policy decides (egress.Supported).
+	ClaudeWaysOut []string `json:"claudeWaysOut,omitempty"`
 	// ClaudePrintMode runs a Claude subscription's Claude Code as `claude
 	// -p` always. Off, as by default, a model request runs in Claude
 	// Code's interactive mode, as a person runs it, and never as -p: the
@@ -1053,6 +1083,14 @@ type Settings struct {
 	// (molianyin4227 on Discord: models differ, so one size for every
 	// agent fits none). An agent with none follows those two (ForAgent).
 	AgentCompacts map[string]AgentCompact `json:"agentCompacts,omitempty"`
+	// AgentCompactPcts is where in its window an agent compacts, as a
+	// percent, by its kind (CompactPctAgents; moooyo on Discord: compact
+	// once 65% of the context is used). The window is the one Long
+	// conversations gives the agent (the working window, a size typed, a
+	// model's own Compact at, or the whole window under Full window), so
+	// 65 under Full window is 65% of the model's whole context. An agent
+	// with none compacts where it does by default. See CompactPercent.
+	AgentCompactPcts map[string]int `json:"agentCompactPcts,omitempty"`
 	// AgentContexts is the context window an agent is told for a model, when
 	// it is not the one every agent is told (ul3140773077392 on X: dsh
 	// compacts earlier than Codex does at the same window, so its window
@@ -1565,6 +1603,31 @@ func (s Settings) ResetLead() time.Duration {
 	return time.Duration(m) * time.Minute
 }
 
+// CodexResetDaysLimit is the most either of CodexResetDaysLeast and
+// CodexResetDaysMost can be set to: a year, past any reset ChatGPT grants.
+const CodexResetDaysLimit = 365
+
+// ResetDays is how long a Codex reset may have left before it runs out
+// for it to be used by itself: at least least, at most most, most 0 for
+// no bound. A value written by hand below 0 counts as 0, and one past
+// CodexResetDaysLimit as it; least past most is taken as written, so no
+// reset is used by itself, never as no range at all.
+func (s Settings) ResetDays() (least, most time.Duration) {
+	day := func(n int) time.Duration { return time.Duration(min(max(n, 0), CodexResetDaysLimit)) * 24 * time.Hour }
+	return day(s.CodexResetDaysLeast), day(s.CodexResetDaysMost)
+}
+
+// ResetInDays says whether a Codex reset that runs out at until (nil:
+// never) is in ResetDays' range at now, by the wall clock.
+func (s Settings) ResetInDays(until *time.Time, now time.Time) bool {
+	least, most := s.ResetDays()
+	if until == nil {
+		return most == 0
+	}
+	left := until.Round(0).Sub(now.Round(0))
+	return left >= least && (most == 0 || left <= most)
+}
+
 // SearchCountDefault is the pages a search is answered with when
 // SearchCount is 0, and SearchCountMost the most it can be set to: Brave
 // and Tavily return no more than 20.
@@ -1825,6 +1888,34 @@ type AgentCompact struct {
 // model tables (auto_compact_threshold_percent of the model's window).
 // Only these take an AgentCompact.
 var CompactAgents = []string{"codex", "claude", "grok"}
+
+// CompactPctAgents are the agents that take a percent of their window to
+// compact at (AgentCompactPcts), each by a knob of its own read from its
+// source: Claude Code's CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (a percent of its
+// auto-compact window, never past the window less 13K), Codex's
+// auto_compact_token_limit (tokens, so the percent of the window it is
+// given), Grok Build's auto_compact_threshold_percent and Qwen Code's
+// context.autoCompactThreshold (a fraction of the window).
+var CompactPctAgents = []string{"codex", "claude", "grok", "qwen"}
+
+// CompactPercent is the percent of its window the agent of that kind
+// compacts at (AgentCompactPcts), 0 for its own default.
+func (s Settings) CompactPercent(kind string) int {
+	if p := s.AgentCompactPcts[kind]; p > 0 && p <= 100 {
+		return p
+	}
+	return 0
+}
+
+// AtPercent is n tokens at p percent, rounded down so the agent never
+// compacts later than p, and n as it is for p of 0 (the agent's default)
+// or 100.
+func AtPercent(n, p int) int {
+	if p <= 0 || p >= 100 || n <= 0 {
+		return n
+	}
+	return max(1, n*p/100)
+}
 
 // ForAgent is s as the agent of that kind reads Long conversations: its
 // own AgentCompact in CompactAt and FullContext, when it has one.
@@ -2717,6 +2808,11 @@ func saveOwn(s Settings, recording, reads bool) error {
 	if !slices.Contains(Langs, s.Lang) {
 		return fmt.Errorf("language must be one of %v, not %q", Langs, s.Lang)
 	}
+	for _, w := range s.ClaudeWaysOut {
+		if !WayOut(w) {
+			return fmt.Errorf("a way out for Claude must be a region code (US), an IP or a CIDR range, not %q", w)
+		}
+	}
 	if !slices.Contains(Trays, s.Tray) {
 		return fmt.Errorf("tray must be one of %v, not %q", Trays, s.Tray)
 	}
@@ -3035,7 +3131,13 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	// the file there now is kept first, before anything below can make
 	// one: as the last good generation, or aside when it doesn't read
-	if err := lastgood.Keep(Path(), validSettings, 0o600); err != nil {
+	// one edited by hand that doesn't parse is the user's, left as it is:
+	// Load gave its last good generation, and saving that over it lost the
+	// edit (sarosaka1023 on X)
+	if err := lastgood.KeepEdited(Path(), validSettings, 0o600); err != nil {
+		if e := (*lastgood.EditedError)(nil); errors.As(err, &e) {
+			return fmt.Errorf("could not read settings at %s (%s); magpie left it unchanged and runs on its last good copy: repair or move that file aside before saving", Path(), e.Why)
+		}
 		return err
 	}
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
@@ -3072,6 +3174,7 @@ func saveOwn(s Settings, recording, reads bool) error {
 
 func (s Settings) normal() Settings {
 	s.Name = CleanName(s.Name)
+	s.ClaudeWaysOut = cleanWaysOut(s.ClaudeWaysOut)
 	if s.Theme == "" {
 		s.Theme = "system"
 	}
@@ -3363,4 +3466,32 @@ func ClientAgentsNow() map[string]string {
 		return clientAgents(load().ClientAgents)
 	}
 	return m
+}
+
+// WayOut says whether w is a way out ClaudeWaysOut can hold: a region's
+// two-letter code, an IP, or a CIDR range.
+func WayOut(w string) bool {
+	if len(w) == 2 && w[0] >= 'A' && w[0] <= 'Z' && w[1] >= 'A' && w[1] <= 'Z' {
+		return true
+	}
+	if _, err := netip.ParseAddr(w); err == nil {
+		return true
+	}
+	_, err := netip.ParsePrefix(w)
+	return err == nil
+}
+
+// cleanWaysOut trims each way out, writes a region's code in capitals,
+// and drops blanks and repeats; nil when none is left.
+func cleanWaysOut(ws []string) []string {
+	var out []string
+	for _, w := range ws {
+		if w = strings.TrimSpace(w); len(w) == 2 {
+			w = strings.ToUpper(w)
+		}
+		if w != "" && !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return out
 }

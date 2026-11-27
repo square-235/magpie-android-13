@@ -2,7 +2,9 @@ package agent
 
 import (
 	"cmp"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/wslrun"
 )
@@ -49,27 +52,43 @@ func realReachProbe(base string) bool {
 	return true
 }
 
-// magpieProbe says whether base answers as a magpie gateway: GET base/ is
-// 200 with {"name":"magpie"} (the gateway's info), as it is through a
-// reverse proxy that forwards base to it. A var for tests.
+// magpieProbe says whether base answers as this magpie's gateway: GET
+// base/ is 200 with {"name":"magpie"} (the gateway's info), as it is
+// through a reverse proxy that forwards base to it, and proves it is this
+// magpie, not another one: a magpie on a server of the user's answers as
+// magpie too (Alex on Discord: the cloud magpie in Nowledge Mem read as
+// connected here). A var for tests.
 var magpieProbe = realMagpieProbe
 
 func realMagpieProbe(base string) bool {
 	c := &http.Client{Timeout: 3 * time.Second}
-	res, err := c.Get(strings.TrimSuffix(base, "/") + "/")
+	u, nonce := selfAsk(base)
+	res, err := c.Get(u)
 	if err != nil {
 		return false
 	}
-	return answersAsMagpie(res)
+	return answersAsMagpie(res, nonce)
 }
 
-// answersAsMagpie: res, closed here, is the gateway's info (GET /).
-func answersAsMagpie(res *http.Response) bool {
+// selfAsk is the URL of base's info asking whether it is this magpie
+// (gateway.SelfProof), and the nonce asked with.
+func selfAsk(base string) (u, nonce string) {
+	b := make([]byte, 16)
+	rand.Read(b)
+	nonce = hex.EncodeToString(b)
+	return strings.TrimSuffix(base, "/") + "/?" + gateway.SelfParam + "=" + nonce, nonce
+}
+
+// answersAsMagpie: res, closed here, is this magpie's gateway's info (GET
+// /?self=nonce): named magpie, with this magpie's proof for nonce. Another
+// magpie, or one from before the proof, names itself without it.
+func answersAsMagpie(res *http.Response, nonce string) bool {
 	defer res.Body.Close()
 	var info struct {
 		Name string `json:"name"`
+		Self string `json:"self"`
 	}
-	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&info) == nil && info.Name == "magpie"
+	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&info) == nil && info.Name == "magpie" && gateway.IsSelfProof(nonce, info.Self)
 }
 
 // magpieAt is whether base answers as magpie (magpieProbe), and whether
@@ -184,6 +203,38 @@ func chainsToGateway(v, want string) bool {
 	return up.Scheme == w.Scheme && up.Port() == w.Port() && up.Port() != "" &&
 		strings.TrimSuffix(up.Path, "/") == strings.TrimSuffix(w.Path, "/") &&
 		up.User == nil && up.RawQuery == ""
+}
+
+// biliLaneRE is billion-context's lane in front of an address, as bili
+// writes it (isBiliClaudeBaseUrl in its dist): its proxy on this
+// machine's loopback, /bili/, a protocol bili names (anthropic/) or none,
+// then the http(s) address it forwards to.
+var biliLaneRE = lazyre.New(`^(https?://(?:127\.0\.0\.1|localhost|\[::1\]):\d{1,5}/bili/(?:[a-z][a-z0-9-]*/)?)(https?://\S+)$`)
+
+// biliLane splits v, an address behind billion-context's lane
+// (http://127.0.0.1:18787/bili/https://api.anthropic.com), into the lane
+// (http://127.0.0.1:18787/bili/) and the address bili forwards to. bili
+// reads its upstream from the path alone, so the gateway's address in
+// that place is bili forwarding to magpie. A lane in front of another
+// lane is split at the first, so writing the gateway after it leaves one.
+func biliLane(v string) (prefix, upstream string, ok bool) {
+	m := biliLaneRE.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// biliToMagpie is the lane (biliLane) in front of v when what bili
+// forwards to is on this machine: magpie's own provider in an agent's
+// config behind bili's lane, at the gateway's address before its port
+// moved (Rewire). "" for any other v.
+func biliToMagpie(v string) string {
+	p, up, ok := biliLane(v)
+	if !ok || onAnotherMachine(up) {
+		return ""
+	}
+	return p
 }
 
 // magpieAsked is magpieAt waited for, for a write: base, not asked yet, is
