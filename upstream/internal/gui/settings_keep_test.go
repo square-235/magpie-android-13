@@ -132,6 +132,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ModelCompacts:        map[string]int{"p/*": 500000},
 		CompactAt:            400000,
 		AgentCompacts:        map[string]settings.AgentCompact{"claude": {At: 600000}},
+		AgentCompactPcts:     map[string]int{"claude": 65},
 		AgentContexts:        map[string]map[string]int{"dsh": {"p/m": 400000}},
 		ModelPrices:          map[string]settings.ModelPrice{"p/m": {Input: &one, Output: &two}},
 		ModelWires:           map[string]string{"p/m": "vendor-c/m"},
@@ -191,6 +192,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		CodexAutoReset:       []string{"me@example.com"},
 		CodexAutoResetOnly:   map[string]string{"me@example.com": "expiring"},
 		CodexResetLead:       180,
+		CodexResetDaysLeast:  1,
+		CodexResetDaysMost:   7,
 		CodexNoCredits:       []string{"me@example.com"},
 		CodexCreditsLast:     []string{"two@example.com"},
 		CodexCreditsFirst:    []string{"three@example.com"},
@@ -239,6 +242,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.BusyLoad = 150                                // the Routing page's busy-load
 	was.MTLS = true                                   // Network and sharing's settings/mtls
 	was.Wallpaper = 1700000000000                     // Settings > General's Background image, appearance/wallpaper
+	was.Contrast = settings.ContrastMore              // Settings > General's Increase contrast, sent by its own row alone
 	was.HTTPS = true                                  // Network and sharing's settings/https
 	was.OnTop = true                                  // the title bar's pin, window/ontop
 	was.ImageResolution = "4K"                        // Settings > Images' Resolution row, sent by that row alone

@@ -4,7 +4,9 @@
 // Library is off; in the header's row Library's head leads to it, and
 // Settings' search finds it. A row says who made it (an agent, or the page
 // saving itself), when, and how many versions it
-// has, and a click opens it at the gateway's address; its menu copies the
+// has, and a click opens it at the gateway's address (in a browser on
+// another computer, at the page's own, which hands /a/ to the gateway:
+// Crazybiaobiao on X); its menu copies the
 // link, opens an earlier version, shares it on usemagpie.ai and stops
 // sharing it, and deletes it after asking. With none
 // there it says what one is, offers asks to copy, and which agents can
@@ -18,7 +20,8 @@ const { chromium, webkit } = require("playwright");
 
 const assets = path.resolve(__dirname, "../assets");
 const A = "a".repeat(26), B = "b".repeat(26);
-const at = (id, n) => `http://127.0.0.1:3425/a/${id}${n ? "@" + n : ""}/`;
+const atGateway = (id, n) => `http://127.0.0.1:3425/a/${id}${n ? "@" + n : ""}/`;
+const at = atGateway;
 const now = Date.now();
 const artifacts = [
   { id: A, title: "Quarterly report", created: new Date(now - 3 * 864e5).toISOString(), updated: new Date(now - 2 * 36e5).toISOString(), url: at(A),
@@ -31,16 +34,16 @@ const artifacts = [
 ];
 
 const words = {
-  en: { nav: "Artifacts", page: "Saved from the page", versions: "2 versions", empty: "No artifacts yet", copy: "Copy link", earlier: "Earlier versions", del: "Delete", v1: "Version 1",
-    share: "Share…", shareGo: "Share", shared: "Shared", copyShared: "Copy shared link", stop: "Stop sharing", ask: "Make a one-page report of this week's git commits, with a chart", can: "Agents that can make one: ", turnOn: "Turn it on in the Library", manage: "Manage", many: "25 agents can make one" },
-  zh: { nav: "Artifacts", page: "由页面保存", versions: "2 个版本", empty: "还没有 Artifact", copy: "复制链接", earlier: "之前的版本", del: "删除", v1: "版本 1",
-    share: "分享…", shareGo: "分享", shared: "已分享", copyShared: "复制分享链接", stop: "停止分享", ask: "把这周的 git 提交做成一页带图表的周报", can: "可以做 Artifact 的 Agent：", turnOn: "在资源库中开启", manage: "管理", many: "25 个 Agent 可以做 Artifact" },
-  "zh-TW": { nav: "Artifacts", page: "由頁面儲存", versions: "2 個版本", empty: "還沒有 Artifact", copy: "複製連結", earlier: "之前的版本", del: "刪除", v1: "版本 1",
-    share: "分享…", shareGo: "分享", shared: "已分享", copyShared: "複製分享連結", stop: "停止分享", ask: "把這週的 git 提交做成一頁帶圖表的週報", can: "可以做 Artifact 的 Agent：", turnOn: "在資源庫中開啟", manage: "管理", many: "25 個 Agent 可以做 Artifact" },
-  ja: { nav: "Artifacts", page: "ページから保存", versions: "2 個のバージョン", empty: "Artifact はまだありません", copy: "リンクをコピー", earlier: "以前のバージョン", del: "削除", v1: "バージョン 1",
-    share: "共有…", shareGo: "共有", shared: "共有中", copyShared: "共有リンクをコピー", stop: "共有を停止", ask: "今週の git コミットをグラフ付きの 1 ページのレポートにして", can: "Artifact を作れるエージェント：", turnOn: "ライブラリでオンにする", manage: "管理", many: "25 個のエージェントが Artifact を作れます" },
-  de: { nav: "Artifacts", page: "Von der Seite gespeichert", versions: "2 Versionen", empty: "Noch keine Artifacts", copy: "Link kopieren", earlier: "Frühere Versionen", del: "Löschen", v1: "Version 1",
-    share: "Teilen …", shareGo: "Teilen", shared: "Geteilt", copyShared: "Geteilten Link kopieren", stop: "Nicht mehr teilen", ask: "Mach aus den Git-Commits dieser Woche einen einseitigen Bericht mit Diagramm", can: "Agents, die eines erstellen können: ", turnOn: "In der Bibliothek einschalten", manage: "Verwalten", many: "25 Agents können eines erstellen" },
+  en: { nav: "Artifacts", install: "Install as app", page: "Saved from the page", versions: "2 versions", empty: "No artifacts yet", copy: "Copy link", earlier: "Earlier versions", del: "Delete", v1: "Version 1",
+    share: "Share…", shareGo: "Share", shared: "Shared", copyShared: "Copy shared link", openShared: "Open shared page", stop: "Stop sharing", ask: "Make a one-page report of this week's git commits, with a chart", can: "Agents that can make one: ", turnOn: "Turn it on in the Library", manage: "Manage", many: "25 agents can make one" },
+  zh: { nav: "Artifacts", install: "安装为应用", page: "由页面保存", versions: "2 个版本", empty: "还没有 Artifact", copy: "复制链接", earlier: "之前的版本", del: "删除", v1: "版本 1",
+    share: "分享…", shareGo: "分享", shared: "已分享", copyShared: "复制分享链接", openShared: "打开分享页", stop: "停止分享", ask: "把这周的 git 提交做成一页带图表的周报", can: "可以做 Artifact 的 Agent：", turnOn: "在资源库中开启", manage: "管理", many: "25 个 Agent 可以做 Artifact" },
+  "zh-TW": { nav: "Artifacts", install: "安裝為應用程式", page: "由頁面儲存", versions: "2 個版本", empty: "還沒有 Artifact", copy: "複製連結", earlier: "之前的版本", del: "刪除", v1: "版本 1",
+    share: "分享…", shareGo: "分享", shared: "已分享", copyShared: "複製分享連結", openShared: "開啟分享頁", stop: "停止分享", ask: "把這週的 git 提交做成一頁帶圖表的週報", can: "可以做 Artifact 的 Agent：", turnOn: "在資源庫中開啟", manage: "管理", many: "25 個 Agent 可以做 Artifact" },
+  ja: { nav: "Artifacts", install: "アプリとしてインストール", page: "ページから保存", versions: "2 個のバージョン", empty: "Artifact はまだありません", copy: "リンクをコピー", earlier: "以前のバージョン", del: "削除", v1: "バージョン 1",
+    share: "共有…", shareGo: "共有", shared: "共有中", copyShared: "共有リンクをコピー", openShared: "共有ページを開く", stop: "共有を停止", ask: "今週の git コミットをグラフ付きの 1 ページのレポートにして", can: "Artifact を作れるエージェント：", turnOn: "ライブラリでオンにする", manage: "管理", many: "25 個のエージェントが Artifact を作れます" },
+  de: { nav: "Artifacts", install: "Als App installieren", page: "Von der Seite gespeichert", versions: "2 Versionen", empty: "Noch keine Artifacts", copy: "Link kopieren", earlier: "Frühere Versionen", del: "Löschen", v1: "Version 1",
+    share: "Teilen …", shareGo: "Teilen", shared: "Geteilt", copyShared: "Geteilten Link kopieren", openShared: "Geteilte Seite öffnen", stop: "Nicht mehr teilen", ask: "Mach aus den Git-Commits dieser Woche einen einseitigen Bericht mit Diagramm", can: "Agents, die eines erstellen können: ", turnOn: "In der Bibliothek einschalten", manage: "Verwalten", many: "25 Agents können eines erstellen" },
 };
 const LINK = "https://usemagpie.ai/a/abcdefghijklmnop";
 
@@ -57,6 +60,7 @@ function serve(lang, web, got, list, off) {
     if (url.pathname === "/api/library") return json({ dir: "/Users/me/.magpie/library", backups: "/Users/me/.magpie/backups", home: "/Users/me", agents: [], instructions: { agents: [], sets: [] }, servers: [], foundServers: [], projects: [], foundSkills: [], skills: [], problems: [], hooks: [] });
     if (url.pathname === "/api/artifacts/delete") { const { id } = req.postDataJSON(); got.deleted.push(id); list.items = list.items.filter((a) => a.id !== id); return json({ deleted: true }); }
     if (url.pathname === "/api/artifacts/share") { const { id } = req.postDataJSON(); got.shared.push(id); return json({ url: LINK, version: 2 }); }
+    if (url.pathname === "/api/artifacts/owner-link") { got.owned.push(req.postDataJSON().id); return json({ url: LINK + "#owner=c0de" }); }
     if (url.pathname === "/api/artifacts/unshare") { got.unshared.push(req.postDataJSON().id); return json({ unshared: true }); }
     if (url.pathname === "/api/open") { got.opened.push(req.postDataJSON().url); return json({}); }
     if (url.pathname === "/api/copy") { got.copied.push(req.postDataJSON().text); return json({}); }
@@ -74,7 +78,7 @@ async function until(fn) {
   for (let i = 0; i < 250 && !(await fn()); i++) await new Promise((r) => setTimeout(r, 20));
 }
 
-async function openPage(browser, { lang, web, width, items, off = [], agents }) {
+async function openPage(browser, { lang, web, width, items, off = [], agents, host = "magpie.test" }) {
   const context = await browser.newContext({ viewport: { width, height: 700 }, reducedMotion: "reduce" });
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
@@ -82,13 +86,13 @@ async function openPage(browser, { lang, web, width, items, off = [], agents }) 
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => { if (m.type() === "error" || /scroll not asked for/.test(m.text())) errors.push(m.text()); });
-  const got = { opened: [], copied: [], deleted: [], shared: [], unshared: [] };
+  const got = { opened: [], copied: [], deleted: [], shared: [], unshared: [], owned: [] };
   const list = { items: structuredClone(items), agents };
   // in a browser an artifact opens in a new tab, not through /api/open
   await page.exposeFunction("__opened", (u) => { got.opened.push(u); });
   await page.addInitScript(() => { window.open = (u) => { window.__opened(String(u)); return null; }; });
   await page.route("**/*", serve(lang, web, got, list, off));
-  await page.goto("http://magpie.test/?view=artifacts");
+  await page.goto(`http://${host}/?view=artifacts`);
   return { context, page, errors, got };
 }
 
@@ -99,9 +103,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     test(`${engine} ${lang}: Artifacts lists, opens, copies, opens a version and deletes`, async (t) => {
       const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
       t.after(() => browser.close());
-      for (const [web, width] of [[false, 1000], [false, 560], [true, 420]]) {
-        const where = `${web ? "browser" : "window"} ${width}px`;
-        const { context, page, errors, got } = await openPage(browser, { lang, web, width, items: artifacts });
+      // a browser on another computer (magpie.test), and one on this
+      // computer, which keeps the gateway's address and its full runtime
+      for (const [web, width, host] of [[false, 1000], [false, 560], [true, 420], [true, 1000, "127.0.0.1:3430"]]) {
+        const where = `${web ? "browser" : "window"} ${width}px${host ? " at " + host : ""}`;
+        const { context, page, errors, got } = await openPage(browser, { lang, web, width, items: artifacts, host });
+        const away = web && !host;
+        const at = (id, n) => away ? atGateway(id, n).replace("http://127.0.0.1:3425/", "http://magpie.test/") : atGateway(id, n);
         const nav = page.locator('#nav button[data-view="artifacts"]');
         if (!web || width > 600) {
           assert.equal((await nav.textContent()).trim(), w.nav, where);
@@ -140,6 +148,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await until(() => got.opened.length >= 2);
         assert.deepEqual(got.opened, [at(A), at(A, 1)], `${where}: opens version 1`);
 
+        // the newest, asked to install
+        await more.click();
+        await page.locator(".row-menu .rm-item", { hasText: w.install }).click();
+        await until(() => got.opened.length >= 3);
+        assert.deepEqual(got.opened.slice(2), [at(A) + "#install"], `${where}: installs the newest`);
+
         // one version: no Earlier versions
         await rows.nth(1).locator(".art-more").click();
         assert.equal(await page.locator(".row-menu .rm-item", { hasText: w.earlier }).count(), 0, where);
@@ -153,7 +167,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await dialog.locator("button.danger-fill").click();
         await page.waitForFunction(() => document.querySelectorAll("#view-artifacts .art-row").length === 1);
         assert.deepEqual(got.deleted, [A], where);
-        assert.equal(got.opened.length, 2, `${where}: deleting opened nothing`);
+        assert.equal(got.opened.length, 3, `${where}: deleting opened nothing`);
         assert.deepEqual(errors, [], where);
         await context.close();
       }
@@ -193,6 +207,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await item(w.copyShared).click();
         await until(() => got.copied.length >= 2);
         assert.deepEqual(got.copied, [LINK, LINK], where);
+        // the owner opens the shared page with a one-time code
+        await row.locator(".art-more").click();
+        await item(w.openShared).click();
+        await until(() => got.opened.length);
+        assert.deepEqual(got.owned, [A], where);
+        assert.deepEqual(got.opened, [LINK + "#owner=c0de"], `${where}: opens the owner link`);
         await row.locator(".art-more").click();
         await item(w.stop).click();
         await dialog.waitFor();
@@ -200,7 +220,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await until(() => got.unshared.length);
         assert.deepEqual(got.unshared, [A], where);
         await page.waitForFunction((s) => !document.querySelector("#view-artifacts .art-row .sub").textContent.includes(s), w.shared);
-        assert.equal(got.opened.length, 0, `${where}: sharing opened the row`);
+        assert.equal(got.opened.length, 1, `${where}: sharing opened the row`);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${where}: scrolls sideways`);
         assert.deepEqual(errors, [], where);
         await context.close();

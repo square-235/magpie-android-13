@@ -28,8 +28,8 @@ func TestDimSkillsShared(t *testing.T) {
 	if cx := targetByID("codex"); cx == nil || !slices.Contains(cx.SkillsAlso, "dim") {
 		t.Errorf("codex reads dim's skills too: %+v", cx)
 	}
-	if tg.MCP != nil || tg.Instructions != "" {
-		t.Errorf("dim is given skills only: %+v", tg)
+	if tg.MCP != nil {
+		t.Errorf("dim is given no MCP servers: %+v", tg)
 	}
 
 	src := filepath.Join(h, "src/skills")
@@ -40,8 +40,9 @@ func TestDimSkillsShared(t *testing.T) {
 	if !ours(shared, "pdf") {
 		t.Error("~/.agents/skills/pdf isn't the library's")
 	}
-	if _, err := os.Lstat(cx); !os.IsNotExist(err) {
-		t.Error("codex has a second link to it")
+	// codex's own link stays: ChatGPT's Work reads its folder alone
+	if !ours(cx, "pdf") || realDir(cx) != realDir(shared) {
+		t.Error("codex hasn't its own link to the library's")
 	}
 	ok(t)(SkillAgents("pdf", []string{"codex"}))
 	if !ours(cx, "pdf") {
@@ -61,5 +62,43 @@ func TestDimSkillsShared(t *testing.T) {
 	ok(t)(ProjectSkill(proj, "pdf", []string{"dim"}))
 	if !ours(filepath.Join(proj, ".agents/skills/pdf"), "pdf") {
 		t.Error("the project's .agents/skills/pdf isn't the library's")
+	}
+}
+
+// lml on Discord: Library › Instructions said Dim keeps no user-wide
+// instructions file. Dim reads ~/AGENTS.md, "# User instructions
+// (~/AGENTS.md)" (read_instructions in arcships/dim's prompt_sources.rs,
+// in dimcode-alpha 0.1.0-alpha.29's binary): magpie's part goes in there
+// beside the user's own lines, and comes out again with them kept. A
+// project's AGENTS.md is the file Dim reads in a project.
+func TestDimInstructionsInHomeAgentsMD(t *testing.T) {
+	h := sandbox(t)
+	t.Setenv("DIMCODE_HOME", "")
+	os.MkdirAll(filepath.Join(h, ".dimcode-alpha"), 0o755)
+	holdCLI(t, h, "dima")
+
+	p := filepath.Join(h, "AGENTS.md")
+	if tg := targetByID("dim"); tg == nil || tg.Instructions != p {
+		t.Fatalf("dim: %+v", tg)
+	}
+	write(t, p, "Mine.\n")
+	shared := "Use tabs."
+	ok(t)(SaveInstructions(InstructionsChange{Shared: &shared, Agents: []string{"dim"}}))
+	if s := read(t, p); s != "Mine.\n\n"+blockBegin+"\nUse tabs.\n"+blockEnd+"\n" && s != "Mine.\n"+blockBegin+"\nUse tabs.\n"+blockEnd+"\n" {
+		t.Fatalf("~/AGENTS.md:\n%q", s)
+	}
+	v, err := ReadInstructions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(v.Agents, func(a AgentInstructions) bool { return a.Agent == "dim" && a.Path == p && a.On }) {
+		t.Errorf("the page doesn't list Dim's file: %+v", v.Agents)
+	}
+	ok(t)(SaveInstructions(InstructionsChange{Agents: []string{}}))
+	if s := read(t, p); s != "Mine.\n" {
+		t.Errorf("taken back:\n%q", s)
+	}
+	if ProjectInstrFile("dim") != "AGENTS.md" {
+		t.Errorf("dim reads a project's AGENTS.md, not %q", ProjectInstrFile("dim"))
 	}
 }

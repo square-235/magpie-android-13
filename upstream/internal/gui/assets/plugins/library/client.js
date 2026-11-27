@@ -14,6 +14,8 @@ magpie.plugin("library", (ctx) => {
 
   let lib = null;        // the page, as /api/library gives it
   let taken = 0;         // how many times lib was set, for a read to tell a newer answer came first
+  let wholeAt = 0;       // the last time it was set whole, not a part of it
+  const partAt = {};     // when each key was last set by a part of the page
   let tab = "instructions";
   let shown = "";        // the tab the page last drew, which fades in only when it changes
   let fits = [];         // textareas to fit before the page is painted
@@ -607,7 +609,22 @@ magpie.plugin("library", (ctx) => {
   // written kept as they were last clicked. A server or skill added,
   // removed or renamed changes what the market calls added (#300): one gone
   // from the library loses its mark at once, and the market is asked again.
+  // What a change to the MCP servers alone answers with (library.ReadMCP):
+  // reading the whole page again went through every agent's skill folders,
+  // seconds of each Save on Windows (zysicyj on X).
+  const MCP_PART = ["agents", "servers", "foundServers", "projects", "plugins", "mcpHub"];
   function take(v) {
+    // a part of the page, the rest kept as it is: the instructions' (#1624)
+    // or the MCP servers'
+    if (v.part) {
+      const keys = v.part === "mcp" ? MCP_PART : ["instructions"], from = v.part === "mcp" ? v.mcp : v;
+      const p = { ...lib, problems: v.problems, result: v.result };
+      for (const k of [...keys, "problems"]) {
+        if (k !== "problems") p[k] = from[k];
+        partAt[k] = taken + 1;
+      }
+      v = p;
+    } else if (v !== lib) wholeAt = taken + 1; // lib taken again is no newer than it was
     // What the reader hid stays hidden while it still fails and nothing
     // else does: every change writes every agent again, so a file magpie
     // can't stat fails at each one (#3745). A failure not hidden brings the
@@ -682,8 +699,12 @@ magpie.plugin("library", (ctx) => {
     try {
       const at = taken;
       const v = await api("library");
-      // a change answered meanwhile, with the library as it is after it
-      if (taken !== at) return;
+      // a change answered meanwhile, with the library as it is after it;
+      // one answered with a part of it, newer than this read in that part
+      if (taken !== at) {
+        if (wholeAt > at) return;
+        for (const k of Object.keys(partAt)) if (partAt[k] > at) v[k] = lib[k];
+      }
       const was = lib && seen(lib);
       take(v);
       if (glanced && tab !== "skills") return;
@@ -710,7 +731,7 @@ magpie.plugin("library", (ctx) => {
   // click doesn't make or remove a set twice (Hipple, #1624: a minute a
   // click with nothing to show for it).
   let changing = false;
-  async function change(path, body, done) {
+  async function change(path, body, done, settled) {
     if (changing) return false;
     changing = true;
     const ev = window.event;
@@ -723,9 +744,9 @@ magpie.plugin("library", (ctx) => {
     let ok = false;
     try {
       const v = await api("library/" + path, body);
-      take(v.part === "instructions" ? { ...lib, instructions: v.instructions, problems: v.problems, result: v.result } : v);
+      take(v);
       status(""); // what it did, said next, or nothing for one that says nothing
-      report(v.result, done);
+      report(v.result, done, null, settled);
       ok = true;
       return true;
     } catch (e) {
@@ -741,7 +762,10 @@ magpie.plugin("library", (ctx) => {
   }
   // given, for a row's agent chips, is the agents that have it now: an
   // agent written that isn't one of them had it taken out (#332).
-  function report(res, done, given) {
+  // settled, for the warning's own skills, is the agents settled: the
+  // others' own skills, still in the warning, aren't said again in place
+  // of what was done (zysicyj on X: each of ten clicks told of the rest)
+  function report(res, done, given, settled) {
     if (!res) return;
     // subagents imported from a repository (subagent_import.go)
     const sa = res.subagents;
@@ -786,9 +810,10 @@ magpie.plugin("library", (ctx) => {
       status(parts.join(" · "), skipped.length ? "warn" : "ok", skipped.length ? 12000 : 6000);
       return;
     }
-    if (res.problems?.length) {
-      const p = res.problems[0];
-      status(t("{agent}: {error}", { agent: tilde(nameOf(p.agent)), error: p.error }) + (res.problems.length > 1 ? " " + t("(and {n} more)", { n: res.problems.length - 1 }) : ""), "warn", 8000);
+    const told = (res.problems || []).filter((p) => !settled || failure(p) || settled.includes(p.agent));
+    if (told.length) {
+      const p = told[0];
+      status(t("{agent}: {error}", { agent: tilde(nameOf(p.agent)), error: p.error }) + (told.length > 1 ? " " + t("(and {n} more)", { n: told.length - 1 }) : ""), "warn", 8000);
       return;
     }
     const n = res.changed?.length || 0;
@@ -843,6 +868,19 @@ magpie.plugin("library", (ctx) => {
       hide.append(svg("M4.5 4.5l7 7M11.5 4.5l-7 7", 11, 1.6));
       hide.title = t("Hide until something new can't be written");
       ttl.append(again, hide);
+    } else if (owns.size > 1) {
+      // every agent's settled the same way at once, one write for them all
+      // (zysicyj on X: ten agents of forty each, a click each); Claude
+      // Desktop's own are only ever kept
+      const own = Object.fromEntries(owns);
+      const ids = [...owns.keys()], taking = ids.filter((id) => id !== "claude-desktop");
+      const all = menuButton(t("All agents"), "lib-problems-all", () => openProtoMenu(all, [
+        ...(taking.length ? [{ v: "use", name: "Use the library's", note: "" }] : []),
+        { v: "keep", name: "Keep each agent's own", note: "" },
+      ], "", (v) => v === "use"
+        ? change("skills/use-library-all", { own }, t("Every agent listed has the library's skills now; their own are kept with the backups"), taking)
+        : change("skills/keep-own-all", { own }, t("Every agent listed keeps its own skills"), ids), "For every agent listed", "", "right"));
+      ttl.append(all);
     }
     card.append(ttl);
     const ul = el("ul");
@@ -869,11 +907,11 @@ magpie.plugin("library", (ctx) => {
       const body = one ? { name: names[0], agent: id } : { names, agent: id };
       const fix = el("div", "lib-problems-fix");
       if (!desktop) {
-        const use = button(t("Use the library's"), "action", () => change("skills/use-library", body, one ? t("{agent} has the library's {name} now; its own is kept with the backups", { agent: who, name }) : t("{agent} has the library's {names} now; its own are kept with the backups", { agent: who, names: name })));
+        const use = button(t("Use the library's"), "action", () => change("skills/use-library", body, one ? t("{agent} has the library's {name} now; its own is kept with the backups", { agent: who, name }) : t("{agent} has the library's {names} now; its own are kept with the backups", { agent: who, names: name }), [id]));
         use.title = one ? t("Sets {agent}'s own {name} aside with the backups and gives it the library's in its place", { agent: who, name }) : t("Sets {agent}'s own {names} aside with the backups and gives it the library's in their place", { agent: who, names: name });
         fix.append(use);
       }
-      const keep = button(t("Keep {agent}'s", { agent: who }), "action", () => change("skills/keep-own", body, one ? t("{agent} keeps its own {name}", { agent: who, name }) : t("{agent} keeps its own {names}", { agent: who, names: name })));
+      const keep = button(t("Keep {agent}'s", { agent: who }), "action", () => change("skills/keep-own", body, one ? t("{agent} keeps its own {name}", { agent: who, name }) : t("{agent} keeps its own {names}", { agent: who, names: name }), [id]));
       keep.title = one ? t("{agent} keeps its own {name}, and the library no longer gives it this skill", { agent: who, name }) : t("{agent} keeps its own {names}, and the library no longer gives it these skills", { agent: who, names: name });
       fix.append(keep);
       li.append(fix);
@@ -2980,6 +3018,7 @@ magpie.plugin("library", (ctx) => {
     }
     if (a.agent === "opencode" || a.agent === "mimocode" || a.agent === "deveco") det.append(el("p", "lib-aside", t("{agent} reads Claude Code's CLAUDE.md when it has no AGENTS.md of its own.", { agent: a.name })));
     if (a.agent === "agy") det.append(el("p", "lib-aside", t("Antigravity reads Gemini CLI's ~/.gemini/GEMINI.md as well as this file, so text given to both is read twice.")));
+    if (a.agent === "cindy") det.append(el("p", "lib-aside lib-cindy", t("This is Pi's own file, which Cindy's Pi reads. Cindy's Codex and Claude Code read Codex's and Claude Code's files: switch those on for them.")));
     if (a.profile) det.append(el("p", "lib-aside", t("This file is {agent}'s profile of you: magpie adds its part after yours and leaves your own lines in it. A USER.md in a workspace is read instead of this one.", { agent: a.name })));
     const lab = el("label", "lib-lab", t("Only for {agent}, after the shared text", { agent: a.name }));
     const ta = el("textarea", "lib-text small");
@@ -3680,7 +3719,7 @@ magpie.plugin("library", (ctx) => {
     who.append(nm, healthEl(s.name));
     const sub = el("div", "sub mono", serverLine(s));
     sub.title = serverLine(s);
-    who.append(noteSub(s.note, sub, serverLine(s)), toolsEl(s.name));
+    who.append(noteSub(s.note, sub, serverLine(s)), ...(s.bridge ? [twinsEl(s.name)] : []), toolsEl(s.name));
     row.append(mark(s.icon, s.transport === "stdio" ? GLYPH.cmd : GLYPH.web), who, ...removeAct(() => confirmRemoveServer(s)),
       // no agent to give it to: other apps reach it through the router
       ...(agentless() && !all.length ? [] : [agentChips(withGone(all, s.agents), s.agents, chipsChange("servers/agents", s.name, "servers", (x) => serverRow(x, all)), { problems: s.problems, blocked: sseBlocked(s), all: true })]),
@@ -3691,6 +3730,31 @@ magpie.plugin("library", (ctx) => {
     row.onclick = () => editServer(s);
     row.title = t("Edit {name}", { name: s.name });
     return row;
+  }
+
+  // A Remote magpie's router lists its servers' tools as <server>__<tool>,
+  // and the hub's servers synced here keep their names: the router gives
+  // an agent the Library's own and leaves the remote's copy out (twinTool
+  // in bridge_mcp.go; starballl on X: every hub tool twice). The router's
+  // row names those it leaves out, once its tools are known.
+  const routerPrefix = (n) => n.replace(/[^A-Za-z0-9_-]+/g, "-") + "__";
+  function twinsOf(name) {
+    const s = lib.servers.find((x) => x.name === name), tools = toolList(name);
+    if (!s?.bridge || !lib.mcpHub || s.hub === "direct" || s.hidden || !tools.length) return [];
+    return lib.servers.filter((o) => !o.bridge && !o.hidden && (o.agents || []).some((a) => (s.agents || []).includes(a)) &&
+      tools.some((tl) => tl.name.startsWith(routerPrefix(o.name)))).map((o) => o.name);
+  }
+  function twinsEl(name) {
+    const box = el("div", "sub lib-twins");
+    box.dataset.server = name;
+    paintTwins(box);
+    return box;
+  }
+  function paintTwins(box) {
+    const name = box.dataset.server, twins = twinsOf(name);
+    box.hidden = !twins.length;
+    box.textContent = twins.length ? t("Agents get {servers} from this Library, not again through {name}", { servers: twins.join(", "), name }) : "";
+    box.title = twins.length ? t("{name} lists the same servers, run on the other magpie. Its copies are left out, and given only while this Library's own can't list its tools", { name }) : "";
   }
 
   // Whether a server goes through the MCP router, on its row: a click
@@ -4065,6 +4129,9 @@ magpie.plugin("library", (ctx) => {
       case "refused": return [t("connection refused"), more(t("Nothing is listening at that address"))];
       case "unreachable": return [t("can't reach"), more(t("Can't reach the server"))];
       case "protocol": return [t("bad reply"), more(t("It answered, but not as an MCP server does"))];
+      // a renewal the server rate-limited (429): still signed in, and
+      // renewed once the server's wait is over (#7451)
+      case "ratelimited": return [t("renewal rate-limited"), more(t("The server is limiting how often magpie renews its sign-in. It stays signed in, and magpie renews it once the wait is over"))];
       // a ${NAME} magpie's own environment hasn't; an agent started from a
       // shell that has it still gets it
       case "novar": return [t("{names} not set", { names: h.detail }), t("magpie can't check it: {names} isn't set where magpie runs. An agent started where it is set still gets it", { names: h.detail })];
@@ -4080,6 +4147,7 @@ magpie.plugin("library", (ctx) => {
     // the hub's count of tools follows each check
     const stats = page.querySelector(".lib-hubstats");
     if (stats) stats.textContent = stats.title = hubStats();
+    page.querySelectorAll(".lib-twins").forEach(paintTwins);
     const boxes = typeof x === "string" ? page.querySelectorAll(`.lib-health[data-server="${CSS.escape(x)}"]`) : [x];
     for (const b of boxes) {
       const e = health.get(b.dataset.server);
@@ -4121,7 +4189,7 @@ magpie.plugin("library", (ctx) => {
       // agent's own launch sets says nothing of the server, so it isn't
       // painted as broken (#2308, ASD-max: Codex's host-only codex_app,
       // whose pipe Codex itself hands it)
-      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
+      b.className = "lib-health " + (e.h.state === "ok" || e.h.agentSignIn?.length ? "ok" : e.h.state === "auth" || e.h.why === "ratelimited" ? "auth" : e.h.why === "novar" || e.h.why === "wsldown" ? "unknown" : "err");
       b.replaceChildren(el("span", "", text));
       if (toolList(b.dataset.server).length) {
         const open = toolsOpen.has(b.dataset.server);
@@ -4167,8 +4235,11 @@ magpie.plugin("library", (ctx) => {
     } catch (e) {
       if (mcpSigning?.name !== name) return;
       mcpSigning = { name, state: "failed", error: t(e.message) };
+      // made direct when it admits only the apps it lists (refusedAt)
+      await api("library").then(take, () => {});
+      if (mcpSigning?.name !== name) return;
       signMoved(name);
-      editServer(s);
+      editServer(lib.servers.find((x) => x.name === name) || s);
     }
   }
   // followed with the dialog closed too, for the row to say it's signed in
@@ -4313,6 +4384,10 @@ magpie.plugin("library", (ctx) => {
         // magpie's words in the reader's language, where it has them
         mcpSigning = { name, state: "failed", error: t(e.message) };
         draw();
+        // a server that admits only the apps it lists is made direct
+        // (refusedAt, #1619): the rows, and the form's Save, take it
+        await api("library").then(take, () => {});
+        render();
         ready?.failed?.(e.message);
       }
     }
@@ -4612,6 +4687,11 @@ magpie.plugin("library", (ctx) => {
     // a server whose sign-in doesn't let magpie register itself (GitHub's,
     // 新v学员 on Discord): the fields for the user's own app open
     ready.failed = (msg) => {
+      // the server as saved: Sign in saved the form first when it differed
+      if (d.hub !== "direct" && lib.servers.find((x) => x.name === d.name)?.hub === "direct") {
+        d.hub = "direct";
+        drawKeep();
+      }
       if (!msg.startsWith(NO_REGISTRATION) || !appBox) return;
       appOpen = true;
       drawApp();

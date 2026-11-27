@@ -13,6 +13,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/groupshare"
 	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -60,6 +61,13 @@ type groupsJSON struct {
 	// Imported: import's answer, the group added and what of the text
 	// this magpie has none of (provider.ImportGroup)
 	Imported *provider.Imported `json:"imported,omitempty"`
+	// Published: publish's answer, the group's link on usemagpie.ai
+	// (groupshare.Publish)
+	Published *groupshare.Mine `json:"published,omitempty"`
+	// Links: the groups the user shared on usemagpie.ai, by id here; From:
+	// those imported from one there, the shared group's id and version
+	Links map[string]groupshare.Mine `json:"links"`
+	From  map[string]groupshare.From `json:"from"`
 	// Accounts: by provider id, the accounts and keys a group may be held
 	// to (Group.Accounts), as a gateway key's list has them (#905): each
 	// provider with more than one, or one a group names already
@@ -111,6 +119,7 @@ type groupDefaultsJSON struct {
 type skippableJSON struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"` // the provider's logo, for its row and chip
 }
 
 type groupJSON struct {
@@ -365,6 +374,7 @@ func groupsState() groupsJSON {
 	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), OfOne: provider.AutoGroupsOfOneOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
 	out.JSRoutings = middleware.Routings()
+	out.Links, out.From = groupshare.Shared(), groupshare.Sources()
 	def := settings.Load()
 	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience}
 	for i := range out.Templates {
@@ -534,7 +544,7 @@ func groupsState() groupsJSON {
 	out.Skippable = []skippableJSON{}
 	for _, p := range provider.All() {
 		if p.Ready() || slices.Contains(out.Skip, p.ID) {
-			out.Skippable = append(out.Skippable, skippableJSON{ID: p.ID, Name: p.Name})
+			out.Skippable = append(out.Skippable, skippableJSON{ID: p.ID, Name: p.Name, Icon: p.Icon})
 		}
 	}
 	for _, id := range out.Skip {
@@ -589,16 +599,20 @@ func groupRoutes(mux *http.ServeMux) {
 			// Replace: the text's id, when it is a group of the user's,
 			// replaces that group (provider.ImportGroupOver)
 			Replace bool `json:"replace"`
+			// sharing on usemagpie.ai (groups_share.go)
+			groupShareBody
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
 			return
 		}
 		in := body.Group
+		if groupShareAction(rw, r, r.PathValue("action"), in.ID, body.Text, body.Replace, body.On, body.groupShareBody) {
+			return
+		}
 		var err error
 		var moved []agent.Move
 		var shared string
-		var imported *provider.Imported
 		switch r.PathValue("action") {
 		case "found":
 			// off, an agent set to a found group is moved to its model
@@ -644,15 +658,6 @@ func groupRoutes(mux *http.ServeMux) {
 		case "share":
 			// the group as text for another magpie: no key goes with it
 			shared, err = provider.ShareGroup(in.ID)
-		case "import":
-			var res provider.Imported
-			imp := provider.ImportGroup
-			if body.Replace {
-				imp = provider.ImportGroupOver
-			}
-			if res, err = imp(body.Text); err == nil {
-				imported = &res
-			}
 		case "template":
 			_, err = provider.AddTemplate(body.Kind, in.Name)
 		case "switch":
@@ -677,7 +682,7 @@ func groupRoutes(mux *http.ServeMux) {
 			return
 		}
 		st := groupsState()
-		st.Moved, st.Shared, st.Imported = moved, shared, imported
+		st.Moved, st.Shared = moved, shared
 		writeJSON(rw, st)
 	})
 }

@@ -28,7 +28,7 @@ import (
 // written.
 var Keys = []string{
 	// Appearance
-	"theme", "accent", "colorblind", "reduceMotion", "noBird", "lang", "uiFont", "codeFont",
+	"theme", "contrast", "accent", "colorblind", "reduceMotion", "noBird", "lang", "uiFont", "codeFont",
 	// the tray, the Dock and this computer
 	"tray", "dock", "dockWindow", "dockNever", "lightweight", "gpuRendering", "keepAwake", "keepAwakeDisplay",
 	"noWSLAgents", "sessionTerminal", "signInLinkOnly", "quitNoAsk", "restoreOnQuit", "name",
@@ -45,7 +45,7 @@ var Keys = []string{
 	"codexWarmup", "claudeWarmup", "agyWarmup", "codexWarmAt", "claudeWarmAt", "codexWarmAts", "claudeWarmAts",
 	"workbuddyCheckin", "traeCheckin", "minimaxCheckin", "qoderCheckin", "checkinAt",
 	// models: replies, vision, images, search
-	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudeNoExtraUsage", "claudeRegionHold", "claudePrintMode", "refusalRetries", "retryAfterCap",
+	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudeNoExtraUsage", "claudeRegionHold", "claudeWaysOut", "claudePrintMode", "refusalRetries", "retryAfterCap",
 	"vision", "visionEffort", "imageGen", "videoGen", "imageTimeout", "imageResolution", "classifyTimeout",
 	// what every routing group does that says nothing of its own
 	"groupSink", "groupFirstToken", "groupPatience",
@@ -60,6 +60,7 @@ var Keys = []string{
 // from the window as from the CLI). A setting's "" is its default.
 var Choices = map[string][]string{
 	"theme":           settings.Themes,
+	"contrast":        {"", settings.ContrastMore, settings.ContrastNormal},
 	"lang":            settings.Langs,
 	"tray":            settings.Trays,
 	"currency":        settings.Currencies,
@@ -250,6 +251,10 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	if _, sent := fields["reduceMotion"]; !sent {
 		in.ReduceMotion = cur.ReduceMotion
 	}
+	// nor Increase contrast, which pages before it never sent
+	if _, sent := fields["contrast"]; !sent {
+		in.Contrast = cur.Contrast
+	}
 	// nor the accent colour, which pages before it never sent
 	if _, sent := fields["accent"]; !sent {
 		in.Accent = cur.Accent
@@ -395,6 +400,8 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.FullContext = cur.FullContext     // set on its own (full-context)
 	in.CompactAt = cur.CompactAt         // and so is the threshold
 	in.AgentCompacts = cur.AgentCompacts // and each agent's own (agent-compact)
+	// and where in its window each compacts (agent-compact-pct)
+	in.AgentCompactPcts = cur.AgentCompactPcts
 	in.AgentContexts = cur.AgentContexts // and the windows each is told (agent-contexts)
 	in.ContextCap = cur.ContextCap       // and the longest window of every model (context-cap)
 	in.ContextCapAll = cur.ContextCapAll // and whether it holds the user's own windows
@@ -437,6 +444,8 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.CodexAutoReset = cur.CodexAutoReset
 	in.CodexAutoResetOnly = cur.CodexAutoResetOnly // and at which of the two times
 	in.CodexResetLead = cur.CodexResetLead         // and how early before one expires (codex-reset-lead)
+	// and which resets, by the days they have left (codex-reset-days)
+	in.CodexResetDaysLeast, in.CodexResetDaysMost = cur.CodexResetDaysLeast, cur.CodexResetDaysMost
 	// and which of them spend their credits, set there too
 	in.CodexNoCredits = cur.CodexNoCredits
 	in.CodexCreditsLast = cur.CodexCreditsLast   // and which only after everything else
@@ -458,6 +467,9 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	// gateway mode, set on its own (gateway-mode)
 	in.GatewayMode = cur.GatewayMode
 	in.NoAccountDiscovery = cur.NoAccountDiscovery // set on its own (account-discovery, or the CLI)
+	if c := in.Contrast; c != "" && c != settings.ContrastMore && c != settings.ContrastNormal {
+		return in, fmt.Errorf("contrast is %q, %q or \"\" (as the system), not %q", settings.ContrastMore, settings.ContrastNormal, c)
+	}
 	if v := strings.TrimSpace(in.Vision); v != "" && v != "off" && v != cur.Vision {
 		if _, _, ok := provider.Resolve(v); !ok {
 			return in, fmt.Errorf("no model %s to describe images", v)

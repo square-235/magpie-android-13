@@ -195,6 +195,10 @@
         <div class="who"><div class="name" data-t>Appearance</div><div class="sub om-only" data-t>Follows the Omarchy theme, as picked in Omarchy's menu</div></div>
         <div id="themeSegs" class="om-hide"></div><span class="om-only om-theme-name"></span>
       </div>
+      <div class="row pref om-hide" id="contrastRow">
+        <div class="who"><div class="name" data-t>Increase contrast</div></div>
+        <div id="contrastSegs"></div>
+      </div>
       <div class="row pref om-hide" id="accentRow">
         <div class="who"><div class="name" data-t>Accent color</div></div>
         <div id="accentPick" class="accent-pick" role="radiogroup"></div>
@@ -459,6 +463,8 @@
     <div class="list prefs" id="corsList"></div>
     <div class="row-head" id="webPageHead"><span class="label" data-t>Browser access</span></div>
     <div class="list prefs" id="webPageList"></div>
+    <div class="row-head" id="passkeyHead" hidden><span class="label" data-t>Passkeys</span></div>
+    <div class="list prefs" id="passkeyList" hidden></div>
     <div class="row-head" id="remoteHead"><span class="label" data-t>Another magpie</span></div>
     <div class="list prefs" id="remoteList"></div>
     <details class="prefs-more" id="netMore">
@@ -564,6 +570,10 @@
     <div class="row pref" id="codexResetLeadRow" hidden>
       <div class="who"><div class="name" data-t>How early before one expires</div><div class="sub wraps" data-t>For every account with "before one expires" on: the reset about to run out unused is used this long before it does. Earlier loses what the account's windows have left then; the default is half an hour.</div></div>
       <div id="codexResetLeadPick"></div>
+    </div>
+    <div class="row pref" id="codexResetDaysRow" hidden>
+      <div class="who"><div class="name" data-t>Days left for one used by itself</div><div class="sub wraps" data-t>Only a reset with this many days left before it expires is used by itself, the soonest first. Empty is any; using one by hand isn't held to it.</div></div>
+      <div id="codexResetDaysPick"></div>
     </div>
   </div>
   <div class="list prefs" id="codexWarmList" data-feature="warmups">

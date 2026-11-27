@@ -31,14 +31,8 @@ type Target struct {
 	// Field, when it is set, says the instructions are not the file itself
 	// but the string at this key path of the JSON file Instructions names
 	// (WorkBuddy's personalization.customPrompt): instr_field.go.
-	Field string
-	MCP   *mcpFile
-	// MCP2 is a second MCP file for an agent that runs more than one
-	// runtime, each reading its own format: Cindy's Pi reads
-	// pi-agent-home/mcp.json (fmtPiNative) beside its Codex config.toml.
-	// syncMCP2 writes the same servers there, tracked by the applied list
-	// MCP shares.
-	MCP2   *mcpFile
+	Field  string
+	MCP    *mcpFile
 	Skills string // the folder the agent finds skills in
 	// SkillsAlso are agents whose skills this one reads as well, as
 	// OpenCode reads Claude Code's.
@@ -411,15 +405,40 @@ func targetOf(a *agent.Agent) *Target {
 		// ~/.claude.json, Claude Code's own; a ChatGPT account added in
 		// Cindy runs Codex in a home of its own (codex-accounts), not given.
 		t.Skills = sharedSkillsDir()
+		// Cindy's Pi, its default runtime, puts Pi's own user-wide
+		// instructions in every chat's system prompt: the first there is of
+		// AGENTS.override.md, AGENTS.md, AGENTS.MD, CLAUDE.md and CLAUDE.MD
+		// in PI_CODING_AGENT_DIR, else ~/.pi/agent (readPiGlobalContext in
+		// maker-core's agents/pi/global-context.ts, resolvePiGlobalContextHome
+		// in apps/desktop's maker-host/pi-host.ts, Cindy 0.1.146; the same in
+		// 0.1.94's app.asar), not pi-agent-home, which is only its Pi's
+		// state. That is native Pi's file, so it is shared with the pi
+		// target (instrOwner writes it once) and an AGENTS.override.md of
+		// the user's is read instead, as Pi does (T_t__biu on X, #7854).
+		// Cindy's Codex reads codex-home/AGENTS.md, but that is a copy Cindy
+		// makes of ~/.codex/AGENTS.md and writes over whenever the two
+		// differ (codexGlobalRulesPaths, maker-host/codex-global-rules.ts):
+		// it reaches magpie's part through the codex target's file. Its
+		// Claude Code reads ~/.claude's CLAUDE.md (settingSources "user"),
+		// the claude target's. Teammate chats (an isolated bot profile)
+		// read none of these.
+		pd := agent.PiDir(h)
+		t.Instructions = firstThere(pd, "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
+		t.Override = filepath.Join(pd, "AGENTS.override.md")
 		if a.Dir != "" {
 			t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "codex-home", "config.toml"), Format: fmtCodex}
-			// Cindy's Pi runs with PI_CODING_AGENT_DIR at pi-agent-home in
-			// the same folder (reconcilePiDurableRuns, the CINDY_PI_API_KEY
-			// env block in Cindy 0.1.94's app.asar); native Pi reads its
-			// servers from mcp.json there (pimcp.go), its own JSON shape, so
-			// the Codex-only write never reached a Cindy Pi session, Cindy's
-			// default runtime (POM_JUMPING on X, v0.1.4777).
-			t.MCP2 = &mcpFile{Path: filepath.Join(a.Dir, "pi-agent-home", "mcp.json"), Format: fmtPiNative}
+			// Cindy's Pi gets no file: each session runs with
+			// PI_CODING_AGENT_DIR at a folder of its own,
+			// pi-agent-home/run-tmp/<random hex>, made and removed by
+			// Cindy, and with --no-extensions unless the user installed a
+			// Pi package (startSession in maker-core's agents/pi/index.ts,
+			// Cindy 0.1.148). Its bundled Pi is 0.84.4, older than 0.99,
+			// the first to read mcp.json itself (pimcp.go). Its MCP servers
+			// come only from Cindy's cindy-bridge extension, given them in
+			// CINDY_PI_MCP_BRIDGE from Cindy's own database
+			// (custom_mcp_servers), which magpie never writes.
+			// pi-agent-home/mcp.json, written from v0.1.4777, was read by
+			// nothing (cindyLeftovers takes magpie's servers out of it).
 		}
 	case "craft-agents":
 		// Craft Agents reads user-wide skills from ~/.agents/skills
@@ -443,8 +462,13 @@ func targetOf(a *agent.Agent) *Target {
 		// from <cwd>/.agents/skills (dim-agent-capabilities' skills
 		// catalog: SKILLS_DIR under the platform's home, $HOME or
 		// %USERPROFILE%, and under the folder it runs in; arcships/dim
-		// c68dad5). Skills only: Dim's MCP servers and instructions aren't
-		// given, and nothing here touches its sign-in or its requests.
+		// c68dad5). Its user-wide instructions are AGENTS.md in that same
+		// home, "# User instructions (~/AGENTS.md)" (read_instructions in
+		// dim-agent-capabilities' prompt_sources.rs; the string is in
+		// dimcode-darwin-arm64 0.1.0-alpha.29's binary; lml on Discord).
+		// Dim's MCP servers aren't given, and nothing here touches its
+		// sign-in or its requests.
+		t.Instructions = filepath.Join(h, "AGENTS.md")
 		t.Skills = sharedSkillsDir()
 	case "hermes":
 		// Hermes Agent reads mcp_servers from $HERMES_HOME/config.yaml, the
@@ -1064,6 +1088,11 @@ func targets(gone bool) []*Target {
 	return out
 }
 
+// detectAgents is agent.All, which finds each agent on PATH and in its
+// folders: seconds on Windows, so a change finds them once, not once for
+// each skill it settles (zysicyj on X). A test counts the finds.
+var detectAgents = agent.All
+
 // targetsAsleep is targets, and the agents in WSL distros that aren't
 // running now: none is a target, as its files can't be opened without
 // starting the distro, but the page lists them (asleepView). Each running
@@ -1075,7 +1104,7 @@ func targetsAsleep(gone bool) ([]*Target, []*agent.Agent) {
 	for _, a := range apps() {
 		own[a.ID] = true
 	}
-	for _, a := range agent.All() {
+	for _, a := range detectAgents() {
 		// the agents here, and a folder an agent shares with its vendor's
 		// other app when only that app is here: the Cursor editor reads
 		// ~/.cursor's mcp.json and skills with no cursor-agent installed
@@ -1208,6 +1237,18 @@ func takesCopies(id string) bool { return id == "trae-cn" }
 // 2026.5.13). ZCode reads it beside ~/.zcode/skills (#4987). mu is Pi
 // 1.4.0 (core/package-manager.ts, qybaihe/mu b71cd18).
 var readsShared = []string{"codex", "gemini", "opencode", "deveco", "crush", "dsh", "ds-bot", "commandcode", "devin", "droid", "cline", "grok", "kigi", "grok-app", "fx", "alma", "kimi", "omo", "zcode", "mu"}
+
+// ownFolderToo are the readers of ~/.agents/skills that are read by
+// something else too that reads their own folder alone, so each library
+// skill they have through the shared folder is linked in their own as
+// well. Codex: the ChatGPT app (26.1117.41037) registers only
+// $CODEX_HOME/skills and its plugins' folders as the skill roots of its
+// local Work executor (readCapabilityRoots, "codex-home-skills", in its
+// app.asar), so a ChatGPT chat in Work finds no skill kept only in
+// ~/.agents/skills (Young on Discord). Codex's own sessions (codex
+// 0.171.0-alpha.13 in that app, 0.172.0) read both and list a skill
+// reached by both once, by its real path.
+func ownFolderToo(id string) bool { return id == "codex" }
 
 // Pi reads ~/.agents/skills from 0.54.0 (2026-02-19, its CHANGELOG: "Added
 // default skill auto-discovery for .agents/skills locations … global

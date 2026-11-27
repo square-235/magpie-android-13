@@ -618,6 +618,25 @@ none for `defaultWorkspace`). Read only, no resume or delete. Tests:
 `TestCatPawSessions`, `TestCatPawTranscript` (rows made by CatPaw's own
 CREATE statements and message shapes; no signed-in conversation was had).
 
+Hermes Agent keeps its sessions as rows in each profile's `state.db`
+(SQLite in WAL mode): the home (`HERMES_HOME`, else `~/.hermes`, else
+`%LOCALAPPDATA%\hermes` on Windows) and each `profiles/<name>`
+(`HermesDirs`). A session's path is the database and `#` its id. What
+was said is read from the same rows its counts are (`hermesTranscript`,
+through `eachMessageOf`): a rewind's dropped rows and model-only
+scaffolding are left out, a compaction's archived turns are kept once,
+and a row Hermes never shows (`display_kind` `hidden`) is skipped. A
+row's content is Hermes's `_encode_content` (the text, or `\x00json:`
+and its parts); an assistant's `reasoning` (or `reasoning_content`) is
+its thinking, its OpenAI `tool_calls` its tool uses, and a `tool` row's
+answer is named by its `tool_name`. A compaction's handoff summary is
+context and the turn after its end marker is said (`hermesDisplayText`).
+Before, Hermes had no transcript, so Show conversation, search and
+memory learning passed every Hermes session over (CFK on Discord).
+Read only, no resume or delete. Tests: `TestHermesTranscript` (Hermes's
+own CREATE statements, schema 31, and row encodings; no real Hermes
+conversation was read), `TestHermesSessionsRead` in memdistill.
+
 ## Local Gateway Conversation Recording
 
 The Sessions page offers an explicit, default-off recording switch. Confirmation
@@ -702,7 +721,59 @@ and otherwise a known gateway session from what its transcript reads
 (`sessions.WriteGatewayMarkdown`, "Recorded by: magpie's gateway", with a note
 when turns or a part's end weren't kept). A magpie that others reach as a
 remote magpie has no file of their agents' sessions, so this is the only way
-it can export them. Verification: `TestGatewaySessionExportsMarkdown`.
+it can export them. Both take `only=said` (the Sessions page's Export
+Markdown menu, "Messages only"; usrname1833 on Discord): `sessions.KeepSaid`
+keeps the user's and the agent's text and images, leaves out thinking, tool
+calls and results and context, says so under the heading, and names the file
+`…-messages.md`. Any other `only` exports the whole conversation.
+Verification: `TestGatewaySessionExportsMarkdown`, `TestSessionExportOnlySaid`,
+`TestMarkdownKeepSaid`, `TestGatewayMarkdownKeepSaid`; browser
+`sessions-export.test.cjs`.
+
+The conversation sheet (`drawTalk` in the sessions plugin's `client.js`)
+draws each turn as the user's words (`sess-ask`), one fold of its steps
+(`details.sess-steps`, "N steps": thinking, tool calls and results, context
+and what the agent said on the way), and its last words (`sess-final`, the
+turn's last assistant text). A turn with no last words shows its fold only.
+In the fold each step is a line (thinking, context) or its first three lines
+(`brief`), and a click or Enter shows it whole. Which folds and steps were
+opened survives a redraw (`stepsOpen`, `stepFull`); a search hit inside a fold
+opens it. A fold's steps are drawn when it is first opened (the summary's
+click, before the fold shows, so it never opens empty), or at once when it is
+open from before or holds the hit. `[data-turn]` is on the user's messages,
+always drawn, so it still counts the turns. With 300 turns of 8 tool calls,
+the sheet has 4,233 nodes instead of 30,933. It opens in 199ms instead of
+245ms in Chromium, and 227ms instead of 361ms in WebKit. Verification: browser
+`sessions-talk-steps.test.cjs`.
+
+A transcript holds the first `transcriptMax` (400,000) characters of its
+parts, thinking and tool output included, and says `cut` when there was
+more. The sheet then ends in "Show the rest": it asks
+`GET /api/sessions/transcript?…&after=<n>` (`TranscriptAfter`,
+`SubagentTranscriptAfter`; n is `from` plus the parts it holds), adds what
+comes back and draws the turns again, until a read is not cut. Before, the
+sheet stopped at the cut with a muted line and no way on, so a long
+session's last turns couldn't be seen (usrname1833 on Discord). A gateway
+session's cut is turns the gateway didn't keep, with nothing after to
+read: it keeps the line and gets no button. `SessionText` (`magpie sessions
+show`, the sessions MCP's `read_session`) reads from `from` the same way;
+it used to read the cut start again, so its "go on from" past the cut never
+reached the end. The Markdown export reads the whole file and was never
+cut. Verification: `TestTranscriptAfterReadsTheRest`,
+`TestSessionTextReadsPastTheCut`; browser `sessions-talk-rest.test.cjs`.
+
+The sheet's "turn i / N" counts the whole session. A first read that is cut,
+or starts past the start (a search's, `from` > 0), carries `turns`, the
+user's text messages in the whole file, and `turnsBefore`, those among the
+`from` parts it skipped (`sessions.Counted`, `SubagentCounted`; a turn is
+the `turn` of `TurnsOf`, the same parts the sheet marks `[data-turn]`).
+They cost a second scan of the file, so a read that holds the whole session
+and a `after=` read (the sheet has N already) aren't counted, and
+`TranscriptOf`'s other callers (memdistill, the CLI) never pay it. Before,
+N was the turns drawn, about 18 of a long real session (usrname1833 on
+Discord). Verification: `TestCountedCountsTheWholeFile`,
+`TestSessionTranscriptCountsEveryTurn`; browser
+`sessions-talk-turns.test.cjs`.
 
 A gateway session without a saved Desktop name is titled by what it was
 first asked (YOU on Discord), not its `ses_…` id: `sessions.GatewayTitle` reads the first 8 complete turns of
@@ -1118,7 +1189,14 @@ The Antigravity desktop app's stable and Insiders stores are read by
 store. Each conversation takes its title and workspace from the
 `conversation_summaries.db` beside its own store, including later title
 updates. Model calls reuse the app's read-only SQLite/protobuf reader,
-including response folding and gateway matching. Insiders session ids
+including response folding and gateway matching. A call counts once by
+the vendor's response id its step names (`antigravityCallID`), in
+whichever conversation's database it is: a subagent's call is written in
+its database and its parent's, and was counted once for each
+(Taytay_19891213 on X). A step with no response id counts by its
+conversation and step. Only Usage's call reads are deduplicated this way;
+the Sessions page's per-conversation totals still hold the shared call in
+both. Insiders session ids
 have an `insiders-` prefix in magpie, leaving stable ids unchanged and
 keeping equal UUIDs in the two stores from sharing a session or call id.
 The files themselves are not renamed. Sessions stay read-only with no
@@ -1135,6 +1213,8 @@ reads the session again. A conversation with no transcript is
 Verification: `TestAntigravityInsidersSessions` covers Insiders alone,
 both stores with the same UUID, per-model tokens, call ids, summary refresh
 and turning the existing reading choice off, using #2190's real step bytes.
+`TestAntigravityAppSubagentCallOnce` puts one of those steps in a second
+conversation's database beside a call alike in all but its response id.
 `TestAntigravityAppTranscript` reads a conversation the app's 2.30 language
 server had with a read_file call (testdata/antigravity-2.30-tools) from
 stable, Insiders and a WSL distro's store; `TestAntigravityAppNoTranscript`.
@@ -1283,17 +1363,34 @@ arguments are never kept, not even masked.
   server, the Requested cell the tool, and the status Succeeded or
   Failed. The Purpose filter names `kind:mcp` "MCP tool"
   (`purposeKinds`, `purposes.js`).
+- **Counted by tool:** while the Purpose filter is `kind:mcp`
+  (`Filter.picksMCP`), a requests page also holds `Tools` (`tools` in
+  `/api/usage/requests`, `mcp_tools.go`; tomtanir and lyl50478600 on X):
+  each server and tool's calls among the rows the filter keeps, how many
+  failed, the last, and `per_day`, the calls over the days from the tool's
+  first call in the period to its end (now for one not ended), one at
+  least, or over the one day of a day's page. It is read from the probe
+  chunk only (`mcpTools`; the ledger path tallies its own rows), and for
+  no other purpose, so the cells, their cache and `settledCountVersion`
+  don't change. The page shows it as the Tool calls card under the chart
+  (`drawLedTools`, `#ledTools`), the most called first.
+  `TestMCPToolCallsCounted` and `usage-mcp-tools.test.cjs` cover it.
 
 ### Claude Code's helper requests and the largest cache write
 
 Claude Code's AgentSummary ("Describe your most recent action in 3-5
 words.") and its auto mode classifier name themselves nowhere in the
 request, so `inferredKind` (observe.go) tells them by their content, for
-a `claude-cli/` request on the Messages API only, and the ledger row's
+a Claude Code request on the Messages API only, and the ledger row's
 Kind is `agent_summary_inferred` or `auto_mode_check_inferred`
 (`usage.InferredSuffix`). The name says "(inferred)"; both spellings share
 the plain kind's purpose, which a client marker would use. Anything else
-stays unmarked.
+stays unmarked. Claude Code's request is told by its `claude-cli/`
+User-Agent, or, from another magpie, by the agent's User-Agent that magpie
+names (`ClientUAHeader`, `claudeCodeAsks`); until 11-26 a Remote magpie
+recorded the relayed helpers unmarked (recih, #7852). The header counts
+only on a magpie's request, so a direct one that sets it is not taken for
+Claude Code's.
 
 A requests page also holds `BigWrite` (big_write.go): the gateway-served
 row that wrote the most to the cache, kept per chunk (`chunkPart.big`) and

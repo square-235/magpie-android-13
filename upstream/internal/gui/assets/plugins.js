@@ -87,8 +87,7 @@
   // with several, the reader picks one by name
   const signInTo = (b, outs, ev) => {
     if (outs.length === 1) return pluginSignIn(outs[0].id, ev);
-    openProtoMenu(b, outs.map((x) => ({ v: x.id, name: subName(x), literalName: true, note: "" })), "",
-      (id, e) => pluginSignIn(id, e), "Sign in to which subscription", "", "right");
+    provCombo("provPop", b, { items: outs.map((x) => ({ id: x.id, name: subName(x), icon: x.icon })), head: "Sign in to which subscription", align: "right", pick: (id, e) => pluginSignIn(id, e) });
   };
   // whether version a comes after b in semver's order, as update.Newer
   const newer = (a, b) => {
@@ -229,6 +228,7 @@
   }
 
   async function load() {
+    backAt = performance.now();
     window.pmPartners?.again();
     if (!mine && !listings) draw();
     const parts = [
@@ -255,6 +255,39 @@
     askGit();
   }
   window.loadPlugins = load;
+  // pluginsBack: the window back on this page (app.js load, on focus or
+  // shown again). What's installed and its sign-ins are read again, with
+  // npm's newest versions of the installed ones as the server kept them
+  // (an hour; Check for updates asks npm now), at most every 15 s, and
+  // drawn only when something changed. Never while the reader is mid-way:
+  // an action or a check running, an editor or a question open, a menu or
+  // a dialog up, a field of the page being typed in.
+  let backAt = 0;
+  const midway = (f = document.activeElement) => busy.size || checking || editing || asking || !$("#modal").hidden ||
+    $(".pop:not([hidden])") || page.contains(f) && f.matches("input,textarea,[contenteditable]");
+  window.pluginsBack = async () => {
+    if (!mine || performance.now() - backAt < 15e3 || midway()) return;
+    const mark = backAt = performance.now();
+    let m, p;
+    try { [m, p] = await Promise.all([api("plugins"), api("providers")]); } catch { return; }
+    const ns = (m.plugins || []).filter((e) => onNPM(e.spec)).map((e) => name(e.spec));
+    if (ns.length) try { Object.assign(npm, (await api("plugins/npm?names=" + encodeURIComponent(ns))).npm); } catch {}
+    // read since (an action's, the page's own load): that one stands
+    if (backAt !== mark) return;
+    if (view !== "plugins" || midway()) { backAt = 0; return; }
+    const was = JSON.stringify([mine, providers?.plugins]);
+    mine = m;
+    providers = p;
+    if (m.jsRoutings) state.jsRoutings = m.jsRoutings;
+    failed = "";
+    merge();
+    if (JSON.stringify([mine, providers?.plugins]) === was) return;
+    window.loadPluginPages?.();
+    window.agentsStale?.();
+    draw();
+    window.renderPluginDot?.();
+    askGit(true);
+  };
   // the sidebar's dot, followed: Plugins opens on Installed, where the
   // plugins with an update are named at the top
   window.pluginTabTo = (id) => { tab = id; };
@@ -290,9 +323,12 @@
   };
 
   async function refresh() {
+    backAt = performance.now();
     // a plugin installed, switched on or off, or removed brings its
     // page's tab, or takes it, now: not on the Plugins page's next load
     window.loadPluginPages?.();
+    // ...and an agent it adds or takes is read when Agents is opened next
+    window.agentsStale?.();
     try {
       const [m, p] = await Promise.all([api("plugins"), api("providers")]);
       mine = m;
