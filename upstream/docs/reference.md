@@ -146,6 +146,7 @@ line; agents connected to magpie lose it when it quits.
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
 | Dim (alpha, `dima`) | Dim's built-in **Magpie** provider, through Dim's own daemon (`$DIMCODE_HOME`, else `~/.dimcode-alpha`), and magpie's own `dim.json` beside its settings | model (Dim's Magpie provider gets the gateway's `/v1` and magpie's key, is turned on and made Dim's model, so a plain `dima` runs on magpie; no other provider is touched, and a key or address you set on the Magpie entry yourself is kept. Picking Dim's own again turns the entry off and puts back the model Dim was on. When Dim's daemon can't be reached, a `dima` function in your shell profiles starts it with `DIM_BASE_URL`, `DIM_API_KEY`, `DIM_MODEL` and the token limits for that run instead) |
 | Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting). Vibe Desktop (bundle `ai.mistral.lechat.desktop`; `le-chat-desktop\Vibe.exe` on Windows) runs the same app server on the same file, lists the agent with no CLI installed, and reads the file when a chat starts |
+| Bub | `config.yml` in `$BUB_HOME`, else `~/.bub` | model (a `providers.magpie` entry, Republic's `magpie` type with the gateway's `/v1` and the key naming Bub, `openai` on a Bub 0.5 install; `model` set to `magpie:<provider>/<model>`, what was there, and an entry of your own named magpie, put back on Disconnect; Bub lists the provider's models itself; restart open bub sessions after connecting) |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`, or the folder the desktop app moved it to) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
@@ -2583,6 +2584,31 @@ Claude Code, so no turn runs through Claude Code's SDK mode, which
 spends more of the allowance than Claude Code used on its own (myduso on
 Discord). Their usage is still read and shown.
 
+*Only switch agy's sign-in* under Providers › Antigravity CLI (or
+`magpie accounts switch-only agy-cli on`) does the same for agy (#1908):
+magpie serves no request on those accounts, and using one signs agy in
+to it where agy keeps its own sign-in (the keychain on macOS, Credential
+Manager on Windows, the Secret Service or agy's token file on Linux).
+The Antigravity app (2.x) reads the same sign-in, so it moves with agy.
+The rows of agy and the Antigravity app on Agents then show the account
+and switch it, as Claude Code's does. magpie renews the account with
+Google first and keeps a copy of what agy had in `agy-keyring-backup.json`
+in magpie's folder. Quit agy and the Antigravity app first: one still
+running keeps the account it started on and writes it back over the
+switch, so magpie refuses, naming what is running, and changes nothing.
+agy started with a Gemini API key or Vertex AI in its environment isn't
+switched. The warm-up sends nothing on these accounts.
+
+Switching is by hand unless you turn on *Switch agy's account
+automatically*, shown under the tick once it is on (or `magpie accounts
+auto-switch agy-cli on`). Then, when the account agy is on has used its
+allowance, the whole account or one of its pools of models (Gemini,
+Claude & GPT), magpie signs agy in to the next account that is on and
+has room there, once agy and the app have quit; till then it waits and
+looks again every ten seconds, and a line under the switch says which
+account is used up and which agy goes to. Unticking
+*Only switch agy's sign-in* turns it off too.
+
 **Switch accounts only.** To use magpie only to switch Claude Code (or
 Codex) between your accounts, leave it not connected on Agents and sign
 your accounts in under Providers › Claude Code. Its row on Agents then
@@ -2670,8 +2696,9 @@ serves Gemini CLI's sign-in to individual accounts, only to Gemini Code
 Assist Standard and Enterprise, which need a Google Cloud project named
 (`magpie accounts project gemini <email> <project-id>`, or
 `GOOGLE_CLOUD_PROJECT` in `~/.gemini/.env`). Google may suspend an
-Antigravity account it sees used outside Antigravity, so magpie asks before
-adding one; use an account you can afford to lose.
+Antigravity account it sees used from another agent, the built-in's and
+agy-cli's (Google's own agy) alike, so magpie asks before adding the first
+one; use an account you can afford to lose.
 
 Accounts signed in elsewhere can be imported from their files instead of
 signed in again: *Import accounts from a file…* under a subscription's
@@ -3918,6 +3945,8 @@ magpie only sees the container's own address (Docker's 172.17.x), so set
 `-e MAGPIE_PUBLIC_URL=http://<the host's or NAS's address>:3425` (the port
 published on the host) for the address it shows and prints to be the one
 other machines use; behind a reverse proxy, set it to that external base URL
+as the browser opens it, `https://<name>[:<port>][/<path>]` (artifacts'
+links and the page's printed link keep its scheme, port and path, #8014),
 and follow the [authentication requirements above](#connecting-anything-else),
 especially when the proxy reaches magpie over loopback.
 Other containers on the same host reach the gateway at the host's Docker
@@ -4121,6 +4150,7 @@ application:
     - /backend-api/codex
     - /alpha/search
     - /mcp
+    - /v0/management
     - /me
     - /deepseek-chat
     - /join

@@ -41,6 +41,9 @@ type Project struct {
 	// wrote in each server's entry there (Codex's startup_timeout_sec):
 	// one other than this is the user's
 	Startup map[string]map[string]float64 `json:"startup,omitempty"`
+	// Calls are, by the project's file, the tool timeout magpie wrote in
+	// each server's entry there, as Applied's
+	Calls map[string]map[string]float64 `json:"calls,omitempty"`
 	// MadeFiles are the files magpie made to write servers in, listed in
 	// the .gitignore and taken away again once nothing's left in them
 	MadeFiles []string `json:"madeFiles,omitempty"`
@@ -130,7 +133,8 @@ type Project struct {
 // cordis.patch.yml in every profile; the same since 0.0.1-rc.3), so it is
 // given the shared one. A project folder inside a repository but not at
 // its root isn't read by dsh: run there, it looks in the repository's
-// root (#5172). MiMo Code, Crush,
+// root (#5172). Bub reads <workspace>/.agents/skills (iter_skill_roots,
+// bub/skills.py 0.6.2). MiMo Code, Crush,
 // ZCode and oh-my-pi say of no project folder magpie can rely on.
 var projectSkillsDirs = map[string]string{
 	"claude":      ".claude/skills",
@@ -150,6 +154,7 @@ var projectSkillsDirs = map[string]string{
 	"dsh":         ".agents/skills",
 	"ds-bot":      ".agents/skills",
 	"dim":         ".agents/skills",
+	"bub":         ".agents/skills",
 	"qoder":       ".qoder/skills",
 	"qoder-cn":    ".qoder/skills",
 	"codebuddy":   ".codebuddy/skills",

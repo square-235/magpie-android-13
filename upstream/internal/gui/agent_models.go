@@ -81,7 +81,11 @@ type agentModelJSON struct {
 	// Logo is its maker's: known by the model's family, or its provider's
 	// when that is the maker; "" when neither says, and for a group, which
 	// has Icons
-	Logo    string `json:"logo,omitempty"`
+	Logo string `json:"logo,omitempty"`
+	// Maker is its maker's logo as a provider's editor groups it
+	// (modelMaker), which the list groups it by when asked to (elis_pina
+	// on X); "" for a group and a maker magpie doesn't know
+	Maker   string `json:"maker,omitempty"`
 	Context int    `json:"context,omitempty"`
 	Hidden  bool   `json:"hidden,omitempty"`
 	// InUse: the agent is set to it, so it can't be taken out
@@ -93,6 +97,10 @@ type agentModelJSON struct {
 	// lists, so it is off; ticked, the list sends it as widen, and its
 	// provider or group is listed (whysugarsweet on X)
 	Kept bool `json:"kept,omitempty"`
+	// Off: turned off for every agent on the Gateway page
+	// (provider.AgentsOff), so it is hidden and not to be ticked here; the
+	// agent's own pick of it is kept for when it is turned on there
+	Off bool `json:"off,omitempty"`
 }
 
 // takesCatalog reports whether an agent picks among magpie's catalog: some
@@ -185,7 +193,7 @@ func agentModelCount(a *agent.Agent, fields []fieldJSON) *modelCountJSON {
 		c.Menu = agentMenu(a.ID)
 		return c
 	}
-	if _, only := provider.PickedModels(id); !only && len(provider.HiddenModels(id)) == 0 {
+	if _, only := provider.PickedModels(id); !only && len(provider.HiddenModels(id)) == 0 && len(provider.AgentsOff()) == 0 {
 		return nil
 	}
 	if c := modelCount(id); c.Shown < c.Listed {
@@ -286,7 +294,7 @@ func usedBy(a *agent.Agent, vals map[string]string, e provider.Entry) bool {
 func agentModelList(a *agent.Agent) []agentModelJSON {
 	id := a.ListsFor()
 	listed, kept := provider.ListedFor(id)
-	off := provider.ModelOff(id)
+	off, every := provider.ModelOff(id), provider.AgentsOff()
 	vals := a.Values()
 	out := []agentModelJSON{}
 	// the ones its visibility keeps after the rest, off, so a provider
@@ -294,17 +302,18 @@ func agentModelList(a *agent.Agent) []agentModelJSON {
 	n := len(listed)
 	for i, e := range append(listed, kept...) {
 		m := agentModelJSON{ID: e.ID, Name: e.Name, Group: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context,
-			Hidden: off(e.ID), InUse: usedBy(a, vals, e), Own: id == "codex" && provider.CodexOwn(e)}
+			Hidden: off(e.ID), InUse: usedBy(a, vals, e), Own: id == "codex" && provider.CodexOwn(e), Off: every[e.ID]}
 		if i >= n {
 			m.Hidden, m.Kept = true, true
 		}
 		if m.Name == "" {
 			m.Name = e.Model
 		}
-		m.Logo = agent.ModelIcon(e.Model)
+		m.Maker = modelMaker(e.Model, e.Name)
+		m.Logo = m.Maker
 		if e.Group != "" {
 			// a group shows its providers' icons, as it does everywhere else
-			m.Group, m.Icons, m.Logo = agent.RoutingGroups, e.Icons, ""
+			m.Group, m.Icons, m.Logo, m.Maker = agent.RoutingGroups, e.Icons, "", ""
 		} else if m.Logo == "" {
 			if p := provider.Preset(e.Provider.Preset); p != nil && p.Kind == provider.KindVendor {
 				m.Logo = e.Provider.Icon
@@ -457,6 +466,9 @@ func agentModelsAPI(mux *http.ServeMux) {
 			keptID[m.ID] = m.Kept
 			return m.Kept
 		})
+		// one turned off for every agent keeps the agent's own pick of it,
+		// whatever the list sends: it is not to be ticked here
+		every, own := provider.AgentsOff(), provider.PicksOff(id)
 		for _, m := range listed {
 			used[m.ID] = m.InUse
 		}
@@ -478,7 +490,7 @@ func agentModelsAPI(mux *http.ServeMux) {
 			}
 			var picks []string
 			for _, m := range listed {
-				if shown[m.ID] || used[m.ID] {
+				if every[m.ID] && !own(m.ID) || !every[m.ID] && (shown[m.ID] || used[m.ID]) {
 					picks = append(picks, m.ID)
 				}
 			}
@@ -501,7 +513,12 @@ func agentModelsAPI(mux *http.ServeMux) {
 		} else {
 			hidden = in.Hidden
 		}
-		hidden = slices.DeleteFunc(slices.Clone(hidden), func(s string) bool { return used[s] || keptID[s] })
+		hidden = slices.DeleteFunc(slices.Clone(hidden), func(s string) bool { return used[s] || keptID[s] || every[s] })
+		for _, m := range listed {
+			if every[m.ID] && own(m.ID) {
+				hidden = append(hidden, m.ID)
+			}
+		}
 		if err := provider.SetHiddenModels(id, hidden); err != nil {
 			fail(rw, err)
 			return

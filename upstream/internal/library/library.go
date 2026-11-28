@@ -130,6 +130,9 @@ type Library struct {
 	// stored are the skills this sync made sure of in a WSL distro's
 	// store, by path (storeSkill), with what went wrong
 	stored map[string]error
+	// olds are the old copies of skills found in each folder this
+	// change looked in, by skill (skills_old.go)
+	olds map[string]map[string][]string
 }
 
 // Instructions are one shared text, and for each agent whether it gets it
@@ -168,6 +171,11 @@ type Applied struct {
 	// rules, OpenCode's tools keys). Neither holds one the user had.
 	ToolsOff  map[string][]string `json:"toolsOff,omitempty"`
 	ToolRules []string            `json:"toolRules,omitempty"`
+	// ArtifactOwn: the user took magpie's deny of Claude Code's own
+	// Artifact out of its settings.json while Magpie Artifacts was given
+	// to it. The tool is theirs, and no Sync writes the deny again until
+	// the server is no longer ticked for the agent (artifacts.go).
+	ArtifactOwn bool `json:"artifactOwn,omitempty"`
 	// Hooks are the entries magpie wrote into the agent's hooks, each
 	// exactly as written: one changed since is the user's (hooks.go)
 	Hooks []HookEntry `json:"hooks,omitempty"`
@@ -187,6 +195,10 @@ type Applied struct {
 	// entry (Codex's startup_timeout_sec): one there other than this is
 	// the user's
 	Startup map[string]float64 `json:"startup,omitempty"`
+	// Calls is, for each server, the tool timeout magpie wrote in its
+	// entry, in the entry's unit (callKeys): one there other than this is
+	// the user's
+	Calls map[string]float64 `json:"calls,omitempty"`
 	// Picked are the skills magpie picked in the agent's own list of
 	// those it uses (LiveAgent's skills-settings.json, liveagent.go): one
 	// the user unpicked since stays unpicked
@@ -194,6 +206,10 @@ type Applied struct {
 	// Router: magpie put the skill router's entry, magpie-skills, in the
 	// agent's skills folder
 	Router bool `json:"router,omitempty"`
+	// RouterUnnamed is how many of the skills the router lists its
+	// description had no room to name (routerDesc): the agent finds them
+	// only in its SKILL.md
+	RouterUnnamed int `json:"routerUnnamed,omitempty"`
 	// RouterRules are the rules magpie put in Claude Code's
 	// permissions.allow so it reads a listed skill without asking.
 	RouterRules []string `json:"routerRules,omitempty"`
@@ -208,8 +224,8 @@ type Applied struct {
 // it looked at the agent through (#4247).
 func (a *Applied) empty() bool {
 	return !a.Instructions && a.InstrHash == "" && len(a.MCP) == 0 && len(a.Skills) == 0 &&
-		len(a.ToolsOff) == 0 && len(a.ToolRules) == 0 && len(a.Hooks) == 0 && len(a.Env) == 0 &&
-		len(a.Subagents) == 0 && len(a.Commands) == 0 && len(a.Rules) == 0 && len(a.Startup) == 0 && len(a.Picked) == 0 && !a.Router && len(a.RouterRules) == 0 && len(a.RouterCommands) == 0
+		len(a.ToolsOff) == 0 && len(a.ToolRules) == 0 && !a.ArtifactOwn && len(a.Hooks) == 0 && len(a.Env) == 0 &&
+		len(a.Subagents) == 0 && len(a.Commands) == 0 && len(a.Rules) == 0 && len(a.Startup) == 0 && len(a.Calls) == 0 && len(a.Picked) == 0 && !a.Router && len(a.RouterRules) == 0 && len(a.RouterCommands) == 0
 }
 
 var mu lock // one change at a time, from the page or the CLI's process

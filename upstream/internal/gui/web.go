@@ -123,6 +123,9 @@ func StartWeb(addr, version string) (*Web, error) {
 	}
 	w := &Web{Addr: ln.Addr().String(), key: key, quit: make(chan struct{})}
 	host, port, _ := net.SplitHostPort(w.Addr)
+	// artifacts' links name the page's address when it has a public one
+	// (#7665)
+	gateway.SetArtifactsAt(ArtifactsAt())
 	if ip := net.ParseIP(host); ip == nil || ip.IsUnspecified() {
 		host = "127.0.0.1"
 	}
@@ -200,6 +203,7 @@ func (w *Web) Close() {
 		w.srv.Close()
 		close(pageDone)
 	}
+	gateway.SetArtifactsAt("")
 	// The gateway keeps idle Claude sessions as it ends. Wait for that
 	// before returning or replacing this process, or the next turn has
 	// to replay the whole conversation instead of resuming its session.
@@ -415,8 +419,9 @@ func webGuard(cookie, key, where string, box boxSignIn, next http.Handler) http.
 // webAppFiles are the files webGuard serves without the key: the web app
 // manifest and the icons it and index.html name, so "Add to Home Screen"
 // gets them whether or not the browser sends its cookie with them. Each is
-// a file of the build, the same for every magpie; nothing in it is the
-// user's.
+// a file of the build, the same for every magpie, but for the accent
+// colour of the user's own the icons are drawn in (markRoutes), a colour
+// Settings offers and nothing more; nothing else in them is the user's.
 var webAppFiles = map[string]bool{
 	"/manifest.json":              true,
 	"/icons/apple-touch-icon.png": true,
@@ -550,19 +555,36 @@ var webLogo = sync.OnceValue(func() string {
 })
 
 // NetworkLinks are the links to the page, served on port, that other
-// machines open; key is the link's "/?k=…". MAGPIE_PUBLIC_URL with a port
-// of its own names the host the container's ports are published on, so
-// the page is at that host on its own port; one without (a reverse proxy's
-// https://magpie.example.com, #372) is where the page is, path and all.
+// machines open; key is the link's "/?k=…": PageAt when it names the
+// page's address, else MAGPIE_PUBLIC_URL's host (one with a port of its
+// own names the host the container's ports are published on, so the page
+// is there on its own port) or the gateway's own addresses.
 func NetworkLinks(port, key string) []string {
-	if u, err := url.Parse(gateway.PublicURL()); err == nil && u.Host != "" && u.Port() == "" {
-		return []string{strings.TrimRight(u.String(), "/") + key}
+	if u := PageAt(); u != "" {
+		return []string{u + key}
 	}
 	var out []string
 	for _, a := range LANAddrs() {
 		out = append(out, gateway.Scheme()+"://"+net.JoinHostPort(a, port)+key)
 	}
 	return out
+}
+
+// PageAt is the page's own address behind a reverse proxy, without a
+// trailing slash: MAGPIE_WEB_URL, else MAGPIE_PUBLIC_URL when it names a
+// proxy, path and all: one with no port (https://magpie.example.com,
+// #372), or https while magpie itself serves plain http, where TLS ends
+// at a proxy and the port is the proxy's (https://magpie.example.com:666,
+// #8014), not one a container publishes. "" otherwise.
+func PageAt() string {
+	if u := WebURL(); u != "" {
+		return u
+	}
+	u, err := url.Parse(gateway.PublicURL())
+	if err != nil || u.Host == "" || (u.Port() != "" && (u.Scheme != "https" || gateway.Scheme() == "https")) {
+		return ""
+	}
+	return strings.TrimRight(u.String(), "/")
 }
 
 // LANAddrs are this computer's addresses on the local network, for the
@@ -601,7 +623,7 @@ func closesWhenDraining(h http.Handler) http.Handler {
 // webHandler is what `magpie web` on port serves: the page and its API
 // behind the key, or box's sign-in, compressed for the browser.
 func webHandler(port, key, where string, box boxSignIn, page http.Handler) http.Handler {
-	return webCompressed(webGuard("magpie_web_"+port, key, where, box, webOwnPage(page)))
+	return webCompressed(webArtifactPages(webGuard("magpie_web_"+port, key, where, box, webArtifactLinks(webOwnPage(page)))))
 }
 
 // webOwnPage turns away a request for /api that another page sent with
@@ -736,10 +758,13 @@ func ownWeb(w Windows) bool { _, ok := w.(webHost); return ok }
 // forwarding header arrives from loopback looking like an agent here
 // (reported privately by Coffemon). Agents here use the gateway's own
 // port. Everything else (the page, its /api/*) stays behind the page's
-// allow list and key.
+// allow list and key. So does an artifact's address (/a/<ref>/) while
+// magpie isn't on the network, where the gateway opens it to no other
+// computer: the browser signed in to the page opens it there
+// (webArtifactLinks, #7665).
 func onePort(page http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		if !gateway.ClientPath(r.URL.Path) {
+		if !gateway.ClientPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, gateway.ArtifactPagePath) && !gateway.ArtifactsOpenAway() {
 			page.ServeHTTP(rw, r)
 			return
 		}

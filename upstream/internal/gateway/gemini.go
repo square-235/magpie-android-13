@@ -295,7 +295,10 @@ func parseGemini(body []byte) (*Request, error) {
 		// OpenAI's rule that a json_object's prompt say "JSON"
 		if strings.HasPrefix(gc.ResponseMimeType, "application/json") {
 			ask := "Respond with a single JSON value and nothing else"
-			r.Format = &Format{Type: "json_object"}
+			// told: the ask is the format in words already, so inSystem,
+			// for an upstream that can't take it in a field, doesn't add
+			// "a single JSON object", and an array stays one
+			r.Format = &Format{Type: "json_object", told: true}
 			if s := firstJSON(gc.ResponseJSONSchema, gc.ResponseSchema); s != "" {
 				ask += ", matching this JSON schema:\n" + s
 				r.Format = &Format{Type: "json_schema", Name: formatName, Schema: json.RawMessage(s)}
@@ -610,7 +613,12 @@ func firstJSON(xs ...json.RawMessage) string {
 }
 
 // jsonSchema turns Gemini's OpenAPI-flavoured schema into JSON Schema:
-// type names come lowercased and its own extras drop out.
+// type names come lowercased, nullable is a "null" type beside the one
+// there is (a null branch of an anyOf where there is none), and its own
+// extras drop out. A schema's keywords are read only where a schema has
+// them: under properties (and JSON Schema's other maps of schemas by
+// name) the keys are names, so a property named type, example or
+// nullable is a property like any other.
 func jsonSchema(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return nil
@@ -643,13 +651,30 @@ func jsonSchema(raw json.RawMessage) json.RawMessage {
 					default:
 						out[k] = val
 					}
-				case "nullable":
-					if b, ok := val.(bool); ok && b {
-						out["x-nullable"] = true
+				case "nullable", "propertyOrdering", "example":
+				case "default", "const", "enum", "examples":
+					// These hold JSON data, whose keys are never keywords
+					out[k] = val
+				case "properties", "patternProperties", "$defs", "definitions":
+					named, ok := val.(map[string]any)
+					if !ok {
+						out[k] = val
+						break
 					}
-				case "propertyOrdering", "example":
+					schemas := make(map[string]any, len(named))
+					for name, s := range named {
+						schemas[name] = walk(s)
+					}
+					out[k] = schemas
 				default:
 					out[k] = walk(val)
+				}
+			}
+			if x["nullable"] == true {
+				if t, ok := out["type"].(string); ok && t != "null" {
+					out["type"] = []any{t, "null"}
+				} else if alts, ok := out["anyOf"].([]any); ok && out["type"] == nil {
+					out["anyOf"] = append(alts, map[string]any{"type": "null"})
 				}
 			}
 			return out
@@ -826,7 +851,8 @@ func (e *geminiEncoder) event(ev Event) {
 				"index": 0, "groundingMetadata": g}}, "modelVersion": e.model, "responseId": e.id})
 		}
 	case KError:
-		e.w.event("", map[string]any{"error": map[string]any{"code": 502, "message": ev.Text, "status": "UNAVAILABLE"}})
+		code := cmp.Or(ev.Status, 502)
+		e.w.event("", map[string]any{"error": map[string]any{"code": code, "message": ev.Text, "status": geminiStatus(code)}})
 	}
 	e.col.add(ev)
 }

@@ -213,19 +213,46 @@ func SetKeepLogin(id string, keep bool) error {
 	return nil
 }
 
-// SetSwitchOnly has magpie only move Codex's or Claude Code's own sign-in
-// between its accounts (Provider.SwitchOnly): Codex's requests never sent
-// through the gateway for account failover, Claude's accounts serving no
-// request through the gateway (KeptToAgent). Off, both are as before.
+// SetSwitchOnly has magpie only move Codex's, Claude Code's or agy's own
+// sign-in between its accounts (Provider.SwitchOnly): Codex's requests
+// never sent through the gateway for account failover, Claude's and
+// Antigravity CLI's accounts serving no request through the gateway
+// (KeptToAgent). Off, each is as before.
 func SetSwitchOnly(id string, on bool) error {
 	p, err := Find(id)
 	if err != nil {
 		return err
 	}
-	if p.Account == nil || p.Account.Agent != p.ID || p.ID != "codex" && p.ID != "claude" {
+	agy := p.ID == agyCLIID && p.IsPlugin()
+	if !agy && (p.Account == nil || p.Account.Agent != p.ID || p.ID != "codex" && p.ID != "claude") {
 		return fmt.Errorf("magpie doesn't route %s's own requests for account failover", p.Name)
 	}
 	p.SwitchOnly = on
+	if !on {
+		// ticked again, it starts off: switching by itself is asked for
+		// each time (#1908)
+		p.AutoSwitch = false
+	}
+	return Save(*p)
+}
+
+// SetAutoSwitch has magpie sign agy in to the next Antigravity CLI account
+// with room by itself when the one it is on runs low, or leave agy's
+// account to the user's pick, the default (Provider.AutoSwitch, #1908).
+// It acts under Only switch agy's sign-in alone, so it is turned on only
+// there.
+func SetAutoSwitch(id string, on bool) error {
+	p, err := Find(id)
+	if err != nil {
+		return err
+	}
+	if p.ID != agyCLIID || !p.IsPlugin() {
+		return fmt.Errorf("magpie switches no sign-in of %s's by itself this way", p.Name)
+	}
+	if on && !p.SwitchOnly {
+		return fmt.Errorf("tick \"Only switch agy's sign-in\" under %s first: magpie switches agy's own account only then", p.Name)
+	}
+	p.AutoSwitch = on
 	return Save(*p)
 }
 

@@ -90,6 +90,7 @@ Picking a model writes it into the agent’s own config file. Only the keys magp
 | Claude Code | `~/.claude/settings.json`: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model variables in its `env` block |
 | Codex | `~/.codex/config.toml`: a `[model_providers.magpie]` table and the model, with the list in `magpie-models.json`. Your ChatGPT sign-in is left alone |
 | OpenCode, MiMo Code, DevEco Code, Pi, Crush | A `magpie` provider entry, and `magpie/provider/model` |
+| Bub | `~/.bub/config.yml`: a `magpie` provider, and `model` set to `magpie:provider/model` |
 | Open Code Review | `~/.opencodereview/config.json`: a `magpie` custom provider, made the one `ocr` uses |
 | Kigi | `~/.kigi/config.toml`: a `[model."magpie/…"]` table per model, the one picked made the default |
 | AtomCode | `~/.atomcode/config.toml`: a `magpie` provider account and one model entry per catalog model |
@@ -1609,7 +1610,7 @@ The personal plan used to be at `api.lkeap.cloud.tencent.com` until Tencent move
 
 ## The plans' models
 
-The plans give no model list of their own, and the public catalog names only their Hy models, so magpie gives the models from Tencent's plan docs: tc-code-latest, auto, glm-5.3, glm-5.3-flash, kimi-k3, kimi-k2.7-code, deepseek-v4-pro, deepseek-v4.1-flash, minimax-m3, hy4-preview, hy3, mimo-v2.6-pro, among others. tc-code-latest is whichever model the console has picked. A pay-as-you-go key reads TokenHub's `/v1/models`, which has other makers' models such as Qwen too.
+magpie asks the plan for its model list first. When it gives none, and since the public catalog names only the plans' Hy models, magpie gives the models from Tencent's plan docs (updated 2026-11-25): tc-code-latest, auto, hy4, hy4-flash, hy3, glm-5.4, glm-5.3, glm-5.3-flash, kimi-k3.1-pro, kimi-k3, kimi-k2.7-code, deepseek-v4-pro, deepseek-v4.1-flash, minimax-m3.1-flash, minimax-m3, mimo-v2.6-pro, among others. tc-code-latest is whichever model the console has picked. A pay-as-you-go key reads TokenHub's `/v1/models`, which has other makers' models such as Qwen too.
 
 ## In each agent
 
@@ -3124,7 +3125,7 @@ Some apps take a custom model only as an Ollama server: VS Code’s Copilot Olla
 
 - **Routes..** magpie answers `/api/version`, `/api/tags`, `/api/show`, `/api/chat` and `/api/generate`.
 - **The same path..** A chat there is served as `/v1/chat/completions` is, so key limits, routing, fallbacks and usage are the same. A gateway key held to some models lists only those.
-- **What it tells..** `/api/tags` and `/api/show` mark tools, vision when the model reads images, and thinking when it reasons. `/api/show` also gives the model’s window, or 32768 for one magpie doesn’t know. The `ollama` CLI’s `name:latest` finds a model called `name`.
+- **What it tells..** `/api/tags` and `/api/show` mark tools, vision when the model reads images, and thinking when it reasons. `/api/show` also gives the model’s window, and leaves it out for one magpie doesn’t know, so the client uses its own default. The `ollama` CLI’s `name:latest` finds a model called `name`.
 
 ## Troubleshooting
 
@@ -3756,7 +3757,7 @@ There is no CLI command for it. Without the window (`magpie serve`, [Docker](htt
 | Switch | What it finds |
 | --- | --- |
 | Mask secrets | Private key blocks (`-----BEGIN … PRIVATE KEY-----`). API keys by their shape: `sk-…` (OpenAI, Anthropic, OpenRouter), `ghp_`/`github_pat_`, `glpat-`, `AIza…`, `xox…-`, `sk_live_`, `AKIA`/`ASIA`, `hf_`, `gsk_`, `xai-`, `npm_`, `pypi-`, `dop_v1_`, `SG.`, Cloudflare's (`cfut_`, `cfat_`, `cfk_`, `cfoat_`, Origin CA `v1.0-`, tunnel tokens), and relay keys like `oc_sk_…`. JWTs. The password in `user:password@host`. The value of a field named for a secret, as `.env` files and configs have them: `DB_PASSWORD=…`, `api_key: …`, `client_secret`, `token`, `credential`. Your own Masking rules. Wallet private keys by the shape their wallets export: a Bitcoin WIF, a BIP32 `xprv`, an Ethereum or TRON `0x` key, a Solana key or `id.json` keypair, a Sui `suiprivkey1…`, an Aptos `ed25519-priv-0x…`, a Stellar seed, a NEAR `ed25519:…` key, a Nostr `nsec1…`, an age identity, a Zcash extended spending key, and a 12 to 25 word seed phrase after *seed* or *mnemonic* whose every word is in the BIP39 list. A key with no prefix of its own is masked only when it checks out: a WIF or `xprv` by its checksum, a Solana key by its public half, a Stellar seed by its CRC, so a Solana transaction signature goes as written. A `0x` key has the shape of a transaction hash, so it is masked only after a key&rsquo;s name (`PRIVATE_KEY=`, `--private-key`, `new Wallet(…)`, 私钥); a hash, a storage slot or a sha256 sum goes as written. An exchange&rsquo;s API key, secret and `passphrase` go by their fields&rsquo; names. |
-| Mask personal data | Emails, mainland China mobile numbers (not an 11-digit id: one under `order_id` or after 订单号 goes as written), Chinese ID numbers and bank card numbers whose checksum adds up. Also on by default: US Social Security numbers, passport numbers (after *passport*, 护照 or パスポート), IBANs, birthdays (next to *birthday*, *DOB* or 生日, and over a year ago, so today&rsquo;s date stays), MAC addresses and serial numbers (after *S/N*). Off until you turn them on, since agents send them in nearly every request: the user name in home folders (sent as a made-up name, the same every turn, so the model reads a real folder rather than a placeholder), user and computer names (`user@host`), public IP addresses (sent as a name such as `public-ip-kvxqmrtz`, so the model still knows the address is public and connects with it, and the real address goes back into its commands) and cloud storage buckets. A wallet or contract address (`0x` and 40 hex digits) is public and goes as written; a private key is still masked. |
+| Mask personal data | Emails, mainland China mobile numbers (not an 11-digit id: one under `order_id` or after 订单号, a log’s *trace* or *req*, a count or an amount such as `15012345678 bytes` or `$15012345678`, or a path’s piece such as `/users/15012345678` goes as written), Chinese ID numbers and bank card numbers whose checksum adds up. Also on by default: US Social Security numbers, passport numbers (after *passport*, 护照 or パスポート), IBANs, birthdays (next to *birthday*, *DOB* or 生日, and over a year ago, so today&rsquo;s date stays), MAC addresses and serial numbers (after *S/N*). Off until you turn them on, since agents send them in nearly every request: the user name in home folders (sent as a made-up name, the same every turn, so the model reads a real folder rather than a placeholder), user and computer names (`user@host`), public IP addresses (sent as a name such as `public-ip-kvxqmrtz`, so the model still knows the address is public and connects with it, and the real address goes back into its commands) and cloud storage buckets. A wallet or contract address (`0x` and 40 hex digits) is public and goes as written; a private key is still masked. |
 | Masked words | Each word you listed, exactly, as `{{TERM_…}}`. A date, such as *1990-05-12*, matches that day however it is written: *1990/5/12*, *1990.05.12*, *1990年5月12日*, *19900512*, *May 12, 1990*, and *13/05/1990* style only where the day can’t be read as a month. Never another date or a version like *1990.5.12.1*. |
 | Find with a local model | Under How it’s found. A model on this computer finds what no rule can: a name or an address in free text. It is on unless you turned it off, and AstrLink Guard downloads with the first masked request; until it is on disk, the rules mask alone. It needs Mask secrets or Mask personal data on, and finds under the same switches. The menu beside it picks the model: AstrLink Guard (Chinese and English, a 39 MB download, few false alarms in code, on a Mac it runs on the Neural Engine; the default) or OpenAI’s Privacy Filter (1.6 GB, uses the GPU, masks more ordinary values in code). A plugin can add models of its own to the menu ([a local masking model](plugins.html#privacy-models)), each under the name its options give; one whose plugin is off or whose files are gone says so, and until it is back the rules mask alone. Confidence threshold under it is how sure the model must be before a value is masked: Privacy Filter’s default is 0.5, AstrLink Guard’s 0.8, its publisher’s. Higher masks fewer ordinary values, and lets more real names and addresses through: the rules after the model drop most false alarms already, so the default is where we measured the fewest real values lost. The models are kept in magpie’s cache folder. To keep them elsewhere (on Windows, off the C: drive), open Advanced under the model and choose Models folder › Move…: what is downloaded is copied there, checked, and only then deleted from the old place; Move back returns it. |
 
@@ -5059,6 +5060,19 @@ The instances' names, whether they are on, and every key magpie doesn't write (s
 ## Claude Code's own routing
 
 The `env` in `~/.claude/settings.json` is applied over the process', so a Claude Code routed elsewhere in its own settings takes the magpie instance's requests there; one routed through magpie or not routed at all asks the gateway. A provider switch on there, such as `CLAUDE_CODE_USE_BEDROCK`, takes it to that cloud, and magpie's check says so.
+
+## Usage limits
+
+T3 Code's Usage → Limits can show magpie's subscriptions, and a magpie thread then says when its limit is back. In T3 Code open Settings → Providers → Usage providers → Add hub, with the gateway's address as the hub URL and a gateway key as the management key. A read-only key is enough:
+
+```
+magpie gateway-key add "T3 Code" --read-only
+# Hub URL: http://127.0.0.1:3425   Management key: the sk-magpie-key-… it prints
+```
+
+- The hub URL is the address magpie wrote into the two instances (the port in Settings' Gateway address), so T3 ties the hub's limits to them.
+- It lists the Codex, Claude and Grok accounts magpie has, each window's use and reset as magpie last read them. T3 counts every account of a harness for each of its models, so a thread shows a limit only once all of them are used up.
+- The gateway asks no vendor for it and tells no token. It answers only the hub's account list and each account's usage read; Use reset and the hub's other management routes are refused. Without a key it answers nothing, from this computer too.
 
 ## Switching back
 
@@ -9162,6 +9176,8 @@ curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'
 
 magpie's own skill `magpie-quota` lets an agent read `magpie quota --json` and wait with `magpie quota wait`. It is first in the Library's skills market. Beside it, `magpie-api` teaches an agent this API, and `/v1/models` and `/v1/magpie/route` (the model a routing group picked) too, for an agent that hands work out across models.
 
+A reader of a CLIProxyAPI hub's limits reads them too: the gateway answers that management API's account list and usage reads from these quotas, to a gateway key (read-only is enough), and nothing else of it. T3 Code's [Add hub](https://usemagpie.ai/docs/t3-code#limits) is set up this way.
+
 ## Alerts
 
 Have the magpie app notify you when any window of a subscription or plan reaches a share used, once each time the window runs, or when a balance falls to an amount or under, in its own currency or credits, once until topped up past it. Both are off until set; `off` turns either off.
@@ -9350,6 +9366,7 @@ magpie sessions search "rate limit" --agent codex --days 7 --limit 5
 magpie sessions search login --json
 magpie sessions show claude:<id> --find login    # that session, from where it was said
 magpie sessions show claude:<id> --from 40 --json
+magpie sessions show claude:<id> --full          # each message whole, not cut at 8000 characters
 ```
 
 They read only the agents you allow magpie to read. The first search on a long history builds an index of what was said, kept for the next one.
