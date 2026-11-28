@@ -452,6 +452,9 @@ func models(args []string) error {
 	for _, e := range entries {
 		w = max(w, len(e.ID))
 	}
+	// turned off for every agent on the Gateway page: still served, through
+	// a routing group or a request that names it
+	off := provider.AgentsOff()
 	last := ""
 	for _, e := range entries {
 		head, name := e.Provider.ID, e.Provider.Name
@@ -468,6 +471,9 @@ func models(args []string) error {
 		}
 		if len(e.Efforts) > 0 {
 			line += faint.Render("  " + strings.Join(e.Efforts, "/"))
+		}
+		if agentID == "" && off[e.ID] {
+			line += faint.Render("  off for agents")
 		}
 		fmt.Println(line)
 	}
@@ -1821,14 +1827,8 @@ func serve() error {
 	go stats.Run(version, "serve")
 	catalog.Seed()         // the shipped copy, when models.dev can't be reached
 	go catalog.KeepFresh() // new models' prices, in a gateway left running
-	// a signed-in account's list exists only at its vendor: asked for here
-	// as the app and the terminal ask (#1789), or a headless gateway offered
-	// the agents Cursor's fallback Auto alone; asked again while one is left
-	go func() {
-		for provider.FetchNew(20 * time.Second) {
-			time.Sleep(time.Minute)
-		}
-	}()
+	// ListenAndServe fetches missing account lists while serving, including
+	// accounts signed in by another process after startup (#7945)
 	// Codex's background app-server, restarted when it has the list from
 	// before a change and no codex session is on it
 	go agent.KeepCodexDaemonCurrent(context.Background())

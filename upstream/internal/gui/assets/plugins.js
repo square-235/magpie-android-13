@@ -165,10 +165,13 @@
     npm: { version: r.version || "", publisher: r.owner, repository: r.url, license: r.license, weekly: 0 },
   });
   // A failed ask is said, with why, list or not (till on Discord); a list
-  // had before stands. again: Try again, which asks GitHub at once.
+  // had before stands. again: Try again, which asks GitHub at once. A list
+  // older than its ten minutes comes at once, marked stale, and is asked
+  // again with wait, drawn when GitHub's answer is in (the owner, 11-27).
   async function loadTagged(again) {
     try {
-      const r = await api("plugins/github" + (again ? "?again=1" : ""));
+      const r = await api("plugins/github" + (again === "wait" ? "?wait=1" : again ? "?again=1" : ""));
+      if (r.stale && !again) loadTagged("wait").then(drawBody);
       const got = (r.repos || []).map(ghListing);
       if (!(r.error && !got.length && tagged?.length)) tagged = got;
       taggedErr = r.error || "";
@@ -231,9 +234,15 @@
     backAt = performance.now();
     window.pmPartners?.again();
     if (!mine && !listings) draw();
+    const mineIn = loadMine().then(() => { draw(); window.renderPluginDot?.(); });
+    const listed = loadListings().then(draw);
+    // npm is asked of the listings and what is installed, never of
+    // GitHub's list: it doesn't wait for it (the week did, ~20s on a
+    // first look: the owner, 11-27)
+    Promise.all([mineIn, listed]).then(() => askNPM());
     const parts = [
-      loadMine().then(() => { draw(); window.renderPluginDot?.(); }),
-      loadListings().then(draw),
+      mineIn,
+      listed,
       loadTagged().then(drawBody),
       loadBuiltins(),
       providers ? null : loadProviders().then(drawBody, () => {}),
@@ -251,8 +260,8 @@
     import("./pluginpartners.js").then(drawBody, () => {});
     import("./pluginglide.js").catch(() => {});
     await Promise.all(parts);
-    askNPM();
     askGit();
+    awaitNamed();
   }
   window.loadPlugins = load;
   // pluginsBack: the window back on this page (app.js load, on focus or
@@ -343,6 +352,36 @@
     window.renderPluginDot?.();
     askNPM(true);
     askGit(true);
+    awaitNamed();
+  }
+  // A plugin installed a moment ago has no subscriptions yet: the host
+  // lists them in the background (plugin.Cached), so its card said
+  // Installed where Sign in belongs until the page was opened again (the
+  // owner, 11-27). The page asks again each second till the plugins have
+  // answered (named), a minute at most, and draws what changed.
+  let namedTimer = 0;
+  function awaitNamed(tries = 0) {
+    clearTimeout(namedTimer);
+    if (tries >= 60 || !mine?.plugins?.some((e) => !e.off && !e.named)) return;
+    namedTimer = setTimeout(async () => {
+      if (view !== "plugins") return;
+      if (midway()) return awaitNamed(tries + 1);
+      const mark = backAt;
+      let m, p;
+      try { [m, p] = await Promise.all([api("plugins"), api("providers")]); } catch { return awaitNamed(tries + 1); }
+      // a read made since (an action's, the page's own load) stands
+      if (backAt !== mark || view !== "plugins" || midway()) return awaitNamed(tries + 1);
+      const was = JSON.stringify([mine, providers?.plugins]);
+      mine = m;
+      providers = p;
+      if (m.jsRoutings) state.jsRoutings = m.jsRoutings;
+      merge();
+      if (JSON.stringify([mine, providers?.plugins]) !== was) {
+        draw();
+        window.renderPluginDot?.();
+      }
+      awaitNamed(tries + 1);
+    }, 1000);
   }
 
   async function act(pkg, op, body, done) {
@@ -816,7 +855,9 @@
     return box;
   }
   function recSection(all) {
-    const p = npmAnswered && (countsGone || window.pmCounts?.answered)
+    // GitHub's list too: a repository there can lead Most used or Most
+    // liked, so the ranks don't move once drawn
+    const p = npmAnswered && tagged && (countsGone || window.pmCounts?.answered)
       ? weekPicks?.(all, { usersOf, likesOf, hotOf, byHot, entryOf }) : undefined;
     if (p === null) return null;
     const sec = el("section", "pm-sec pm-recs");
@@ -1070,9 +1111,33 @@
     // the body is made once, so the GitHub section's field stays in the page
     body = body || el("div", "lib-body pm-body");
     replaceKeeping(page, [head(), body]);
+    shelfKept = false;
     drawBody();
-    page.scrollTop = scroll;
+    if (!shelfKept) page.scrollTop = scroll;
     vg?.now();
+  }
+
+  // A draw keeps the shelf the reader is on where it was. The view keeps its
+  // scroll, so a section above that changes height (the week's skeleton
+  // giving way to its picks, or to nothing) moved every shelf under it: the
+  // Agents a click had brought to the top went 300 to 700px up (#7810).
+  let shelfKept = false;
+  function shelfInSight() {
+    if (!body || page.scrollTop <= 0) return null;
+    const top = page.getBoundingClientRect().top;
+    const s = [...body.querySelectorAll(":scope > .pm-sec[data-kind]")].find((x) => x.getBoundingClientRect().bottom > top + 1);
+    return s && { kind: s.dataset.kind, at: s.getBoundingClientRect().top, scroll: page.scrollTop };
+  }
+  // Chromium's own scroll anchoring may have kept it already, by moving the
+  // scroll: either way the scroll guard is told where the reader is now, or
+  // it puts the old number back (Agents at -308)
+  function keepShelf(was) {
+    const s = was && body.querySelector(`:scope > .pm-sec[data-kind="${was.kind}"]`);
+    if (!s) return;
+    const by = s.getBoundingClientRect().top - was.at;
+    if (Math.abs(by) >= 1) page.scrollTop += by;
+    shelfKept = true;
+    if (Math.abs(page.scrollTop - was.scroll) >= 1) window.arrived?.(page);
   }
 
   function drawBody() {
@@ -1110,7 +1175,9 @@
         out.push(regBox = regBox || el("div", "pm-registry"));
         import("./registry.js").then(() => pmRegistry(regBox, mine, askNPM), statusTErr);
       }
+      const at = shelfInSight();
       replaceKeeping(body, out);
+      keepShelf(at);
       vg?.now();
       if (agentsFor && body.querySelector(".pm-agents")) {
         // after the view is put back where the reader was, as showing it

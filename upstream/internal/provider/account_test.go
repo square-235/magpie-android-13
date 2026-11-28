@@ -93,6 +93,11 @@ func isolate(t testing.TB) {
 	oldAgyEnv := agyLoginEnv
 	agyLoginEnv = func(string) string { return "" }
 	t.Cleanup(func() { agyLoginEnv = oldAgyEnv })
+	// nor agy's keyring entry (#1908): a test switching agy's account
+	// gets a stand-in of its own, never the system's
+	oldAgyKeyring := agyKeyringHere
+	agyKeyringHere = func() (agyKeyring, error) { return nil, errors.New("no system keyring in tests") }
+	t.Cleanup(func() { agyKeyringHere = oldAgyKeyring })
 	forgetClaudeCredential()
 	forgetClaudeStatus()
 	devinStatus.forget()
@@ -122,6 +127,9 @@ func isolate(t testing.TB) {
 	codexSavedAsked.Lock()
 	codexSavedAsked.m = map[string]time.Time{}
 	codexSavedAsked.Unlock()
+	// nor which Codex sign-in another test's ChatGPT API account was found
+	// to be (siwcTwin)
+	forgetSIWCTwins()
 	t.Cleanup(func() {
 		claudeKeychain, claudeBase, claudeExecutable = oldKeychain, oldBase, oldExe
 		DevinExecutable = oldDevin

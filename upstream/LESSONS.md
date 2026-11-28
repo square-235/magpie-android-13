@@ -359,6 +359,24 @@ the user asking for it.**
   first.
 - Seen 1× (2026-11-24).
 
+**A read the system asks the user about (the keychain, the Secret
+Service, Credential Manager) happens on the user's own action, once.**
+Review where such a read is called from, not only what it reads.
+- plugins cdc58e35 (zcode 0.1.72, 11-27) read ZCode 3.18's key from the
+  keychain inside stateOf. The loader, every request, the model list,
+  the usage card and the check-in call stateOf. The key was kept only
+  for the plugin host's life, and a no was retried after five minutes.
+  So "magpie-bun wants to use ZCode Credential Encryption" came back
+  again and again, after ZCode had quit too (heyedisonwong on X). The
+  loop's harm scan passed it: it read only ZCode's own entry and sent
+  nothing anywhere. bfb01958 (0.1.73) reads it only in the sign-in's
+  callback, keeps the key with the sign-in, and takes a no as final;
+  063aaff26 raised the mover's min.
+- For any such read, trace its callers up to a user action. Keep what
+  it returns with the sign-in, and never ask again on your own after a
+  no.
+- Seen 1× (2026-11-27).
+
 **Before deleting or overwriting a live credential, find every record that
 could match the same key.**
 - 43a65950 matched Codex accounts by display name. Two Team seats of one
@@ -464,6 +482,22 @@ and its failure message counts against what it compared.**
 - Run such a test with `-count=10 -cpu 1,4` before calling its bound
   measured.
 - Seen 1× (2026-11-16).
+
+**An edit to a file a cache is keyed by costs every user a rebuild.**
+internal/usage's requests-v1.bin is named by a hash of rowSource's
+files (the `//go:embed` list in request_disk.go), and log-v1.bin by
+logSource's. Change one byte in one of them and every user's next start
+throws the file away and reads every call shard again.
+- e8e3a3eb2 (11-27, v0.1.4970) reused one Record in usage.go's Load and
+  last-request reader, two readers off the pages' path. usage.go is in
+  rowSource, so on a long history the first start took ~14 s of CPU and
+  ~2.6 GB of allocations. 3b7a657e7 (v0.1.4971) put usage.go back byte
+  for byte and kept the half in log_index.go, which only the cheap
+  log-v1.bin key covers.
+- Before editing a file in either embed list, ask whether the change has
+  to be there. If it does, say in the body that the cache rebuilds, and
+  what that costs on a long history. A tidy-up there is never free.
+- Seen 1× (2026-11-27).
 
 **A full run gives the slow packages room.** `go test ./...` at the default
 10m timeout times out in internal/gateway (#2108), and under load in

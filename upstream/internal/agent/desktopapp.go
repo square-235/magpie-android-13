@@ -202,6 +202,15 @@ var desktopApps = map[string]desktopApp{
 		more: []desktopApp{{id: "com.xd.cindy", names: []string{"Cindy.app"}}}},
 	"aionui":       {id: "com.aionui.app", names: []string{"AionUi.app"}},
 	"cherrystudio": {id: "com.kangfenmao.CherryStudio", names: []string{"Cherry Studio.app"}},
+	// Orca (orca.go; v1.4.281's config/electron-builder.config.cjs: appId
+	// com.stablyai.orca, productName Orca, the orca:// scheme). Its
+	// Windows installer is a one-click per-user NSIS one, so it goes to
+	// %LOCALAPPDATA%\Programs\orca (package.json's name) with
+	// executableName Orca, registered under the UUID v5 of the appId. Its
+	// deb and rpm install /opt/Orca, executableName orca-ide, not orca:
+	// GNOME's screen reader has that name.
+	"orca": {id: "com.stablyai.orca", names: []string{"Orca.app"}, win: filepath.Join("orca", "Orca.exe"), guid: "2b325ec9-0ed1-575f-ad70-e08307aee879",
+		onLinux: &linuxApp{dirs: []string{"/opt/Orca"}, exe: "orca-ide", name: "Orca", scheme: "orca"}},
 }
 
 // removedOS is the system macAppRemoved judges for; a var so a test on
@@ -264,6 +273,17 @@ func storePackages() []string {
 		return nil
 	}
 	return installedWindowsStorePackages()
+}
+
+// windowsStorePackageRoot is the registered install folder of a Store
+// package, empty when it cannot be read or the process is test-isolated
+var windowsStorePackageRoot = storePackageRoot
+
+func storePackageRoot(pkg string) string {
+	if proc.Isolated() {
+		return ""
+	}
+	return installedWindowsStorePackageRoot(pkg)
 }
 
 // windowsRegisteredApp is the folder and version an installer registered
@@ -720,9 +740,15 @@ func (app desktopApp) registered() (dir, version string) {
 // keeps a resource package (…_neutral_split.scale-125_…) of a version the
 // main package has moved past, so one is no sign the app is installed.
 func storeAppVersion(packages []string, name, publisher string) string {
+	_, version := storeAppPackage(packages, name, publisher)
+	return version
+}
+
+// storeAppPackage also keeps the package full name so its registered
+// install folder can be read without enumerating WindowsApps
+func storeAppPackage(packages []string, name, publisher string) (matched, found string) {
 	prefix, suffix := name+"_", "_"+publisher
 	var newest [4]uint64
-	found := ""
 	for _, pkg := range packages {
 		if !strings.HasPrefix(pkg, prefix) || !strings.HasSuffix(pkg, suffix) {
 			continue
@@ -746,10 +772,10 @@ func storeAppVersion(packages []string, name, publisher string) string {
 			}
 		}
 		if valid && (found == "" || slices.Compare(version[:], newest[:]) > 0) {
-			newest, found = version, fields[0]
+			newest, matched, found = version, pkg, fields[0]
 		}
 	}
-	return found
+	return matched, found
 }
 
 // HasApp reports whether the agent's desktop app is installed here: its

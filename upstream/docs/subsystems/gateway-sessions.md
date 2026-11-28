@@ -618,6 +618,39 @@ none for `defaultWorkspace`). Read only, no resume or delete. Tests:
 `TestCatPawSessions`, `TestCatPawTranscript` (rows made by CatPaw's own
 CREATE statements and message shapes; no signed-in conversation was had).
 
+Dim alpha's sessions (#7990, [`dim.go`](../../internal/sessions/dim.go))
+are the rows of `rust/dimcode.sqlite` in Dim's folder: `DIMCODE_HOME`
+as given, else `.dimcode-alpha` in the home folder (`USERPROFILE` on
+Windows), one helper (`sessions.DimDirIn`) for this reader and
+`internal/agent`'s Connect. It is one store for every session, written
+by Dim's daemon in WAL mode (format 53): `agent_sessions` (config,
+`leader_session_id`), `session_metadata` (title), `session_catalog`
+(cwd, preview, `updated_at_ms`) and `timeline_events` (kind and a JSON
+body: one event, or the text and thinking deltas of one request in one
+row). A session is listed once it has an `input/message` with
+`data.user` (Dim's own test of a prompt; agents' messages and reports
+come as raw blocks). A collaboration's member (`leader_session_id` set)
+is filed under its leader, with its tools and tokens but not its task.
+A fork's main line copies its source's through its `session/forked`
+event, so the rows up to it count in the source only. A call's own
+events (`parent_call_id`) are no prompt or reply. Tokens are
+`model/usage`, once per session and `request_id` (the largest), by the
+model its `model/call` asked: `promptTokens` holds the cache reads and
+writes, so Input is what is left. A `<dim-…>` block a capability put
+after the first (a skill, a hook's context) is not the user's words
+(markup.rs). The listing and each session's parse run in a read-only
+transaction on a read-only connection; magpie never writes, locks or
+migrates the file. A read that fails (Dim's daemon holding it) is
+"unknown", not "no sessions": the last listing stands, cold, and so does
+each parse (`parseDim` is a grow parser and gives back the last one).
+Dim's requests through the gateway can't be matched to these sessions:
+Dim sends no session header and no `prompt_cache_key`, its session and
+request ids stay in its own recording, so they are logged with agent
+`dim` and no session. Read only, no resume or delete. Tests:
+`TestDimSessions`, `TestDimTranscript`, `TestDimBusyKeepsLastRead`,
+`TestDimDir` (rows made from Dim's own CREATE statements and event
+types; no real Dim store was on a test machine).
+
 Hermes Agent keeps its sessions as rows in each profile's `state.db`
 (SQLite in WAL mode): the home (`HERMES_HOME`, else `~/.hermes`, else
 `%LOCALAPPDATA%\hermes` on Windows) and each `profiles/<name>`
@@ -762,6 +795,27 @@ reached the end. The Markdown export reads the whole file and was never
 cut. Verification: `TestTranscriptAfterReadsTheRest`,
 `TestSessionTextReadsPastTheCut`; browser `sessions-talk-rest.test.cjs`.
 
+Each part of a transcript is cut to its first `partMax` (8,000)
+characters, its `cut` the characters left off, while the search index
+reads the whole text, so a hit can be past the cut. A read asked
+`ReadAsk.Whole` (`magpie sessions show --full`, `read_session`'s
+`full`) keeps every part whole (`keepAs`); parts are numbered the same
+either way, since only an empty part is left out. Without it,
+`SessionText` says under a cut message how many characters were left off
+and how to read it whole (`TextHow.Whole`), and shows tool calls and
+answers whole only with it. `magpie sessions show --json` reads through
+`ReadTranscript`, the same read as the text: from `--from`, else at
+`--find`, a page of `--max-chars` when given (else up to
+`transcriptMax`, as before), with `next` the `--from` of the rest and
+`notes` naming `--full` when a message was cut. Before, `--json` read
+from the start whatever `--from` said, and nothing could show a message
+past 8,000 characters (hdhfhf_hdh219 on X). The sheet
+(`/api/sessions/transcript`) still shows a long message's first 8,000
+characters with no note; its Markdown export is whole. Verification:
+`TestReadTranscriptWhole`, `TestSessionTextWhole`,
+`TestReadTranscriptPages`, `TestSessionsShowJSONFrom`,
+`TestSessionsShowFull`, `TestSessionsMCPReadFull`.
+
 The sheet's "turn i / N" counts the whole session. A first read that is cut,
 or starts past the start (a search's, `from` > 0), carries `turns`, the
 user's text messages in the whole file, and `turnsBefore`, those among the
@@ -860,7 +914,7 @@ update; turning gateway mode on or off closes the index (`Reset` →
 - The `magpie-sessions` MCP server (`SessionsMCPPath`,
   `/mcp/magpie/sessions`, [`sessions_mcp.go`](../../internal/gateway/sessions_mcp.go))
   gives an agent `search_sessions(query, agent?, limit)` and
-  `read_session(session, find?, from?, max_chars?)`, as text: each hit's
+  `read_session(session, find?, from?, max_chars?, full?)`, as text: each hit's
   `agent:id`, title, folder, time and the words round it; a read numbers
   each message, shortens tool calls and answers, leaves thinking out, and
   says how to go on (`from=`). Like Magpie Memory it answers the agents on

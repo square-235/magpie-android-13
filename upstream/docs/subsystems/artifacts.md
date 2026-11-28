@@ -74,12 +74,15 @@ router tells it instead: `hubCall` sets `HubCaller.Base` for a caller that
 isn't `local` to `imageMCPBase` (`MAGPIE_PUBLIC_URL`, else the scheme and
 Host it called), and the Library passes it as `_meta["magpie/base"]` to
 this server alone (`HubBaseMeta`). The server keeps it only as an http(s)
-address with a host and nothing after (`artifactBase`), and uses it for
-the text of its answers, never for access:
+address with a host and a path at most, the path a proxy serves magpie
+under kept (`artifactBase`), and uses it for the text of its answers,
+never for access:
 
 - every address it answers is at that base (`artifactCaller.link`); the
   publish answer says so, and names `MAGPIE_PUBLIC_URL` when the base is
-  the Host called rather than it;
+  the Host called rather than it. When `magpie web` serves artifacts at
+  `MAGPIE_PUBLIC_URL` (below), the address is that one instead, as for an
+  agent here;
 - a `file_path` (or a file in `files` given by path) that is relative, or
   that magpie's computer doesn't have, is answered with why: the file is
   on the agent's computer, so pass the page as `html` and its files as
@@ -166,7 +169,9 @@ address, so:
   web`'s port hands `/a/` to the gateway too (`clientPrefixes` in
   [oneport.go](../../internal/gateway/oneport.go), `_api/` left out), so
   the browser UI behind a proxy or in a container opens one at its own
-  address, judged there as from another computer.
+  address, judged there as from another computer. Off the network the
+  port keeps `/a/` for its own sign-in instead (`onePort`,
+  `gateway.ArtifactsOpenAway`; [In magpie web](#in-magpie-web-signed-in)).
 - `nosniff`, `Referrer-Policy: no-referrer`. A numbered version is
   immutable and cached for a year; the newest is `no-cache` with an ETag
   of its version.
@@ -760,9 +765,16 @@ sharing](#live-sharing)), on the same wire.
 - Claude Code given it leaves out its own Artifact tool: `Artifact` in its
   `permissions.deny`, beside the rules magpie writes for tools turned off
   (`syncToolRules`, `claudeArtifactTool`), recorded in `Applied` and taken
-  back when the server goes. A rule of the user's own for `Artifact`
-  (allow or ask, `claudeRuled`) is theirs, and magpie writes no deny. The
-  market's text says so before the user adds it.
+  back when the server goes. It is written only while the server's entry,
+  or the hub's (`HubEntry`), is really in Claude Code's config
+  (`artifactsGiven`): one that couldn't be written gives no deny. A rule of
+  the user's own for `Artifact` (allow or ask, `claudeRuled`) is theirs,
+  and magpie writes no deny. So is magpie's deny once the user deleted it
+  by hand while the server stays ticked (`Applied.ArtifactOwn`): every
+  start wrote it back before (seiry on #7646, rosu_h on X). It is
+  magpie's again once the server is no longer ticked for Claude Code and
+  is added again. The market's text says what is written, and where,
+  before the user adds it, in every language (`i18n.js`).
 
 ## Work › Artifacts
 
@@ -806,12 +818,62 @@ the list (`--json` with every version's address, and `shared`),
 takes every version; share, unshare and delete refuse an `@<n>`. Each takes
 an id or an address.
 
-The addresses are this computer's (127.0.0.1). A viewer of `magpie web`
+Its list and `--json` give `gui.ArtifactsAt`'s address, as magpie web's
+answers to agents do (below), so `docker exec magpie magpie artifacts`
+lists the addresses a browser away opens (`artifactLink`, #8014); `open`
+opens this computer's browser at this computer's address.
+
+Work › Artifacts' addresses are this computer's (127.0.0.1). A viewer of `magpie web`
 from another computer (`remotePage` in app.js) opens, copies and installs
 them at the page's own address instead (`at` in artifacts.js), which its
 port hands to the gateway: the page reads there as a shared copy, while
-magpie is on the network (above). An agent away is given its own address,
-above.
+magpie is on the network (above), and through the page's sign-in off it
+(below). An agent away is given its own address, above.
+
+## In magpie web, signed in
+
+`magpie web` behind a proxy at `MAGPIE_PUBLIC_URL` gives artifacts' links
+at that address and opens them to the browser signed in to it, while
+magpie itself listens on loopback (#7665,
+[internal/gui/web_artifacts.go](../../internal/gui/web_artifacts.go)):
+
+- **Links.** `StartWeb` hands the public address to the gateway
+  (`ArtifactsAt`: `MAGPIE_WEB_URL`, the page's own, else
+  `MAGPIE_PUBLIC_URL`, each as given, its scheme, host, port and path,
+  where the page or the gateway serves `/a/`), through
+  `gateway.SetArtifactsAt`; `Close` takes it back. Its host alone, on the
+  page's own scheme and port, gave a proxy at `https://<host>:666` the
+  links `http://<host>:3430`, where nothing answers (#8014).
+  `ArtifactURL` names it, so `publish_artifact`, `read_artifact`,
+  `list_artifacts` and `delete_artifact` give it to an agent here or away
+  (`artifactCaller.link`), and the publish answer says whether the
+  address takes the sign-in or, on the network, no key.
+  `open_artifact` opens this computer's browser, so it keeps this
+  computer's address (`ArtifactLocalURL`), as Work › Artifacts' list does
+  (artifacts.js moves it to the page's address away). It holds only when
+  the gateway runs in `magpie web`'s process (`magpie serve`, the Docker
+  image); a gateway another magpie serves gives this computer's
+  addresses. `magpie artifacts` lists them at `ArtifactsAt` itself
+  (above).
+- **Sign-in.** Off the network, `onePort` leaves `/a/` to the page, behind
+  `webGuard` (the page's cookie, or a LazyCat box's sign-in). Signed in, a
+  navigation is sent on (302, `no-store`, `no-referrer`) to
+  `/_magpie/a/<token>/<ref>/<file>` (`webArtifactLinks`); any other
+  request mode (a script of a page on the same site, with the Lax cookie)
+  gets 403 and no token.
+- **The token.** The page runs in the gateway's sandbox, an opaque origin
+  whose own requests carry no cookie, so the token in its folder's path
+  lets its files in (`webArtifactPages`, ahead of `webGuard`, as a plugin
+  page's token is). It is an HMAC of the artifact's id under this run's
+  `pageSecret`: that artifact, every version, GET and HEAD only. A wrong
+  one gets 404; a navigation with one (a tab from before a restart) goes
+  back to `/a/<ref>/`, through the sign-in.
+- **What is served.** `gateway.ServeArtifactElsewhere`: the files,
+  `artifactPageCSP`, `nosniff` and `no-referrer` of `artifactPage`, the
+  page alone (no viewer shell), and the shared copy's runtime
+  (`SharedRuntime`, every capability null). No `_api/` is served there,
+  so a page that keeps data or assets shows without them, and
+  `publish_artifact` says so when the version declares one.
 
 ## Sharing
 

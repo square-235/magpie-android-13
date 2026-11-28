@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"log"
 	"maps"
 	"mime"
 	"net"
@@ -1147,6 +1148,11 @@ func thinkingConfigRefused(model string) string { return "thinking_config\x00" +
 // where its own aren't known.
 var gemini3Levels = []string{"minimal", "low", "medium", "high"}
 
+// gemini4Levels are the levels Gemini 4 and later think at where a model's
+// own aren't known (Google's thinking reference lists MINIMAL, LOW, MEDIUM,
+// HIGH, XHIGH).
+var gemini4Levels = []string{"minimal", "low", "medium", "high", "xhigh"}
+
 // geminiLevelRefused is Gemini turning away a thinking level the model
 // hasn't, which names thinking but isn't thinking_config turned away
 // (refusesThinkingConfig): gemini-3.8-flash's 400 "Thinking level MINIMAL
@@ -1156,7 +1162,7 @@ var gemini3Levels = []string{"minimal", "low", "medium", "high"}
 // thinking_level minimal alike; and gemini-3.1-pro-preview's
 // "thinking_level MINIMAL is not supported by this model" at its
 // generateContent.
-var geminiLevelRefused = lazyre.New(`(?i)thinking[ _]level\W+(?:(minimal|low|medium|high)\W+is not supported|is unsupported\W+thinking_level_(minimal|low|medium|high))`)
+var geminiLevelRefused = lazyre.New(`(?i)thinking[ _]level\W+(?:(minimal|low|medium|high|xhigh)\W+is not supported|is unsupported\W+thinking_level_(minimal|low|medium|high|xhigh))`)
 
 // geminiRefusedLevel is the thinking level Gemini turned away in body
 // (geminiLevelRefused), or "".
@@ -1189,22 +1195,28 @@ func refusesThinkingConfig(status int, body []byte) bool {
 
 // aiStudioThinking is the thinking_config asking Gemini for its thoughts at
 // the effort the client asked, for a client that asked to see them: a level
-// for Gemini 3 and later, a budget for 2.x (the steps Google maps
-// reasoning_effort to).
+// for Gemini 3 and later (xhigh from Gemini 4, matching generateContent's
+// thinkingConfig), a budget for 2.x (the steps Google maps reasoning_effort
+// to).
 func aiStudioThinking(r *Request, model string) map[string]any {
 	if !r.Thinking || r.ThinkOff || r.Effort == "none" {
 		return nil
 	}
 	tc := map[string]any{"include_thoughts": true}
+	m := strings.ToLower(model)
 	level := r.Effort
 	switch level {
 	case "xhigh", "max":
-		level = "high"
+		if geminiGeneration(m) >= 4 {
+			level = "xhigh"
+		} else {
+			level = "high"
+		}
 	case "minimal", "low", "medium", "high":
 	default:
 		return tc // the model's own
 	}
-	if strings.Contains(strings.ToLower(model), "gemini-2") {
+	if strings.Contains(m, "gemini-2") {
 		tc["thinking_budget"] = map[string]int{"minimal": 1024, "low": 1024, "medium": 8192, "high": 24576}[level]
 	} else {
 		tc["thinking_level"] = level
@@ -1333,6 +1345,7 @@ type chatDecoder struct {
 	started   bool
 	tool      int       // index of the open tool call, -1 for none
 	toolID    string    // id of the open tool call, as some relays repeat it on every fragment
+	toolName  string    // and its name
 	toolWhole jsonWhole // where the open call's arguments stand in their JSON
 	toolDone  bool      // they are whole JSON: a call that starts now comes after it
 	held      []*heldCall
@@ -1695,6 +1708,19 @@ func (d *chatDecoder) toolCall(idx int, tc cToolCall, emit func(Event)) {
 		d.toolArgs(args, emit)
 		return
 	}
+	// the open call's id and name again at another index, while its
+	// arguments are still coming and no call is held: the same call. The
+	// Devin plugin opens an index for each of Devin's frames that names the
+	// tool, under the id Devin gave it; read as a second call it was held
+	// to the reply's end, and the agent's input stopped mid-call. Said in
+	// the log, in words that name nothing of the call, so how often it
+	// comes can be counted
+	if d.tool >= 0 && !d.toolDone && len(d.held) == 0 && tc.ID != "" && tc.ID == d.toolID && tc.Function.Name == d.toolName {
+		log.Printf("chat: a tool call's id and name came again at another index before its arguments were whole; read as the same call")
+		d.tool = idx
+		d.toolArgs(args, emit)
+		return
+	}
 	// a call Gemini signed goes to the client with an id carrying the
 	// signature, which comes back with it
 	sent := signedID(tc.ID, googleSignature(tc.ExtraContent))
@@ -1704,7 +1730,7 @@ func (d *chatDecoder) toolCall(idx int, tc cToolCall, emit func(Event)) {
 		d.held = append(d.held, h)
 		return
 	}
-	d.tool, d.toolID, d.toolWhole, d.toolDone = idx, tc.ID, jsonWhole{}, false
+	d.tool, d.toolID, d.toolName, d.toolWhole, d.toolDone = idx, tc.ID, tc.Function.Name, jsonWhole{}, false
 	emit(Event{Kind: KToolStart, ID: sent, Name: tc.Function.Name})
 	d.toolArgs(args, emit)
 }
@@ -1730,7 +1756,7 @@ func (d *chatDecoder) giveHeld(emit func(Event)) {
 			emit(Event{Kind: KToolArgs, Text: h.args.String()})
 		}
 	}
-	d.held, d.tool, d.toolID, d.toolWhole, d.toolDone = nil, -1, "", jsonWhole{}, false
+	d.held, d.tool, d.toolID, d.toolName, d.toolWhole, d.toolDone = nil, -1, "", "", jsonWhole{}, false
 }
 
 // chatChoiceIndex accepts numeric indexes and numeric strings without

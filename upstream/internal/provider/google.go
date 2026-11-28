@@ -106,8 +106,10 @@ func googleAppOf(agent string) (googleApp, bool) {
 }
 
 // AntigravityRisk is what magpie says before an Antigravity account is
-// added.
-const AntigravityRisk = "Google may suspend an Antigravity account it sees used outside Antigravity. Use one you can afford to lose."
+// added, the built-in's or agy-cli's (WdBlink_ on X: an agy-cli account
+// was suspended after use from Claude Code). The window says it too
+// (AGY_RISK in app.js).
+const AntigravityRisk = "Google may suspend an Antigravity account it sees used from another agent. Use one you can afford to lose."
 
 // ClaudeRisk is what magpie says before a Claude account is added, as the
 // window does.
@@ -774,7 +776,7 @@ func (g googleAccount) needsProject(why string) error {
 	if g.own {
 		msg += " or GOOGLE_CLOUD_PROJECT in ~/.gemini/.env"
 	}
-	msg += ". A personal Google account is served to Antigravity instead: add it under Antigravity in magpie"
+	msg += ". A personal Google account is served to Antigravity instead: add it to Antigravity (local agy CLI), from magpie's Plugins page or with `magpie accounts add antigravity`"
 	if why != "" {
 		msg = why + " — " + msg
 	}
